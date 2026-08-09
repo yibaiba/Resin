@@ -36,6 +36,7 @@ type connectTunnelRequest struct {
 type tunnelPrepareResult struct {
 	route         routing.RouteResult
 	session       *preparedTunnel
+	health        *requestHealthFeedback
 	proxyErr      *ProxyError
 	upstreamStage string
 	upstreamErr   error
@@ -72,12 +73,14 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 			health.record(passiveHealthNeutral)
 			return tunnelPrepareResult{
 				route:    routed.Route,
+				health:   health,
 				canceled: true,
 			}
 		}
 		health.record(passiveHealthFailure)
 		return tunnelPrepareResult{
 			route:         routed.Route,
+			health:        health,
 			proxyErr:      proxyErr,
 			upstreamStage: "connect_dial",
 			upstreamErr:   err,
@@ -97,7 +100,8 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 	})
 
 	return tunnelPrepareResult{
-		route: routed.Route,
+		route:  routed.Route,
+		health: health,
 		session: &preparedTunnel{
 			upstreamConn: upstreamConn,
 			health:       health,

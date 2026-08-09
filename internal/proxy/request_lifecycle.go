@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/routing"
+	"github.com/google/uuid"
 )
 
 // requestLifecycle captures mutable per-request telemetry and emits both
@@ -20,6 +21,8 @@ type requestLifecycle struct {
 
 	reqBodyCapture  *payloadCaptureReadCloser
 	respBodyCapture *payloadCaptureReadCloser
+	healthFeedback  *requestHealthFeedback
+	tunnelRelay     *tunnelRelayResult
 }
 
 func newRequestLifecycleFromMetadata(
@@ -44,6 +47,7 @@ func newRequestLifecycleFromMetadata(
 			IsConnect: isConnect,
 		},
 		log: RequestLogEntry{
+			ID:          uuid.NewString(),
 			StartedAtNs: now.UnixNano(),
 			ProxyType:   proxyType,
 			ClientIP:    clientIP,
@@ -83,6 +87,7 @@ func (l *requestLifecycle) finish() {
 	l.finished.DurationNs = durationNs
 	l.log.DurationNs = durationNs
 	l.log.FirstByteDurationNs = l.firstByteDurationNs.Load()
+	logProxyFailure(l)
 	l.events.EmitRequestFinished(l.finished)
 	l.events.EmitRequestLog(l.log)
 }
@@ -167,6 +172,14 @@ func (l *requestLifecycle) setRespHeadersCaptured(respHeaders []byte, totalLen i
 
 func (l *requestLifecycle) setRespBodyCapture(c *payloadCaptureReadCloser) {
 	l.respBodyCapture = c
+}
+
+func (l *requestLifecycle) setHealthFeedback(feedback *requestHealthFeedback) {
+	l.healthFeedback = feedback
+}
+
+func (l *requestLifecycle) setTunnelRelay(result tunnelRelayResult) {
+	l.tunnelRelay = &result
 }
 
 func (l *requestLifecycle) setRouteResult(result routing.RouteResult) {

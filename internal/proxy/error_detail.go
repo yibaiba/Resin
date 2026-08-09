@@ -12,9 +12,11 @@ import (
 	"os"
 	"strings"
 	"syscall"
+
+	"github.com/Resinat/Resin/internal/diagnosticlog"
 )
 
-const maxUpstreamErrMsgLen = 512
+const maxUpstreamErrMsgLen = diagnosticlog.MaxValueBytes
 
 type upstreamErrorDetail struct {
 	Kind    string
@@ -143,14 +145,7 @@ func normalizeErrno(errno syscall.Errno) string {
 }
 
 func sanitizeUpstreamErrMsg(raw string) string {
-	raw = strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
-	if raw == "" {
-		return ""
-	}
-	if len(raw) > maxUpstreamErrMsgLen {
-		return raw[:maxUpstreamErrMsgLen]
-	}
-	return raw
+	return diagnosticlog.Sanitize(raw)
 }
 
 func isBenignTunnelCopyError(err error) bool {
