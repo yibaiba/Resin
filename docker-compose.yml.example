@@ -14,6 +14,7 @@ services:
       # TZ: <Your Time Zone>
     ports:
       - "2260:2260"
+      - "2260:2260/udp"
     volumes:
       - resin_cache:/var/cache/resin
       - resin_state:/var/lib/resin

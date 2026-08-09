@@ -88,6 +88,7 @@ services:
       RESIN_PORT: 2260
     ports:
       - "2260:2260"
+      - "2260:2260/udp"
     volumes:
       - ./data/cache:/var/cache/resin
       - ./data/state:/var/lib/resin
@@ -95,7 +96,7 @@ services:
 ```
 运行 `docker compose up -d` 启动服务。
 
-自定义接入点端口还必须能从容器外访问。Docker 无法为已运行容器动态增加端口映射，因此请在 `ports` 中提前映射所需端口范围（例如 `"2300-2399:2300-2399"`），或在适合的环境中使用 host 网络。
+自定义接入点端口还必须能从容器外访问。Docker 无法为已运行容器动态增加端口映射，因此请在 `ports` 中提前映射所需 TCP 端口范围（例如 `"2300-2399:2300-2399/tcp"`），或在适合的环境中使用 host 网络。若这些接入点启用了 SOCKS5，还必须映射同号 UDP 范围（例如 `"2300-2399:2300-2399/udp"`）；HTTP 正向/反向代理仍只使用 TCP。
 
 *(如果你不想使用 Docker，请跳转文末查看 [其他部署方式](#其他部署方式))*
 
@@ -134,6 +135,7 @@ curl --proxy socks5h://127.0.0.1:2260 \
 ```
 
 当 `RESIN_PROXY_TOKEN=""` 时，SOCKS5 也允许无认证接入。
+SOCKS5 UDP 客户端会通过同一个代理端口发送 UDP，因此 Docker 端口映射与防火墙必须同时放行每个 SOCKS5 接入点的 TCP 和 UDP。
 
 如果你的客户端支持修改服务的 `BASE_URL`，你也可以尝试反向代理接入。URL 格式为：`/令牌/Platform(可选).Account(可选)/协议/目标地址`。例如，你可以通过下面的 curl 命令通过 Resin 访问 `https://api.ipify.org`。
 
@@ -360,7 +362,7 @@ RESIN_PORT=2260 \
 - **Q: 为什么配置 `RESIN_AUTH_VERSION=LEGACY_V0` 会启动失败？**
   - **A**: 当前版本已不再支持 `LEGACY_V0`，请删除 `RESIN_AUTH_VERSION` 或将其设为 `V1`。如果你正从使用旧认证格式的版本升级，请参阅 [v1.0.0 认证迁移指南](doc/v1.0.0-migration-guide.zh-CN.md)。
 - **Q: 为什么 SOCKS5 客户端连不上？**
-  - **A**: 若 `RESIN_PROXY_TOKEN` 非空，客户端需要发送 SOCKS5 用户名密码认证；若它被显式设为空字符串，则也允许 `NO AUTH`。
+  - **A**: 若 `RESIN_PROXY_TOKEN` 非空，客户端需要发送 SOCKS5 用户名密码认证；若它被显式设为空字符串，则也允许 `NO AUTH`。使用 SOCKS5 UDP 时，还需确认同一个接入点端口已映射并放行 UDP，而不只是 TCP。
 - **Q: 使用反向代理 WebSocket 协议（如 ws/wss）怎么写路径？**
   - **A**: 目标无论是不是 ws/wss，URL 路径里的协议字段**依然只能写 `http` 或 `https`**（不能写 ws/wss）。Resin 会自动探测并完成 WebSocket 协议升级（Upgrade）。
 

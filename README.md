@@ -88,6 +88,7 @@ services:
       RESIN_PORT: 2260
     ports:
       - "2260:2260"
+      - "2260:2260/udp"
     volumes:
       - ./data/cache:/var/cache/resin
       - ./data/state:/var/lib/resin
@@ -96,7 +97,7 @@ services:
 
 Run `docker compose up -d` to start the service.
 
-Custom endpoint ports must also be reachable from outside the container. Docker cannot add published ports to an already-running container, so pre-publish the required port range in `ports` (for example `"2300-2399:2300-2399"`) or use host networking where appropriate.
+Custom endpoint ports must also be reachable from outside the container. Docker cannot add published ports to an already-running container, so pre-publish the required TCP range (for example `"2300-2399:2300-2399/tcp"`) or use host networking where appropriate. If SOCKS5 is enabled on those endpoints, publish the same range over UDP as well (for example `"2300-2399:2300-2399/udp"`); HTTP forward/reverse traffic remains TCP-only.
 
 *(If you don't want Docker, jump to [Other Deployment Options](#other-deployment-options).)*
 
@@ -138,6 +139,7 @@ curl --proxy socks5h://127.0.0.1:2260 \
 ```
 
 When `RESIN_PROXY_TOKEN=""`, SOCKS5 also allows unauthenticated access.
+SOCKS5 UDP clients use the same proxy port over UDP. Docker and firewall rules must therefore allow both TCP and UDP on every SOCKS5-enabled endpoint.
 
 If your client supports overriding `BASE_URL`, you can also use reverse-proxy mode.
 URL format: `/token/Platform(optional).Account(optional)/protocol/target`.
@@ -374,7 +376,7 @@ RESIN_PORT=2260 \
 - **Q: Why does Resin reject `RESIN_AUTH_VERSION=LEGACY_V0`?**
   - **A**: `LEGACY_V0` is no longer supported. Remove `RESIN_AUTH_VERSION` or set it to `V1`. If you are upgrading from a release that used legacy authentication, see the [v1.0.0 auth migration guide](doc/v1.0.0-migration-guide.md).
 - **Q: Why can't my SOCKS5 client connect?**
-  - **A**: If `RESIN_PROXY_TOKEN` is non-empty, the client must send SOCKS5 username/password authentication. If it is explicitly set to an empty string, `NO AUTH` is also allowed.
+  - **A**: If `RESIN_PROXY_TOKEN` is non-empty, the client must send SOCKS5 username/password authentication. If it is explicitly set to an empty string, `NO AUTH` is also allowed. For SOCKS5 UDP, also verify that the same endpoint port is published and allowed over UDP, not only TCP.
 - **Q: How to write reverse-proxy paths for WebSocket (ws/wss)?**
   - **A**: In the URL path, the protocol field must still be `http` or `https` (not `ws`/`wss`). Resin auto-detects and handles WebSocket upgrade.
 
