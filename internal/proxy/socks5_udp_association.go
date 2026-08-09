@@ -76,6 +76,7 @@ func (m *socks5UDPAssociationManager) register(
 		lastActivity: time.Now(),
 		flows:        make(map[string]*socks5UDPFlowRef),
 		lifecycle:    options.lifecycle,
+		done:         make(chan struct{}),
 	}
 
 	m.mu.Lock()

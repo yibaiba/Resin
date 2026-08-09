@@ -289,8 +289,8 @@ func TestSocks5UDPAssociateStartsIdleTimeoutAfterSuccessReply(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("association did not expire after success reply")
 	}
-	_ = client.Close()
 	waitSocks5ControlDone(t, done)
+	_ = client.Close()
 	assertNoUDPAssociationLifecycle(t, emitter)
 }
 

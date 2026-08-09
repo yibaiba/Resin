@@ -23,6 +23,7 @@ type socks5UDPAssociation struct {
 	timer        *time.Timer
 	flows        map[string]*socks5UDPFlowRef
 	lifecycle    *requestLifecycle
+	done         chan struct{}
 	targetSet    bool
 	netFailed    bool
 	closed       atomic.Bool
@@ -195,7 +196,11 @@ func (a *socks5UDPAssociation) closeResources() error {
 	a.flows = make(map[string]*socks5UDPFlowRef)
 	lifecycle := a.lifecycle
 	a.lifecycle = nil
+	done := a.done
 	a.mu.Unlock()
+	if done != nil {
+		close(done)
+	}
 
 	errs := make([]error, 0, len(flows))
 	for _, flow := range flows {

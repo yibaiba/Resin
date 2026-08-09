@@ -16,6 +16,21 @@ type socks5UDPRegistration struct {
 	lifecycle *requestLifecycle
 }
 
+type socks5UDPControlWait struct {
+	ctx             context.Context
+	conn            net.Conn
+	reader          io.Reader
+	associationDone <-chan struct{}
+}
+
+type socks5UDPControlWatcher struct {
+	ctx             context.Context
+	conn            net.Conn
+	associationDone <-chan struct{}
+	stop            <-chan struct{}
+	done            chan<- struct{}
+}
+
 func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 	lifecycle := newRequestLifecycleFromMetadata(
 		s.events,
@@ -48,7 +63,9 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 	if !association.startIdleTimeout() {
 		return
 	}
-	waitForSocks5UDPControlClose(session.ctx, session.conn, session.reader)
+	waitForSocks5UDPControlClose(socks5UDPControlWait{
+		ctx: session.ctx, conn: session.conn, reader: session.reader, associationDone: association.done,
+	})
 }
 
 func (s *Socks5Inbound) registerUDPAssociation(
@@ -121,8 +138,29 @@ func unspecifiedUDPAddr(localAddr net.Addr, port uint16) *net.UDPAddr {
 	return net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv4Unspecified(), port))
 }
 
-func waitForSocks5UDPControlClose(ctx context.Context, conn net.Conn, reader io.Reader) {
-	controlPhase := startSocks5HandshakePhase(ctx, conn)
-	defer controlPhase.Stop()
-	_, _ = io.Copy(io.Discard, reader)
+func waitForSocks5UDPControlClose(wait socks5UDPControlWait) {
+	stopWatcher := make(chan struct{})
+	watcherDone := make(chan struct{})
+	watcher := socks5UDPControlWatcher{
+		ctx: wait.ctx, conn: wait.conn, associationDone: wait.associationDone,
+		stop: stopWatcher, done: watcherDone,
+	}
+	go watcher.run()
+	_, _ = io.Copy(io.Discard, wait.reader)
+	close(stopWatcher)
+	<-watcherDone
+}
+
+func (w socks5UDPControlWatcher) run() {
+	defer close(w.done)
+	if w.ctx == nil {
+		w.ctx = context.Background()
+	}
+	select {
+	case <-w.stop:
+		return
+	case <-w.ctx.Done():
+	case <-w.associationDone:
+	}
+	_ = w.conn.Close()
 }
