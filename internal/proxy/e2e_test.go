@@ -1092,17 +1092,9 @@ func TestForwardProxy_CONNECTZeroTrafficMarkedFailed(t *testing.T) {
 		t.Fatal("expected CONNECT log event")
 	}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if health.resultCalls.Load() > 0 {
-			if health.lastSuccess.Load() != 0 {
-				t.Fatalf("RecordResult lastSuccess: got %d, want 0", health.lastSuccess.Load())
-			}
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	if health.resultCalls.Load() != 0 {
+		t.Fatalf("normal zero-traffic close should be health-neutral, got %d calls", health.resultCalls.Load())
 	}
-	t.Fatal("expected RecordResult call for CONNECT zero-traffic failure")
 }
 
 func TestForwardProxy_CONNECTHalfTrafficNotMarkedZeroTraffic(t *testing.T) {
@@ -1204,12 +1196,12 @@ func TestForwardProxy_CONNECTHalfTrafficNotMarkedZeroTraffic(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if health.resultCalls.Load() > 0 {
-			if health.lastSuccess.Load() != 0 {
-				t.Fatalf("RecordResult lastSuccess: got %d, want 0", health.lastSuccess.Load())
+			if health.lastSuccess.Load() != 1 {
+				t.Fatalf("RecordResult lastSuccess: got %d, want 1", health.lastSuccess.Load())
 			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("expected RecordResult call for CONNECT half-traffic failure")
+	t.Fatal("expected first upstream bytes to record CONNECT health success")
 }

@@ -69,7 +69,19 @@ type mockPassiveHealthRecorder struct {
 	nodeHash     node.Hash
 	success      bool
 	network      string
+	requestID    string
 	done         chan struct{}
+}
+
+func (m *mockPassiveHealthRecorder) RecordPassiveResultWithRequest(
+	platformID string,
+	hash node.Hash,
+	success bool,
+	requestID string,
+) error {
+	m.requestID = requestID
+	m.RecordPassiveResult(platformID, hash, success)
+	return nil
 }
 
 func (m *mockPassiveHealthRecorder) RecordPassiveNetworkResult(
@@ -136,14 +148,14 @@ func basicAuth(user, pass string) string {
 
 // --- Tests ---
 
-func TestRecordPassiveResultAsync_UsesPlatformAwareRecorder(t *testing.T) {
+func TestRecordPassiveResult_UsesPlatformAwareRecorder(t *testing.T) {
 	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"platform-aware"}`))
 	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
 
-	recordPassiveResultAsync(rec, routing.RouteResult{
+	recordPassiveResult(rec, routing.RouteResult{
 		PlatformID: "plat-1",
 		NodeHash:   h,
-	}, false)
+	}, false, "request-1")
 
 	select {
 	case <-rec.done:
@@ -158,6 +170,9 @@ func TestRecordPassiveResultAsync_UsesPlatformAwareRecorder(t *testing.T) {
 	}
 	if rec.platformID != "plat-1" || rec.nodeHash != h || rec.success {
 		t.Fatalf("unexpected passive call payload: platform=%q hash=%s success=%v", rec.platformID, rec.nodeHash.Hex(), rec.success)
+	}
+	if rec.requestID != "request-1" {
+		t.Fatalf("request ID = %q, want request-1", rec.requestID)
 	}
 }
 

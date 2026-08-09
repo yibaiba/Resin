@@ -189,7 +189,21 @@ func (p *GlobalNodePool) RecordUDPProbeResult(hash node.Hash, success bool) {
 
 // RecordPassiveResult records health feedback from user proxy traffic.
 func (p *GlobalNodePool) RecordPassiveResult(platformID string, hash node.Hash, success bool) {
-	p.RecordPassiveNetworkResult(platformID, hash, N.NetworkTCP, success)
+	_ = p.RecordPassiveResultWithRequest(platformID, hash, success, "")
+}
+
+// RecordPassiveResultWithRequest applies platform-aware TCP feedback and keeps
+// the request ID available for diagnostic correlation.
+func (p *GlobalNodePool) RecordPassiveResultWithRequest(
+	platformID string,
+	hash node.Hash,
+	success bool,
+	requestID string,
+) error {
+	if !success && p.passiveCircuitBreakerDisabled(platformID) {
+		return nil
+	}
+	return p.RecordTCPHealthResult(hash, HealthSourcePassive, success, requestID)
 }
 
 // RecordPassiveNetworkResult records proxy-traffic feedback for one transport.
@@ -206,7 +220,7 @@ func (p *GlobalNodePool) RecordPassiveNetworkResult(
 		_ = p.recordUDPResult(hash, success)
 		return
 	}
-	_ = p.RecordTCPHealthResult(hash, HealthSourcePassive, success, "")
+	_ = p.RecordPassiveResultWithRequest(platformID, hash, success, "")
 }
 
 func (p *GlobalNodePool) passiveCircuitBreakerDisabled(platformID string) bool {
