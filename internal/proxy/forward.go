@@ -243,12 +243,18 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		hasRoute = true
 		lifecycle.setRouteResult(route)
 		if p.health != nil {
-			go p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
+			p.health.RecordLatency(route.NodeHash, netutil.ExtractDomain(r.Host), nil)
 		}
 		transport = p.outboundHTTPTransport(routed)
 	}
+	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
 	outReq := prepareForwardOutboundRequest(r)
-	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
+	upstreamTrace := newUpstreamRequestTrace(func() {
+		lifecycle.markFirstByteReceived()
+		if hasRoute {
+			feedback.record(passiveHealthSuccess)
+		}
+	})
 	outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
 	pendingEgressHeaderBytes := headerWireLen(outReq.Header)
 	var egressBodyCounter *countingReadCloser
@@ -267,18 +273,19 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		proxyErr := classifyUpstreamError(err)
-		if proxyErr == nil {
+		if proxyErr == nil || errors.Is(r.Context().Err(), context.Canceled) {
 			// context.Canceled — skip health recording, close silently.
 			// Request ended due to client-side cancellation before upstream
 			// response; treat as net-ok in request log semantics.
 			lifecycle.setNetOK(true)
+			feedback.record(passiveHealthNeutral)
 			return
 		}
 		lifecycle.setProxyError(proxyErr)
 		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
 		if hasRoute {
-			recordPassiveResult(p.health, route, false, lifecycle.log.ID)
+			feedback.record(passiveHealthFailure)
 		}
 		writeProxyError(w, proxyErr)
 		return
@@ -287,6 +294,9 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lifecycle.setHTTPStatus(resp.StatusCode)
 	lifecycle.setNetOK(true)
+	if hasRoute {
+		feedback.record(passiveHealthSuccess)
+	}
 
 	// Copy end-to-end response headers and body.
 	lifecycle.addIngressBytes(copyEndToEndHeaders(w.Header(), resp.Header))
@@ -298,16 +308,14 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setProxyError(ErrUpstreamRequestFailed)
 			lifecycle.setUpstreamError("forward_upstream_to_client_copy", copyErr)
 			lifecycle.setNetOK(false)
-			if hasRoute {
-				recordPassiveResult(p.health, route, false, lifecycle.log.ID)
-			}
 		}
+		feedback.record(passiveHealthNeutral)
 		return
 	}
 
 	// Full body transfer succeeded — count as network success even for 5xx HTTP.
 	if hasRoute {
-		recordPassiveResult(p.health, route, true, lifecycle.log.ID)
+		feedback.record(passiveHealthSuccess)
 	}
 }
 
@@ -409,8 +417,8 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	lifecycle.setNetOK(relay.netOK)
 }
 
-// shouldRecordForwardCopyFailure decides whether an HTTP response body copy
-// error should be treated as an upstream/node failure.
+// shouldRecordForwardCopyFailure decides whether a response copy error should
+// make the request log reflect a transport failure.
 func shouldRecordForwardCopyFailure(r *http.Request, copyErr error) bool {
 	if copyErr == nil {
 		return false

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"net/http"
+	"sync/atomic"
 )
 
 // captureRequestHeaders serializes headers to canonical wire format for
@@ -91,18 +92,26 @@ func (c *payloadCaptureReadCloser) Truncated() bool {
 
 // countingReadCloser wraps a body stream and records total read bytes.
 type countingReadCloser struct {
-	rc    io.ReadCloser
-	total int64
+	rc          io.ReadCloser
+	total       atomic.Int64
+	onReadError func(error)
 }
 
 func newCountingReadCloser(rc io.ReadCloser) *countingReadCloser {
 	return &countingReadCloser{rc: rc}
 }
 
+func newObservedCountingReadCloser(rc io.ReadCloser, onReadError func(error)) *countingReadCloser {
+	return &countingReadCloser{rc: rc, onReadError: onReadError}
+}
+
 func (c *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.rc.Read(p)
 	if n > 0 {
-		c.total += int64(n)
+		c.total.Add(int64(n))
+	}
+	if err != nil && c.onReadError != nil {
+		c.onReadError(err)
 	}
 	return n, err
 }
@@ -112,25 +121,46 @@ func (c *countingReadCloser) Close() error {
 }
 
 func (c *countingReadCloser) Total() int64 {
-	return c.total
+	return c.total.Load()
 }
 
 // countingReadWriteCloser wraps a bidirectional stream and records
 // bytes read/written independently.
 type countingReadWriteCloser struct {
-	rwc        io.ReadWriteCloser
-	totalRead  int64
-	totalWrite int64
+	rwc          io.ReadWriteCloser
+	totalRead    atomic.Int64
+	totalWrite   atomic.Int64
+	onReadError  func(error)
+	onWriteError func(error)
 }
 
 func newCountingReadWriteCloser(rwc io.ReadWriteCloser) *countingReadWriteCloser {
 	return &countingReadWriteCloser{rwc: rwc}
 }
 
+type streamErrorCallbacks struct {
+	read  func(error)
+	write func(error)
+}
+
+func newObservedCountingReadWriteCloser(
+	rwc io.ReadWriteCloser,
+	callbacks streamErrorCallbacks,
+) *countingReadWriteCloser {
+	return &countingReadWriteCloser{
+		rwc:          rwc,
+		onReadError:  callbacks.read,
+		onWriteError: callbacks.write,
+	}
+}
+
 func (c *countingReadWriteCloser) Read(p []byte) (int, error) {
 	n, err := c.rwc.Read(p)
 	if n > 0 {
-		c.totalRead += int64(n)
+		c.totalRead.Add(int64(n))
+	}
+	if err != nil && c.onReadError != nil {
+		c.onReadError(err)
 	}
 	return n, err
 }
@@ -138,7 +168,10 @@ func (c *countingReadWriteCloser) Read(p []byte) (int, error) {
 func (c *countingReadWriteCloser) Write(p []byte) (int, error) {
 	n, err := c.rwc.Write(p)
 	if n > 0 {
-		c.totalWrite += int64(n)
+		c.totalWrite.Add(int64(n))
+	}
+	if err != nil && c.onWriteError != nil {
+		c.onWriteError(err)
 	}
 	return n, err
 }
@@ -147,10 +180,27 @@ func (c *countingReadWriteCloser) Close() error {
 	return c.rwc.Close()
 }
 
+func (c *countingReadWriteCloser) preserveCloseWriter() io.ReadWriteCloser {
+	closeWriter, ok := c.rwc.(interface{ CloseWrite() error })
+	if !ok {
+		return c
+	}
+	return &countingCloseWriter{countingReadWriteCloser: c, closeWriter: closeWriter}
+}
+
 func (c *countingReadWriteCloser) TotalRead() int64 {
-	return c.totalRead
+	return c.totalRead.Load()
 }
 
 func (c *countingReadWriteCloser) TotalWrite() int64 {
-	return c.totalWrite
+	return c.totalWrite.Load()
+}
+
+type countingCloseWriter struct {
+	*countingReadWriteCloser
+	closeWriter interface{ CloseWrite() error }
+}
+
+func (c *countingCloseWriter) CloseWrite() error {
+	return c.closeWriter.CloseWrite()
 }
