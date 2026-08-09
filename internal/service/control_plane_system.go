@@ -58,6 +58,7 @@ type ControlPlaneService struct {
 	GeoIP                   *geoip.Service
 	ProbeMgr                *probe.ProbeManager
 	MatcherRuntime          *proxy.AccountMatcherRuntime
+	RoutingDecisions        *routing.DecisionEngine
 	RuntimeCfg              *atomic.Pointer[config.RuntimeConfig]
 	EnvCfg                  *config.EnvConfig
 	EndpointRuntime         EndpointRuntime
@@ -66,6 +67,7 @@ type ControlPlaneService struct {
 	configMu      sync.Mutex
 	configVersion int
 	endpointMu    sync.RWMutex
+	routingRuleMu sync.Mutex
 }
 
 // ------------------------------------------------------------------

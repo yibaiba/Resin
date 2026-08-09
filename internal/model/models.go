@@ -3,6 +3,29 @@ package model
 
 import "encoding/json"
 
+// RoutingPortRange is an inclusive destination port range.
+type RoutingPortRange struct {
+	Start uint16 `json:"start"`
+	End   uint16 `json:"end"`
+}
+
+// RoutingRule defines one ordered target-routing policy.
+type RoutingRule struct {
+	ID                       string             `json:"id"`
+	Name                     string             `json:"name"`
+	Enabled                  bool               `json:"enabled"`
+	Priority                 int                `json:"priority"`
+	HostType                 string             `json:"host_type"`
+	HostValue                string             `json:"host_value"`
+	Ports                    []RoutingPortRange `json:"ports"`
+	Network                  string             `json:"network"`
+	Action                   string             `json:"action"`
+	PlatformID               string             `json:"platform_id,omitempty"`
+	OverrideExplicitPlatform bool               `json:"override_explicit_platform"`
+	CreatedAtNs              int64              `json:"created_at_ns"`
+	UpdatedAtNs              int64              `json:"updated_at_ns"`
+}
+
 // Platform represents a routing platform.
 type Platform struct {
 	ID                               string `json:"id"`

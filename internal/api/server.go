@@ -85,6 +85,15 @@ func NewServerWithAddress(
 		authed.Handle("POST /api/v1/platforms/{id}/actions/reset-to-default", HandleResetPlatform(cp))
 		authed.Handle("POST /api/v1/platforms/{id}/actions/rebuild-routable-view", HandleRebuildPlatform(cp))
 
+		// Target routing rules.
+		authed.Handle("GET /api/v1/routing-rules", HandleListRoutingRules(cp))
+		authed.Handle("POST /api/v1/routing-rules", HandleCreateRoutingRule(cp))
+		authed.Handle("PUT /api/v1/routing-rules/order", HandleReorderRoutingRules(cp))
+		authed.Handle("POST /api/v1/routing-rules/preview-match", HandlePreviewRoutingDecision(cp))
+		authed.Handle("GET /api/v1/routing-rules/{id}", HandleGetRoutingRule(cp))
+		authed.Handle("PATCH /api/v1/routing-rules/{id}", HandleUpdateRoutingRule(cp))
+		authed.Handle("DELETE /api/v1/routing-rules/{id}", HandleDeleteRoutingRule(cp))
+
 		// Endpoints.
 		authed.Handle("GET /api/v1/endpoints", HandleListEndpoints(cp))
 		authed.Handle("POST /api/v1/endpoints", HandleCreateEndpoint(cp))

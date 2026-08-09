@@ -424,6 +424,9 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		MatcherRuntime:          a.accountMatcher,
 		OnUDPProbeConfigChanged: a.topoRuntime.probeMgr.TriggerImmediateUDPProbes,
 	}
+	if err := cpService.InitializeRoutingDecisions(); err != nil {
+		return fmt.Errorf("initialize routing decisions: %w", err)
+	}
 
 	apiSrv := api.NewServerWithAddress(
 		a.envCfg.ListenAddress,

@@ -531,6 +531,13 @@ func (s *ControlPlaneService) DeletePlatform(id string) error {
 	if id == platform.DefaultPlatformID {
 		return conflict("cannot delete Default platform")
 	}
+	referenced, err := s.Engine.RoutingRuleReferencesPlatform(id)
+	if err != nil {
+		return internal("check routing rule references", err)
+	}
+	if referenced {
+		return conflict("platform is referenced by a routing rule")
+	}
 
 	if err := s.Engine.DeletePlatform(id); err != nil {
 		if errors.Is(err, state.ErrNotFound) {
