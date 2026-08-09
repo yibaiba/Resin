@@ -70,7 +70,9 @@ func run() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	app.shutdown(ctx)
+	if err := app.shutdown(ctx); err != nil {
+		log.Printf("Runtime shutdown error: %v", err)
+	}
 
 	if err := dbCloser.Close(); err != nil {
 		log.Printf("Persistence close error: %v", err)
@@ -91,11 +93,17 @@ func loadDotenvFile(path string) error {
 	return nil
 }
 
-func newResinApp(envCfg *config.EnvConfig, engine *state.StateEngine) (*resinApp, error) {
+func newResinApp(envCfg *config.EnvConfig, engine *state.StateEngine) (_ *resinApp, err error) {
 	app := &resinApp{
 		envCfg:     envCfg,
 		runtimeCfg: &atomic.Pointer[config.RuntimeConfig]{},
 	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		err = cleanupFailedInitialization(app, err)
+	}()
 	app.runtimeCfg.Store(loadRuntimeConfig(engine))
 	if err := ensureDefaultAccountHeaderRule(engine); err != nil {
 		return nil, err
@@ -547,58 +555,4 @@ func formatListenAddress(listenAddress string, port int) string {
 
 func formatListenURL(listenAddress string, port int) string {
 	return "http://" + formatListenAddress(listenAddress, port)
-}
-
-func (a *resinApp) shutdown(ctx context.Context) {
-	if err := a.endpointManager.Shutdown(ctx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
-	}
-	log.Println("Resin server stopped")
-	if a.transportPool != nil {
-		a.transportPool.CloseAll()
-		log.Println("Outbound transport pool closed")
-	}
-
-	// Stop in order: event sources first, then sinks, then persistence.
-	// 1. Stop all event sources (no more events after this).
-	a.topoRuntime.leaseCleaner.Stop()
-	log.Println("Lease cleaner stopped")
-
-	a.topoRuntime.ephemeralCleaner.Stop()
-	log.Println("Ephemeral cleaner stopped")
-
-	a.topoRuntime.scheduler.Stop()
-	log.Println("Subscription scheduler stopped")
-
-	a.topoRuntime.probeMgr.Stop()
-	log.Println("Probe manager stopped")
-
-	a.geoSvc.Stop()
-	log.Println("GeoIP service stopped")
-
-	// 2. Stop observability sinks (flush remaining data).
-	a.requestlogSvc.Stop()
-	log.Println("Request log service stopped")
-	if err := a.requestlogRepo.Close(); err != nil {
-		log.Printf("Request log repo close error: %v", err)
-	}
-	log.Println("Request log repo closed")
-
-	a.metricsManager.Stop()
-	log.Println("Metrics manager stopped")
-	if err := a.metricsDB.Close(); err != nil {
-		log.Printf("Metrics DB close error: %v", err)
-	}
-	log.Println("Metrics DB closed")
-
-	// 3. Stop infrastructure.
-	if a.topoRuntime.singboxBuilder != nil {
-		if err := a.topoRuntime.singboxBuilder.Close(); err != nil {
-			log.Printf("SingboxBuilder close error: %v", err)
-		}
-		log.Println("SingboxBuilder stopped")
-	}
-
-	a.flushWorker.Stop() // final cache flush before DB close
-	log.Println("Server stopped")
 }

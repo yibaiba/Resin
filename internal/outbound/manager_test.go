@@ -56,12 +56,15 @@ func (b *panicBuilder) Build(_ json.RawMessage) (adapter.Outbound, error) {
 }
 
 type closableOnly struct {
-	closed atomic.Bool
+	closed     atomic.Bool
+	closeCalls atomic.Int32
+	closeErr   error
 }
 
 func (c *closableOnly) Close() error {
 	c.closed.Store(true)
-	return nil
+	c.closeCalls.Add(1)
+	return c.closeErr
 }
 
 func (c *closableOnly) Type() string {
