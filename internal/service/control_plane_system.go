@@ -50,17 +50,18 @@ func internal(msg string, err error) *ServiceError {
 // ControlPlaneService provides all control plane operations.
 // Handlers call its methods; business logic lives here, not in handlers.
 type ControlPlaneService struct {
-	Engine          *state.StateEngine
-	Pool            *topology.GlobalNodePool
-	SubMgr          *topology.SubscriptionManager
-	Scheduler       *topology.SubscriptionScheduler
-	Router          *routing.Router
-	GeoIP           *geoip.Service
-	ProbeMgr        *probe.ProbeManager
-	MatcherRuntime  *proxy.AccountMatcherRuntime
-	RuntimeCfg      *atomic.Pointer[config.RuntimeConfig]
-	EnvCfg          *config.EnvConfig
-	EndpointRuntime EndpointRuntime
+	Engine                  *state.StateEngine
+	Pool                    *topology.GlobalNodePool
+	SubMgr                  *topology.SubscriptionManager
+	Scheduler               *topology.SubscriptionScheduler
+	Router                  *routing.Router
+	GeoIP                   *geoip.Service
+	ProbeMgr                *probe.ProbeManager
+	MatcherRuntime          *proxy.AccountMatcherRuntime
+	RuntimeCfg              *atomic.Pointer[config.RuntimeConfig]
+	EnvCfg                  *config.EnvConfig
+	EndpointRuntime         EndpointRuntime
+	OnUDPProbeConfigChanged func()
 
 	configMu      sync.Mutex
 	configVersion int
@@ -83,8 +84,10 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"max_latency_test_interval":                true,
 	"max_authority_latency_test_interval":      true,
 	"max_egress_test_interval":                 true,
+	"max_udp_test_interval":                    true,
 	"latency_test_url":                         true,
 	"latency_authorities":                      true,
+	"udp_probe_target":                         true,
 	"p2c_latency_window":                       true,
 	"latency_decay_window":                     true,
 	"cache_flush_interval":                     true,
@@ -157,7 +160,8 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 	defer s.configMu.Unlock()
 
 	// 3. Deep-copy current config → apply patch.
-	newCfg := copyRuntimeConfig(s.RuntimeCfg.Load())
+	previousCfg := s.RuntimeCfg.Load()
+	newCfg := copyRuntimeConfig(previousCfg)
 	if verr := parseRuntimeConfigPatch(patchJSON, newCfg); verr != nil {
 		return nil, verr
 	}
@@ -188,8 +192,19 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 	// 6. Atomic swap.
 	s.RuntimeCfg.Store(newCfg)
 	s.configVersion = newVersion
+	if udpProbeConfigChanged(previousCfg, newCfg) && s.OnUDPProbeConfigChanged != nil {
+		s.OnUDPProbeConfigChanged()
+	}
 
 	return newCfg, nil
+}
+
+func udpProbeConfigChanged(previous, next *config.RuntimeConfig) bool {
+	if previous == nil || next == nil {
+		return previous != next
+	}
+	return previous.UDPProbeTarget != next.UDPProbeTarget ||
+		previous.MaxUDPTestInterval != next.MaxUDPTestInterval
 }
 
 func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
@@ -218,7 +233,7 @@ func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
 	if cfg.ReverseProxyLogRespBodyMaxBytes < 0 {
 		return invalidArg("reverse_proxy_log_resp_body_max_bytes: must be non-negative")
 	}
-	minProbeInterval := 30 * time.Second
+	const minProbeInterval = 30 * time.Second
 	// Probe intervals must be at least 30s (DESIGN.md).
 	if time.Duration(cfg.MaxLatencyTestInterval) < minProbeInterval {
 		return invalidArg("max_latency_test_interval: must be >= 30s")
@@ -229,6 +244,14 @@ func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
 	if time.Duration(cfg.MaxEgressTestInterval) < minProbeInterval {
 		return invalidArg("max_egress_test_interval: must be >= 30s")
 	}
+	if time.Duration(cfg.MaxUDPTestInterval) < minProbeInterval {
+		return invalidArg("max_udp_test_interval: must be >= 30s")
+	}
+	udpTarget, err := config.ParseUDPProbeTarget(cfg.UDPProbeTarget)
+	if err != nil {
+		return invalidArg("udp_probe_target: " + err.Error())
+	}
+	cfg.UDPProbeTarget = udpTarget.String()
 	if cfg.P2CLatencyWindow < 0 {
 		return invalidArg("p2c_latency_window: must be non-negative")
 	}

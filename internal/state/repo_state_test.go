@@ -440,6 +440,28 @@ func TestStateRepo_SystemConfig_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestStateRepo_SystemConfig_MergesNewDefaultsIntoLegacyJSON(t *testing.T) {
+	repo := newTestStateRepo(t)
+	if _, err := repo.db.Exec(`
+		INSERT INTO system_config (id, config_json, version, updated_at_ns)
+		VALUES (1, '{"max_consecutive_failures":9}', 4, 1)
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, version, err := repo.GetSystemConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 4 || cfg.MaxConsecutiveFailures != 9 {
+		t.Fatalf("legacy values: version=%d config=%+v", version, cfg)
+	}
+	if cfg.UDPProbeTarget != config.DefaultUDPProbeTarget ||
+		time.Duration(cfg.MaxUDPTestInterval) != config.DefaultMaxUDPTestInterval {
+		t.Fatalf("new defaults not merged into legacy config: %+v", cfg)
+	}
+}
+
 // --- platforms ---
 
 func TestStateRepo_Platforms_CRUD(t *testing.T) {

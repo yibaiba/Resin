@@ -21,6 +21,12 @@ func TestNewDefaultRuntimeConfig(t *testing.T) {
 	if len(cfg.LatencyAuthorities) != 4 {
 		t.Errorf("LatencyAuthorities: got %d items, want 4", len(cfg.LatencyAuthorities))
 	}
+	if cfg.UDPProbeTarget != DefaultUDPProbeTarget {
+		t.Errorf("UDPProbeTarget: got %q, want %q", cfg.UDPProbeTarget, DefaultUDPProbeTarget)
+	}
+	if time.Duration(cfg.MaxUDPTestInterval) != DefaultMaxUDPTestInterval {
+		t.Errorf("MaxUDPTestInterval: got %v, want %v", cfg.MaxUDPTestInterval, DefaultMaxUDPTestInterval)
+	}
 }
 
 func TestRuntimeConfig_JSONRoundTrip(t *testing.T) {
@@ -99,8 +105,10 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 		"max_latency_test_interval",
 		"max_authority_latency_test_interval",
 		"max_egress_test_interval",
+		"max_udp_test_interval",
 		"latency_test_url",
 		"latency_authorities",
+		"udp_probe_target",
 		"p2c_latency_window",
 		"latency_decay_window",
 		"cache_flush_interval",
@@ -111,5 +119,38 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 		if _, ok := m[key]; !ok {
 			t.Errorf("missing JSON key: %q", key)
 		}
+	}
+}
+
+func TestParseUDPProbeTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		want      string
+		wantError bool
+	}{
+		{name: "IPv4", value: " 127.0.0.1:5353 ", want: "127.0.0.1:5353"},
+		{name: "IPv6", value: "[2001:db8::1]:53", want: "[2001:db8::1]:53"},
+		{name: "hostname", value: "dns.example:53", wantError: true},
+		{name: "zero port", value: "127.0.0.1:0", wantError: true},
+		{name: "missing port", value: "127.0.0.1", wantError: true},
+		{name: "IPv6 zone", value: "[fe80::1%lo0]:53", wantError: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := ParseUDPProbeTarget(testCase.value)
+			if testCase.wantError {
+				if err == nil {
+					t.Fatalf("ParseUDPProbeTarget(%q) unexpectedly succeeded", testCase.value)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseUDPProbeTarget(%q): %v", testCase.value, err)
+			}
+			if got.String() != testCase.want {
+				t.Fatalf("target: got %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }

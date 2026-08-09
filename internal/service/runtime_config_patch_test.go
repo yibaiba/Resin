@@ -72,6 +72,8 @@ func TestPatchRuntimeConfig_HotUpdatePersistsAndSurvivesRestart(t *testing.T) {
 		"reverse_proxy_log_req_headers_max_bytes": 2048,
 		"p2c_latency_window":                      "7m",
 		"cache_flush_interval":                    "30s",
+		"udp_probe_target":                        "127.0.0.1:5353",
+		"max_udp_test_interval":                   "6m",
 	}
 	body, err := json.Marshal(patch)
 	if err != nil {
@@ -95,12 +97,18 @@ func TestPatchRuntimeConfig_HotUpdatePersistsAndSurvivesRestart(t *testing.T) {
 	if time.Duration(updated.CacheFlushInterval) != 30*time.Second {
 		t.Fatalf("cache_flush_interval=%v, want 30s", time.Duration(updated.CacheFlushInterval))
 	}
+	if updated.UDPProbeTarget != "127.0.0.1:5353" ||
+		time.Duration(updated.MaxUDPTestInterval) != 6*time.Minute {
+		t.Fatalf("UDP probe config not updated: %+v", updated)
+	}
 
 	live := h.runtimeCfg.Load()
 	if !live.RequestLogEnabled ||
 		live.ReverseProxyLogReqHeadersMaxBytes != 2048 ||
 		time.Duration(live.P2CLatencyWindow) != 7*time.Minute ||
-		time.Duration(live.CacheFlushInterval) != 30*time.Second {
+		time.Duration(live.CacheFlushInterval) != 30*time.Second ||
+		live.UDPProbeTarget != "127.0.0.1:5353" ||
+		time.Duration(live.MaxUDPTestInterval) != 6*time.Minute {
 		t.Fatalf("runtime atomic pointer not updated: %+v", live)
 	}
 
@@ -114,7 +122,9 @@ func TestPatchRuntimeConfig_HotUpdatePersistsAndSurvivesRestart(t *testing.T) {
 	if !persisted.RequestLogEnabled ||
 		persisted.ReverseProxyLogReqHeadersMaxBytes != 2048 ||
 		time.Duration(persisted.P2CLatencyWindow) != 7*time.Minute ||
-		time.Duration(persisted.CacheFlushInterval) != 30*time.Second {
+		time.Duration(persisted.CacheFlushInterval) != 30*time.Second ||
+		persisted.UDPProbeTarget != "127.0.0.1:5353" ||
+		time.Duration(persisted.MaxUDPTestInterval) != 6*time.Minute {
 		t.Fatalf("persisted config not updated: %+v", persisted)
 	}
 
@@ -133,8 +143,53 @@ func TestPatchRuntimeConfig_HotUpdatePersistsAndSurvivesRestart(t *testing.T) {
 	if !afterRestart.RequestLogEnabled ||
 		afterRestart.ReverseProxyLogReqHeadersMaxBytes != 2048 ||
 		time.Duration(afterRestart.P2CLatencyWindow) != 7*time.Minute ||
-		time.Duration(afterRestart.CacheFlushInterval) != 30*time.Second {
+		time.Duration(afterRestart.CacheFlushInterval) != 30*time.Second ||
+		afterRestart.UDPProbeTarget != "127.0.0.1:5353" ||
+		time.Duration(afterRestart.MaxUDPTestInterval) != 6*time.Minute {
 		t.Fatalf("restart did not preserve patched config: %+v", afterRestart)
+	}
+}
+
+func TestPatchRuntimeConfig_UDPProbeValidationAndChangeCallback(t *testing.T) {
+	h := newPatchHarness(t)
+	var callbackCount atomic.Int32
+	h.cp.OnUDPProbeConfigChanged = func() { callbackCount.Add(1) }
+
+	updated, err := h.cp.PatchRuntimeConfig([]byte(`{
+		"udp_probe_target":"[2001:db8::1]:5353",
+		"max_udp_test_interval":"30s"
+	}`))
+	if err != nil {
+		t.Fatalf("PatchRuntimeConfig: %v", err)
+	}
+	if updated.UDPProbeTarget != "[2001:db8::1]:5353" ||
+		time.Duration(updated.MaxUDPTestInterval) != 30*time.Second {
+		t.Fatalf("updated UDP config: %+v", updated)
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("callback count: got %d, want 1", callbackCount.Load())
+	}
+
+	if _, err := h.cp.PatchRuntimeConfig([]byte(`{"request_log_enabled":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("unrelated patch triggered callback: %d", callbackCount.Load())
+	}
+
+	invalidPatches := []string{
+		`{"udp_probe_target":"dns.example:53"}`,
+		`{"udp_probe_target":"127.0.0.1:0"}`,
+		`{"udp_probe_target":"127.0.0.1"}`,
+		`{"max_udp_test_interval":"29s"}`,
+	}
+	for _, patch := range invalidPatches {
+		if _, err := h.cp.PatchRuntimeConfig([]byte(patch)); err == nil {
+			t.Fatalf("invalid patch succeeded: %s", patch)
+		}
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("invalid patch triggered callback: %d", callbackCount.Load())
 	}
 }
 

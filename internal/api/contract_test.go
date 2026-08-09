@@ -1034,6 +1034,8 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 		"reverse_proxy_log_req_headers_max_bytes": 2048,
 		"p2c_latency_window":                      "7m",
 		"cache_flush_interval":                    "30s",
+		"udp_probe_target":                        "127.0.0.1:5353",
+		"max_udp_test_interval":                   "5m",
 	}, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("patch config status: got %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
@@ -1051,6 +1053,9 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 	}
 	if body["cache_flush_interval"] != "30s" {
 		t.Fatalf("cache_flush_interval: got %v, want 30s", body["cache_flush_interval"])
+	}
+	if body["udp_probe_target"] != "127.0.0.1:5353" || body["max_udp_test_interval"] != "5m0s" {
+		t.Fatalf("UDP probe config: target=%v interval=%v", body["udp_probe_target"], body["max_udp_test_interval"])
 	}
 
 	snap := runtimeCfg.Load()
@@ -1070,6 +1075,9 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 		{name: "removed field", body: map[string]any{"ephemeral_node_evict_delay": "1h"}},
 		{name: "null value", body: map[string]any{"request_log_enabled": nil}},
 		{name: "empty latency_test_url", body: map[string]any{"latency_test_url": ""}},
+		{name: "hostname UDP target", body: map[string]any{"udp_probe_target": "dns.example:53"}},
+		{name: "zero UDP target port", body: map[string]any{"udp_probe_target": "127.0.0.1:0"}},
+		{name: "short UDP interval", body: map[string]any{"max_udp_test_interval": "29s"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

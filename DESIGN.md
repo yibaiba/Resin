@@ -1074,8 +1074,10 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "max_latency_test_interval": "1h",
   "max_authority_latency_test_interval": "3h",
   "max_egress_test_interval": "24h",
+  "max_udp_test_interval": "5m",
   "latency_test_url": "https://www.gstatic.com/generate_204",
   "latency_authorities": ["gstatic.com", "google.com", "cloudflare.com", "github.com"],
+  "udp_probe_target": "1.1.1.1:53",
   "p2c_latency_window": "10m",
   "latency_decay_window": "10m",
   "cache_flush_interval": "5m",
@@ -1101,8 +1103,10 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "max_latency_test_interval": "1h",
   "max_authority_latency_test_interval": "3h",
   "max_egress_test_interval": "24h",
+  "max_udp_test_interval": "5m",
   "latency_test_url": "https://www.gstatic.com/generate_204",
   "latency_authorities": ["gstatic.com", "google.com", "cloudflare.com", "github.com"],
+  "udp_probe_target": "1.1.1.1:53",
   "p2c_latency_window": "10m",
   "latency_decay_window": "10m",
   "cache_flush_interval": "5m",
@@ -1142,6 +1146,8 @@ Body（partial patch 示例）：
 
 * duration 字段必须可解析。
 * `latency_test_url` 必须是 `http/https` 绝对 URL。
+* `udp_probe_target` 必须是带非零端口的 IPv4 或方括号 IPv6 地址，不接受域名。
+* `max_udp_test_interval` 最小为 30 秒。
 
 错误码映射（最小集）：
 
@@ -2406,10 +2412,12 @@ Resin 支持通过 API (`PATCH /system/config`) 动态调整大部分全局运�
 * `MaxLatencyTestInterval`: 节点最大延迟探测间隔。最小 30 秒。默认 1 小时。
 * `MaxAuthorityLatencyTestInterval`: 权威域名（如 cloudflare.com）的最大延迟探测间隔。最小 30 秒。默认 3 小时。
 * `MaxEgressTestInterval`: 节点出口 IP 探测的最大间隔。最小 30 秒。默认 1 天。
+* `MaxUDPTestInterval`: 节点 UDP 探测的最大间隔。最小 30 秒。默认 5 分钟。
 
 #### 探测设置
 * `LatencyTestURL`: 主动延迟探测的目标 URL。默认 `https://www.gstatic.com/generate_204`。一定属于 LatencyAuthorities 之一。如果不属于就加入。
 * `LatencyAuthorities`: 权威域名列表。默认 `["gstatic.com", "google.com", "cloudflare.com", "github.com"]`。
+* `UDPProbeTarget`: UDP DNS 探测目标，仅接受带非零端口的 IP 地址。默认 `1.1.1.1:53`。
 
 #### P2C 选路设置
 * `P2CLatencyWindow`: 在 P2C 选路时，仅考虑该时间窗口内更新过的延迟数据。默认 10 分钟。

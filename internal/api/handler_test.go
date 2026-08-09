@@ -235,6 +235,12 @@ func TestSystemConfig_OK(t *testing.T) {
 	if maxFail, ok := body["max_consecutive_failures"].(float64); !ok || maxFail != 3 {
 		t.Errorf("max_consecutive_failures: got %v, want 3", body["max_consecutive_failures"])
 	}
+	if body["udp_probe_target"] != "1.1.1.1:53" {
+		t.Errorf("udp_probe_target: got %v, want 1.1.1.1:53", body["udp_probe_target"])
+	}
+	if body["max_udp_test_interval"] != "5m0s" {
+		t.Errorf("max_udp_test_interval: got %v, want 5m0s", body["max_udp_test_interval"])
+	}
 
 	if _, ok := body["default_platform_config"]; ok {
 		t.Error("default_platform_config should not be exposed in /system/config")
