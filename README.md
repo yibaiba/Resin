@@ -86,6 +86,7 @@ services:
       RESIN_PROXY_TOKEN: "my-token" # Change to your proxy password
       RESIN_LISTEN_ADDRESS: 0.0.0.0
       RESIN_PORT: 2260
+      RESIN_SOCKS5_UDP_IDLE_TIMEOUT: "5m"
     ports:
       - "2260:2260"
       - "2260:2260/udp"
@@ -140,6 +141,7 @@ curl --proxy socks5h://127.0.0.1:2260 \
 
 When `RESIN_PROXY_TOKEN=""`, SOCKS5 also allows unauthenticated access.
 SOCKS5 UDP clients use the same proxy port over UDP. Docker and firewall rules must therefore allow both TCP and UDP on every SOCKS5-enabled endpoint.
+`RESIN_SOCKS5_UDP_IDLE_TIMEOUT` controls idle SOCKS5 UDP associations and per-target flows using a positive Go duration; it defaults to `5m`, and UDP activity in either direction refreshes the relevant timeout.
 
 If your client supports overriding `BASE_URL`, you can also use reverse-proxy mode.
 URL format: `/token/Platform(optional).Account(optional)/protocol/target`.

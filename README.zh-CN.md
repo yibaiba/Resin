@@ -86,6 +86,7 @@ services:
       RESIN_PROXY_TOKEN: "my-token" # 修改为你的代理密码
       RESIN_LISTEN_ADDRESS: 0.0.0.0
       RESIN_PORT: 2260
+      RESIN_SOCKS5_UDP_IDLE_TIMEOUT: "5m"
     ports:
       - "2260:2260"
       - "2260:2260/udp"
@@ -136,6 +137,7 @@ curl --proxy socks5h://127.0.0.1:2260 \
 
 当 `RESIN_PROXY_TOKEN=""` 时，SOCKS5 也允许无认证接入。
 SOCKS5 UDP 客户端会通过同一个代理端口发送 UDP，因此 Docker 端口映射与防火墙必须同时放行每个 SOCKS5 接入点的 TCP 和 UDP。
+`RESIN_SOCKS5_UDP_IDLE_TIMEOUT` 使用大于 0 的 Go duration 控制 SOCKS5 UDP association 及其每目标 flow 的空闲回收，默认 `5m`；任一方向的 UDP 活动都会刷新对应超时。
 
 如果你的客户端支持修改服务的 `BASE_URL`，你也可以尝试反向代理接入。URL 格式为：`/令牌/Platform(可选).Account(可选)/协议/目标地址`。例如，你可以通过下面的 curl 命令通过 Resin 访问 `https://api.ipify.org`。
 
