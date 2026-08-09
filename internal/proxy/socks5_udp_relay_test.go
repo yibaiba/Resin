@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
@@ -9,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/outbound"
+	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -223,6 +227,62 @@ func TestSocks5UDPRelayUsesSingBoxPacketOutbound(t *testing.T) {
 	assertSocks5UDPTraffic(t, metrics.traffic, int64(len(payload)))
 }
 
+func TestSocks5UDPRelayUsesRealSingBoxDirectOutbound(t *testing.T) {
+	routeEnv := newProxyE2EEnv(t)
+	builder, err := outbound.NewSingboxBuilderWithConfig(outbound.SingboxBuilderConfig{
+		DNSUpstreams: []string{"local"},
+	})
+	if err != nil {
+		t.Fatalf("create sing-box builder: %v", err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+	realOutbound, err := builder.Build(json.RawMessage(`{"type":"direct","tag":"udp-e2e"}`))
+	if err != nil {
+		t.Fatalf("build sing-box direct outbound: %v", err)
+	}
+	t.Cleanup(func() {
+		if closer, ok := realOutbound.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	})
+	replaceProxyE2EOutbound(t, routeEnv, realOutbound)
+
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		Router: routeEnv.router, Pool: routeEnv.pool, Health: routeEnv.pool,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	env := newSocks5UDPRelayTestEnv(t, inbound, "real-sing-box-scope")
+	registerRelayTestAssociation(
+		t, inbound, "real-sing-box-scope", env.clientConn, "plat", nil,
+	)
+
+	payload := []byte("real sing-box direct UDP echo")
+	response := sendSocks5UDPAndReadResponse(t, env, payload)
+	if string(response.payload) != string(payload) {
+		t.Fatalf("UDP response payload: got %q, want %q", response.payload, payload)
+	}
+}
+
+func replaceProxyE2EOutbound(
+	t *testing.T,
+	env *proxyE2EEnv,
+	replacement adapter.Outbound,
+) {
+	t.Helper()
+	raw := json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":1}`)
+	hash := node.HashFromRawOptions(raw)
+	entry, ok := env.pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("proxy E2E node not found")
+	}
+	entry.Outbound.Store(&replacement)
+	env.pool.NotifyNodeDirty(hash)
+	platform, ok := env.pool.GetPlatformByName("plat")
+	if !ok || !platform.NetworkView("udp").Contains(hash) {
+		t.Fatal("real sing-box outbound is not in the UDP routable view")
+	}
+}
+
 func TestSocks5UDPRelayDoesNotRetryFailedFlowCreation(t *testing.T) {
 	dialErr := errors.New("direct UDP socket unavailable")
 	dialer := &failingUDPDirectDialer{err: dialErr}
@@ -269,6 +329,43 @@ func TestSocks5UDPRelayDoesNotRetryFailedFlowCreation(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("failed UDP association did not emit request log")
+	}
+}
+
+func TestSocks5UDPRelayRejectsExpiredAssociation(t *testing.T) {
+	const idleTimeout = 80 * time.Millisecond
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		ProxyBypassRules: []string{"127.0.0.0/8"},
+		UDPIdleTimeout:   idleTimeout,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	env := newSocks5UDPRelayTestEnv(t, inbound, "expired-scope")
+	association := registerRelayTestAssociation(
+		t, inbound, "expired-scope", env.clientConn, "", nil,
+	)
+	payload := []byte("before expiry")
+	_ = sendSocks5UDPAndReadResponse(t, env, payload)
+
+	deadline := time.Now().Add(time.Second)
+	for !association.closed.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !association.closed.Load() {
+		t.Fatal("UDP association did not expire")
+	}
+	packet, err := encodeSocks5UDPDatagram(env.echoConn.LocalAddr().String(), []byte("after expiry"))
+	if err != nil {
+		t.Fatalf("encode UDP datagram: %v", err)
+	}
+	if _, err := env.clientConn.WriteToUDP(packet, env.proxyConn.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("send expired UDP datagram: %v", err)
+	}
+	_ = env.clientConn.SetReadDeadline(time.Now().Add(2 * idleTimeout))
+	buffer := make([]byte, socks5UDPMaxDatagramSize)
+	if _, _, err := env.clientConn.ReadFromUDP(buffer); err == nil {
+		t.Fatal("expired UDP association unexpectedly relayed a response")
+	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("read after association expiry: %v", err)
 	}
 }
 
