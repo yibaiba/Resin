@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -24,6 +25,61 @@ type endpointRuntimeSocksHandler struct {
 	mu           sync.Mutex
 	activeScopes map[string]struct{}
 }
+
+type scopeGatedEndpointHandler struct {
+	started     chan struct{}
+	release     chan struct{}
+	scopeClose  chan struct{}
+	releaseOnce sync.Once
+	closeOnce   sync.Once
+}
+
+func newScopeGatedEndpointHandler() *scopeGatedEndpointHandler {
+	return &scopeGatedEndpointHandler{
+		started: make(chan struct{}), release: make(chan struct{}), scopeClose: make(chan struct{}),
+	}
+}
+
+func (h *scopeGatedEndpointHandler) ServeConnContext(context.Context, net.Conn) {}
+
+func (h *scopeGatedEndpointHandler) ServePacketConnContext(
+	context.Context,
+	string,
+	net.PacketConn,
+) error {
+	close(h.started)
+	<-h.release
+	return nil
+}
+
+func (h *scopeGatedEndpointHandler) CloseUDPAssociationScope(string) error {
+	h.closeOnce.Do(func() { close(h.scopeClose) })
+	h.releaseOnce.Do(func() { close(h.release) })
+	return nil
+}
+
+func (h *scopeGatedEndpointHandler) forceRelease() {
+	h.releaseOnce.Do(func() { close(h.release) })
+}
+
+type stubbornEndpointHandler struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (h *stubbornEndpointHandler) ServeConnContext(context.Context, net.Conn) {}
+
+func (h *stubbornEndpointHandler) ServePacketConnContext(
+	context.Context,
+	string,
+	net.PacketConn,
+) error {
+	close(h.started)
+	<-h.release
+	return nil
+}
+
+func (h *stubbornEndpointHandler) CloseUDPAssociationScope(string) error { return nil }
 
 func newEndpointRuntimeSocksHandler() *endpointRuntimeSocksHandler {
 	return &endpointRuntimeSocksHandler{
@@ -136,6 +192,72 @@ func TestEndpointRuntimeBindsAndShutsDownTCPAndUDP(t *testing.T) {
 	defer cancel()
 	if err := manager.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+	assertDualTransportPortReleased(t, port)
+}
+
+func TestEndpointRuntimeClosesAssociationScopeBeforeWaitingForRelay(t *testing.T) {
+	port := reserveDualTransportPort(t)
+	handler := newScopeGatedEndpointHandler()
+	manager := newEndpointRuntimeManager(
+		"127.0.0.1", "", nil, nil, nil, nil, handler, nil,
+	)
+	endpoint := model.Endpoint{
+		ID: "scope-before-wait", Port: port,
+		Enabled: true, AllowProxy: true, AllowSOCKS5: true,
+	}
+	if err := manager.ApplyEndpoint(endpoint); err != nil {
+		t.Fatalf("ApplyEndpoint: %v", err)
+	}
+	manager.Start()
+	select {
+	case <-handler.started:
+	case <-time.After(time.Second):
+		t.Fatal("UDP runtime did not start")
+	}
+	t.Cleanup(handler.forceRelease)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case <-handler.scopeClose:
+	default:
+		t.Fatal("Shutdown waited for relay before closing association scope")
+	}
+	assertDualTransportPortReleased(t, port)
+}
+
+func TestEndpointRuntimeUDPShutdownHonorsContext(t *testing.T) {
+	port := reserveDualTransportPort(t)
+	handler := &stubbornEndpointHandler{
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	manager := newEndpointRuntimeManager(
+		"127.0.0.1", "", nil, nil, nil, nil, handler, nil,
+	)
+	endpoint := model.Endpoint{
+		ID: "shutdown-context", Port: port,
+		Enabled: true, AllowProxy: true, AllowSOCKS5: true,
+	}
+	if err := manager.ApplyEndpoint(endpoint); err != nil {
+		t.Fatalf("ApplyEndpoint: %v", err)
+	}
+	manager.Start()
+	select {
+	case <-handler.started:
+	case <-time.After(time.Second):
+		t.Fatal("UDP runtime did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := manager.Shutdown(ctx)
+	close(handler.release)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown error: got %v, want context deadline", err)
 	}
 	assertDualTransportPortReleased(t, port)
 }

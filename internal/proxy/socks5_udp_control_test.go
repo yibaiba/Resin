@@ -222,6 +222,40 @@ func TestSocks5UDPAssociateContextCancelClosesAssociation(t *testing.T) {
 	}
 }
 
+func TestSocks5UDPAssociateRegistrationFailureFinishesLifecycle(t *testing.T) {
+	emitter := newMockEventEmitter()
+	inbound := NewSocks5Inbound(Socks5InboundConfig{Events: emitter})
+	if err := inbound.CloseUDPAssociations(); err != nil {
+		t.Fatalf("close association manager: %v", err)
+	}
+	options := socks5UDPControlTestOptions{
+		scope: "closed-manager", proxyPort: 2260,
+		clientIP: netip.MustParseAddr("198.51.100.24"), tcpPort: 40104,
+	}
+	client, reader, done := startSocks5UDPControlSession(t, inbound, options)
+	writeAll(t, client, []byte{socks5Version, 1, socks5MethodNoAuth})
+	_ = readExactly(t, reader, 2)
+	writeSocks5UDPAssociateRequest(t, client, "0.0.0.0:45004")
+	if code, _ := readSocks5CommandReply(t, reader); code != socks5ReplyGeneralFailure {
+		t.Fatalf("UDP ASSOCIATE reply: got %d, want general failure", code)
+	}
+	waitSocks5ControlDone(t, done)
+	_ = client.Close()
+
+	select {
+	case entry := <-emitter.logCh:
+		if entry.HTTPMethod != "UDP_ASSOCIATE" || entry.NetOK {
+			t.Fatalf("registration failure request log: %+v", entry)
+		}
+		if entry.UpstreamStage != "socks5_udp_association_register" {
+			t.Fatalf("registration failure stage: got %q", entry.UpstreamStage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registration failure did not finish lifecycle")
+	}
+	assertNoUDPAssociationLifecycle(t, emitter)
+}
+
 func waitSocks5ControlDone(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {

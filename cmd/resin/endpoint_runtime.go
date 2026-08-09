@@ -128,7 +128,7 @@ func (m *endpointRuntimeManager) RemoveEndpoint(id string) {
 	if runtime != nil {
 		// Release both transport ports before returning so a following start can rebind them.
 		_ = runtime.listener.Close()
-		_ = runtime.stopUDP()
+		_ = runtime.stopUDP(context.Background())
 		go stopManagedEndpoint(runtime, 5*time.Second)
 	}
 }
@@ -249,7 +249,7 @@ func shutdownManagedEndpoint(ctx context.Context, runtime *managedEndpointRuntim
 	if runtime == nil {
 		return nil
 	}
-	udpErr := runtime.stopUDP()
+	udpErr := runtime.stopUDP(ctx)
 	serverErr := runtime.server.Shutdown(ctx)
 	listenerErr := runtime.listener.Close()
 	return errors.Join(

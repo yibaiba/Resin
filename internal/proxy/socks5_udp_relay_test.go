@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,6 +32,22 @@ func (d *recordingUDPDirectDialer) ListenPacket(
 type failingUDPDirectDialer struct {
 	calls atomic.Int32
 	err   error
+}
+
+type udpListenFailureOutbound struct {
+	adapter.Outbound
+	err error
+}
+
+func (o *udpListenFailureOutbound) Network() []string {
+	return []string{"tcp", "udp"}
+}
+
+func (o *udpListenFailureOutbound) ListenPacket(
+	context.Context,
+	M.Socksaddr,
+) (net.PacketConn, error) {
+	return nil, o.err
 }
 
 func (d *failingUDPDirectDialer) ListenPacket(
@@ -111,18 +128,9 @@ func registerRelayTestAssociation(
 ) *socks5UDPAssociation {
 	t.Helper()
 	source := normalizeAddrPort(M.AddrPortFromNet(clientConn.LocalAddr()))
-	association, err := inbound.udpAssociations.register(socks5UDPAssociationOptions{
-		endpointID:      scope,
-		clientIP:        source.Addr(),
-		requestedSource: netip.AddrPortFrom(netip.IPv4Unspecified(), source.Port()),
-		platformName:    platformName,
-		account:         "account-a",
-	})
-	if err != nil {
-		t.Fatalf("register UDP association: %v", err)
-	}
+	var lifecycle *requestLifecycle
 	if emitter != nil {
-		lifecycle := newRequestLifecycleFromMetadata(
+		lifecycle = newRequestLifecycleFromMetadata(
 			emitter,
 			clientConn.LocalAddr().String(),
 			"UDP_ASSOCIATE",
@@ -130,7 +138,17 @@ func registerRelayTestAssociation(
 			true,
 		)
 		lifecycle.setAccount("account-a")
-		association.setLifecycle(lifecycle)
+	}
+	association, err := inbound.udpAssociations.register(socks5UDPAssociationOptions{
+		endpointID:      scope,
+		clientIP:        source.Addr(),
+		requestedSource: netip.AddrPortFrom(netip.IPv4Unspecified(), source.Port()),
+		platformName:    platformName,
+		account:         "account-a",
+		lifecycle:       lifecycle,
+	})
+	if err != nil {
+		t.Fatalf("register UDP association: %v", err)
 	}
 	return association
 }
@@ -141,7 +159,17 @@ func sendSocks5UDPAndReadResponse(
 	payload []byte,
 ) socks5UDPDatagram {
 	t.Helper()
-	packet, err := encodeSocks5UDPDatagram(env.echoConn.LocalAddr().String(), payload)
+	return sendSocks5UDPToTarget(t, env, env.echoConn.LocalAddr().String(), payload)
+}
+
+func sendSocks5UDPToTarget(
+	t *testing.T,
+	env *socks5UDPRelayTestEnv,
+	target string,
+	payload []byte,
+) socks5UDPDatagram {
+	t.Helper()
+	packet, err := encodeSocks5UDPDatagram(target, payload)
 	if err != nil {
 		t.Fatalf("encode UDP datagram: %v", err)
 	}
@@ -257,7 +285,8 @@ func TestSocks5UDPRelayUsesRealSingBoxDirectOutbound(t *testing.T) {
 	)
 
 	payload := []byte("real sing-box direct UDP echo")
-	response := sendSocks5UDPAndReadResponse(t, env, payload)
+	target := net.JoinHostPort("localhost", strconv.Itoa(env.echoConn.LocalAddr().(*net.UDPAddr).Port))
+	response := sendSocks5UDPToTarget(t, env, target, payload)
 	if string(response.payload) != string(payload) {
 		t.Fatalf("UDP response payload: got %q, want %q", response.payload, payload)
 	}
@@ -366,6 +395,102 @@ func TestSocks5UDPRelayRejectsExpiredAssociation(t *testing.T) {
 		t.Fatal("expired UDP association unexpectedly relayed a response")
 	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
 		t.Fatalf("read after association expiry: %v", err)
+	}
+}
+
+func TestSocks5UDPRelayOnlyPenalizesExplicitOutboundFailures(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		listenErr    error
+		wantFailures int32
+	}{
+		{name: "transport error", listenErr: errors.New("UDP transport failed"), wantFailures: 1},
+		{name: "context canceled", listenErr: context.Canceled, wantFailures: 0},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			routeEnv := newProxyE2EEnv(t)
+			replaceProxyE2EOutbound(t, routeEnv, &udpListenFailureOutbound{err: testCase.listenErr})
+			health := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+			inbound := NewSocks5Inbound(Socks5InboundConfig{
+				Router: routeEnv.router, Pool: routeEnv.pool, Health: health,
+			})
+			t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+			clientConn := listenLocalUDP(t)
+			defer clientConn.Close()
+			registerRelayTestAssociation(
+				t, inbound, "health-scope", clientConn, "plat", nil,
+			)
+			packet, err := encodeSocks5UDPDatagram("127.0.0.1:53", []byte("health"))
+			if err != nil {
+				t.Fatalf("encode UDP datagram: %v", err)
+			}
+			inbound.handleUDPDatagram(socks5UDPInboundPacket{
+				ctx: context.Background(), associationScope: "health-scope",
+				client: &socks5UDPClientWriter{packetConn: clientConn},
+				source: clientConn.LocalAddr(), packet: packet,
+			})
+			if testCase.wantFailures > 0 {
+				select {
+				case <-health.done:
+				case <-time.After(time.Second):
+					t.Fatal("explicit UDP transport failure was not recorded")
+				}
+			} else {
+				select {
+				case <-health.done:
+					t.Fatal("context cancellation was recorded as a node failure")
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+			if got := health.passiveCalls.Load(); got != testCase.wantFailures {
+				t.Fatalf("passive failure calls: got %d, want %d", got, testCase.wantFailures)
+			}
+		})
+	}
+}
+
+func TestSocks5UDPRelayNoResponseDoesNotPenalizeNode(t *testing.T) {
+	routeEnv := newProxyE2EEnv(t)
+	health := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		Router: routeEnv.router, Pool: routeEnv.pool, Health: health,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	clientConn := listenLocalUDP(t)
+	defer clientConn.Close()
+	association := registerRelayTestAssociation(
+		t, inbound, "silent-scope", clientConn, "plat", nil,
+	)
+	silentTarget := listenLocalUDP(t)
+	target := silentTarget.LocalAddr().String()
+	packet, err := encodeSocks5UDPDatagram(target, []byte("no response expected"))
+	if err != nil {
+		t.Fatalf("encode UDP datagram: %v", err)
+	}
+	inbound.handleUDPDatagram(socks5UDPInboundPacket{
+		ctx: context.Background(), associationScope: "silent-scope",
+		client: &socks5UDPClientWriter{packetConn: clientConn},
+		source: clientConn.LocalAddr(), packet: packet,
+	})
+	_ = silentTarget.SetReadDeadline(time.Now().Add(time.Second))
+	received := make([]byte, socks5UDPMaxDatagramSize)
+	n, _, err := silentTarget.ReadFromUDP(received)
+	if err != nil {
+		t.Fatalf("silent UDP target did not receive request: %v", err)
+	}
+	if got := string(received[:n]); got != "no response expected" {
+		t.Fatalf("silent UDP target payload: got %q", got)
+	}
+	select {
+	case <-health.done:
+		t.Fatal("missing UDP response was recorded as a node result")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := health.passiveCalls.Load(); got != 0 {
+		t.Fatalf("passive result calls without a UDP response: got %d", got)
+	}
+	if err := association.Close(); err != nil {
+		t.Fatalf("close silent association: %v", err)
 	}
 }
 

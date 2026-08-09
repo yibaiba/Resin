@@ -110,7 +110,7 @@ func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPF
 		stage:       "udp_outbound_listen",
 		err:         err,
 	})
-	if result.flow == nil && s.tunnel.health != nil {
+	if result.flow == nil && result.proxyErr != nil && s.tunnel.health != nil {
 		recordPassiveResultAsync(s.tunnel.health, routed.Route, false)
 	}
 	return result
@@ -176,7 +176,9 @@ func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
 		err = io.ErrShortWrite
 	}
 	if err != nil {
-		f.fail("udp_upstream_write", err, true)
+		if !f.closed.Load() {
+			f.fail("udp_upstream_write", err, true)
+		}
 		return err
 	}
 	f.association.recordSuccess()
@@ -234,8 +236,11 @@ func (f *socks5UDPRelayFlow) relayResponse(payload []byte, source net.Addr) erro
 func (f *socks5UDPRelayFlow) fail(stage string, err error, nodeFailure bool) {
 	f.failureOnce.Do(func() {
 		log.Printf("SOCKS5 UDP flow failed stage=%s target=%q error=%v", stage, f.target, err)
-		f.association.recordFailure(stage, err, classifyUpstreamError(err))
-		if nodeFailure && f.health != nil && f.route.PlatformID != "" {
+		proxyErr := classifyUpstreamError(err)
+		if proxyErr != nil {
+			f.association.recordFailure(stage, err, proxyErr)
+		}
+		if nodeFailure && proxyErr != nil && f.health != nil && f.route.PlatformID != "" {
 			recordPassiveResultAsync(f.health, f.route, false)
 		}
 		_ = f.association.removeFlow(f.target, f)

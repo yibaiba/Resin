@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -33,7 +34,7 @@ func (m *endpointRuntimeManager) applySamePortEndpointLocked(
 		}
 	} else {
 		storeEndpointConfig(runtime, endpoint)
-		if err := runtime.stopUDP(); err != nil {
+		if err := runtime.stopUDP(context.Background()); err != nil {
 			return err
 		}
 	}

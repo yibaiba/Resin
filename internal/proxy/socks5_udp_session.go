@@ -117,12 +117,6 @@ func (a *socks5UDPAssociation) removeFlow(target string, flow socks5UDPFlow) err
 	return flow.Close()
 }
 
-func (a *socks5UDPAssociation) setLifecycle(lifecycle *requestLifecycle) {
-	a.mu.Lock()
-	a.lifecycle = lifecycle
-	a.mu.Unlock()
-}
-
 func (a *socks5UDPAssociation) recordRoute(target string, route routing.RouteResult) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -9,6 +9,13 @@ import (
 	"net/netip"
 )
 
+type socks5UDPRegistration struct {
+	ctx       context.Context
+	conn      net.Conn
+	handshake socks5HandshakeResult
+	lifecycle *requestLifecycle
+}
+
 func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 	lifecycle := newRequestLifecycleFromMetadata(
 		s.events,
@@ -18,11 +25,12 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 		true,
 	)
 	lifecycle.setAccount(session.handshake.account)
-	association, replyAddr, err := s.registerUDPAssociation(
-		session.ctx,
-		session.conn,
-		session.handshake,
-	)
+	association, replyAddr, err := s.registerUDPAssociation(socks5UDPRegistration{
+		ctx:       session.ctx,
+		conn:      session.conn,
+		handshake: session.handshake,
+		lifecycle: lifecycle,
+	})
 	if err != nil {
 		lifecycle.setUpstreamError("socks5_udp_association_register", err)
 		lifecycle.setNetOK(false)
@@ -30,7 +38,6 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 		lifecycle.finish()
 		return
 	}
-	association.setLifecycle(lifecycle)
 	defer association.Close()
 
 	if err := writeSocks5Reply(session.conn, socks5ReplySucceeded, replyAddr); err != nil {
@@ -42,26 +49,24 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 }
 
 func (s *Socks5Inbound) registerUDPAssociation(
-	ctx context.Context,
-	conn net.Conn,
-	handshake socks5HandshakeResult,
+	registration socks5UDPRegistration,
 ) (*socks5UDPAssociation, net.Addr, error) {
-	requestedSource, err := netip.ParseAddrPort(handshake.request.target)
+	requestedSource, err := netip.ParseAddrPort(registration.handshake.request.target)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse UDP association source: %w", err)
 	}
-	clientSource := normalizeAddrPort(addrPortFromNetAddr(conn.RemoteAddr()))
+	clientSource := normalizeAddrPort(addrPortFromNetAddr(registration.conn.RemoteAddr()))
 	if !clientSource.IsValid() {
 		return nil, nil, errSocks5UDPInvalidAssociationSource
 	}
-	policy := InboundPolicyFromContext(ctx)
+	policy := InboundPolicyFromContext(registration.ctx)
 	scope := policy.Socks5UDPAssociationScope
 	if scope == "" {
-		scope = conn.LocalAddr().String()
+		scope = registration.conn.LocalAddr().String()
 	}
 	udpPort := policy.Socks5UDPPort
 	if udpPort == 0 {
-		udpPort = addrPortFromNetAddr(conn.LocalAddr()).Port()
+		udpPort = addrPortFromNetAddr(registration.conn.LocalAddr()).Port()
 	}
 	if udpPort == 0 {
 		return nil, nil, errSocks5UDPPortUnavailable
@@ -70,13 +75,14 @@ func (s *Socks5Inbound) registerUDPAssociation(
 		endpointID:      scope,
 		clientIP:        clientSource.Addr(),
 		requestedSource: requestedSource,
-		platformName:    handshake.platformName,
-		account:         handshake.account,
+		platformName:    registration.handshake.platformName,
+		account:         registration.handshake.account,
+		lifecycle:       registration.lifecycle,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return association, unspecifiedUDPAddr(conn.LocalAddr(), udpPort), nil
+	return association, unspecifiedUDPAddr(registration.conn.LocalAddr(), udpPort), nil
 }
 
 var errSocks5UDPPortUnavailable = errors.New("SOCKS5 UDP endpoint port is unavailable")

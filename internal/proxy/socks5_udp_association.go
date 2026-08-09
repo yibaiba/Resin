@@ -22,6 +22,8 @@ type socks5UDPAssociationOptions struct {
 	requestedSource netip.AddrPort
 	platformName    string
 	account         string
+	// Ownership transfers to the association only when register succeeds.
+	lifecycle *requestLifecycle
 }
 
 type socks5UDPSourceKey struct {
@@ -69,6 +71,7 @@ func (m *socks5UDPAssociationManager) register(
 		source:       source,
 		lastActivity: time.Now(),
 		flows:        make(map[string]*socks5UDPFlowRef),
+		lifecycle:    options.lifecycle,
 	}
 
 	m.mu.Lock()

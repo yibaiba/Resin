@@ -18,9 +18,12 @@ func (r *managedEndpointRuntime) attachPacketConn(packetConn net.PacketConn) {
 	r.udpMu.Unlock()
 }
 
-func (r *managedEndpointRuntime) stopUDP() error {
+func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
 	if r == nil {
 		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	r.udpMu.Lock()
 	cancel := r.udpCancel
@@ -38,14 +41,20 @@ func (r *managedEndpointRuntime) stopUDP() error {
 	if packetConn != nil {
 		closeErr = packetConn.Close()
 	}
-	if done != nil {
-		<-done
-	}
 	var associationErr error
 	if r.packetHandler != nil {
+		// Closing flows can unblock the relay while it is handling a datagram.
 		associationErr = r.packetHandler.CloseUDPAssociationScope(r.associationScope)
 	}
-	return errors.Join(ignoreClosedNetworkError(closeErr), associationErr)
+	var waitErr error
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			waitErr = ctx.Err()
+		}
+	}
+	return errors.Join(ignoreClosedNetworkError(closeErr), associationErr, waitErr)
 }
 
 func (m *endpointRuntimeManager) bindEndpointUDP(

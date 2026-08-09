@@ -276,6 +276,105 @@ func TestSocks5UDPAssociationEndpointAndManagerCleanup(t *testing.T) {
 	}
 }
 
+func TestSocks5UDPAssociationConcurrentCloseFinishesLifecycleOnce(t *testing.T) {
+	manager := newSocks5UDPAssociationManager(time.Minute)
+	emitter := newMockEventEmitter()
+	lifecycle := newRequestLifecycleFromMetadata(
+		emitter,
+		"198.51.100.12:47001",
+		"UDP_ASSOCIATE",
+		ProxyTypeSocks5Forward,
+		true,
+	)
+	association, err := manager.register(socks5UDPAssociationOptions{
+		endpointID:      "concurrent-close",
+		clientIP:        netip.MustParseAddr("198.51.100.12"),
+		requestedSource: netip.MustParseAddrPort("0.0.0.0:47001"),
+		lifecycle:       lifecycle,
+	})
+	if err != nil {
+		t.Fatalf("register association: %v", err)
+	}
+
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for _, closeAssociation := range []func() error{
+		association.Close,
+		func() error { return manager.closeEndpoint("concurrent-close") },
+		manager.close,
+	} {
+		wait.Add(1)
+		go func(closeAssociation func() error) {
+			defer wait.Done()
+			<-start
+			if err := closeAssociation(); err != nil {
+				t.Errorf("close association: %v", err)
+			}
+		}(closeAssociation)
+	}
+	close(start)
+	wait.Wait()
+
+	assertSingleUDPAssociationLifecycle(t, emitter)
+}
+
+func TestSocks5UDPAssociationIdleCloseFinishesLifecycleOnce(t *testing.T) {
+	const idleTimeout = time.Millisecond
+	manager := newSocks5UDPAssociationManager(idleTimeout)
+	emitter := newMockEventEmitter()
+	lifecycle := newRequestLifecycleFromMetadata(
+		emitter,
+		"198.51.100.13:47002",
+		"UDP_ASSOCIATE",
+		ProxyTypeSocks5Forward,
+		true,
+	)
+	association, err := manager.register(socks5UDPAssociationOptions{
+		endpointID:      "idle-close",
+		clientIP:        netip.MustParseAddr("198.51.100.13"),
+		requestedSource: netip.MustParseAddrPort("0.0.0.0:47002"),
+		lifecycle:       lifecycle,
+	})
+	if err != nil {
+		t.Fatalf("register association: %v", err)
+	}
+
+	select {
+	case entry := <-emitter.logCh:
+		if entry.HTTPMethod != "UDP_ASSOCIATE" {
+			t.Fatalf("request log method: got %q", entry.HTTPMethod)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle close did not finish lifecycle")
+	}
+	if err := association.Close(); err != nil {
+		t.Fatalf("close expired association: %v", err)
+	}
+	assertNoUDPAssociationLifecycle(t, emitter)
+}
+
+func assertSingleUDPAssociationLifecycle(t *testing.T, emitter *mockEventEmitter) {
+	t.Helper()
+	select {
+	case entry := <-emitter.logCh:
+		if entry.HTTPMethod != "UDP_ASSOCIATE" {
+			t.Fatalf("request log method: got %q", entry.HTTPMethod)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("association close did not finish lifecycle")
+	}
+	assertNoUDPAssociationLifecycle(t, emitter)
+}
+
+func assertNoUDPAssociationLifecycle(t *testing.T, emitter *mockEventEmitter) {
+	t.Helper()
+	select {
+	case entry := <-emitter.logCh:
+		t.Fatalf("association lifecycle finished more than once: %+v", entry)
+	case <-time.After(20 * time.Millisecond):
+	}
+}
+
 func TestSocks5UDPAssociationNormalizesIPv4MappedSource(t *testing.T) {
 	manager := newSocks5UDPAssociationManager(time.Minute)
 	defer manager.close()
