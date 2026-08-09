@@ -7,7 +7,9 @@ import (
 	"net"
 	"time"
 
+	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 var errSocks5UDPFlowClosed = errors.New("SOCKS5 UDP flow is closed")
@@ -27,7 +29,7 @@ func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
 		return errSocks5UDPAssociationNotFound
 	}
 	f.writeMu.Lock()
-	n, err := f.packetConn.WriteTo(payload, f.upstream)
+	n, err := writeUDPRelayPacket(f.packetConn, payload, f.upstream)
 	f.writeMu.Unlock()
 	if n > 0 {
 		f.association.recordTraffic(0, int64(n))
@@ -46,6 +48,13 @@ func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
 	}
 	f.association.recordSuccess()
 	return nil
+}
+
+func writeUDPRelayPacket(conn net.PacketConn, payload []byte, destination net.Addr) (int, error) {
+	if writer, ok := conn.(N.NetPacketWriter); ok {
+		return bufio.WritePacket(writer, payload, destination)
+	}
+	return conn.WriteTo(payload, destination)
 }
 
 func (f *socks5UDPRelayFlow) readResponses() {
