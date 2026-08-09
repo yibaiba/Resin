@@ -131,10 +131,6 @@ func TestProbeEgress_CircuitBreak(t *testing.T) {
 	}
 	storeOutbound(entry)
 	pool.RecordResult(hash, true)
-	pool.SetTCPValidationRequester(func(request topology.TCPValidationRequest) error {
-		pool.CompleteTCPValidation(request.Hash, request.Validation, false)
-		return nil
-	})
 
 	mgr := NewProbeManager(ProbeConfig{
 		Pool: pool,
@@ -145,6 +141,7 @@ func TestProbeEgress_CircuitBreak(t *testing.T) {
 
 	mgr.probeEgress(hash, entry)
 	mgr.probeEgress(hash, entry)
+	runNextQueuedTask(t, mgr)
 
 	if entry.TCPHealth().CircuitOpenSince == 0 {
 		t.Fatal("circuit should be open after 2 consecutive failures")

@@ -99,11 +99,14 @@ const (
 	probeTaskKindEgress probeTaskKind = iota
 	probeTaskKindLatency
 	probeTaskKindUDP
+	probeTaskKindConfirmation
+	probeTaskKindRecovery
 )
 
 type probeTaskKey struct {
-	hash node.Hash
-	kind probeTaskKind
+	hash       node.Hash
+	kind       probeTaskKind
+	generation uint64
 }
 
 type probeTask struct {
@@ -153,6 +156,10 @@ func (b *probeTaskBuffer) pop() probeTask {
 func (b *probeTaskBuffer) clear() {
 	b.items = nil
 	b.head = 0
+}
+
+func (b *probeTaskBuffer) pending() []probeTask {
+	return append([]probeTask(nil), b.items[b.head:]...)
 }
 
 type probeTaskQueue struct {
@@ -236,13 +243,15 @@ func (q *probeTaskQueue) Dequeue() (probeTask, bool) {
 	}
 }
 
-func (q *probeTaskQueue) StopDropPending() {
+func (q *probeTaskQueue) StopDropPending() []probeTask {
 	q.mu.Lock()
 	q.stopped = true
+	dropped := append(q.high.pending(), q.normal.pending()...)
 	q.high.clear()
 	q.normal.clear()
 	q.mu.Unlock()
 	q.notEmpty.Broadcast()
+	return dropped
 }
 
 type egressProbeErrorStage int
@@ -268,7 +277,7 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	return &ProbeManager{
+	manager := &ProbeManager{
 		pool:                            cfg.Pool,
 		stopCh:                          make(chan struct{}),
 		ctx:                             ctx,
@@ -287,6 +296,10 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		timeout:                         cfg.Timeout,
 		onProbeEvent:                    cfg.OnProbeEvent,
 	}
+	if manager.pool != nil {
+		manager.pool.SetTCPValidationRequester(manager.EnqueueTCPValidation)
+	}
+	return manager
 }
 
 // SetOnProbeEvent sets the probe event callback. Must be called before Start.
@@ -334,7 +347,9 @@ func (m *ProbeManager) Stop() {
 	m.stopOnce.Do(func() {
 		m.cancel()
 		close(m.stopCh)
-		m.taskQueue.StopDropPending()
+		for _, task := range m.taskQueue.StopDropPending() {
+			m.cancelDroppedValidation(task, "probe manager stopped")
+		}
 	})
 	m.wg.Wait()
 }
@@ -616,6 +631,10 @@ func (m *ProbeManager) runProbeWorker() {
 }
 
 func (m *ProbeManager) executeTask(task probeTask) {
+	if task.key.isValidation() {
+		m.executeTCPValidation(task)
+		return
+	}
 	entry, ok := m.pool.GetEntry(task.key.hash)
 	if !ok || entry.Outbound.Load() == nil {
 		return
@@ -636,6 +655,10 @@ func (m *ProbeManager) executeTask(task probeTask) {
 
 func (m *ProbeManager) enqueueProbe(hash node.Hash, kind probeTaskKind, priority probePriority) bool {
 	key := probeTaskKey{hash: hash, kind: kind}
+	return m.enqueueProbeKey(key, priority)
+}
+
+func (m *ProbeManager) enqueueProbeKey(key probeTaskKey, priority probePriority) bool {
 	state, _ := m.taskStates.LoadOrCompute(key, func() (*probeTaskState, bool) {
 		return &probeTaskState{}, false
 	})
@@ -759,6 +782,7 @@ func (m *ProbeManager) finishTask(key probeTaskKey, state *probeTaskState) {
 	if requeue {
 		if !m.taskQueue.Enqueue(probeTask{key: key}, requeuePriority) {
 			m.clearDroppedState(state)
+			m.cancelDroppedValidation(probeTask{key: key}, "validation requeue rejected")
 		}
 	}
 
@@ -869,12 +893,12 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressProbeErrorStage, error) {
 	body, latency, err := m.fetcher(hash, egressTraceURL)
 	if err != nil {
-		m.pool.RecordResult(hash, false)
+		m.recordProbeTCPHealth(hash, topology.HealthSourceEgressProbe, false)
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeFetchError, err
 	}
 
-	m.pool.RecordResult(hash, true)
+	m.recordProbeTCPHealth(hash, topology.HealthSourceEgressProbe, true)
 	if latency > 0 {
 		m.pool.RecordLatency(hash, egressTraceDomain, &latency)
 	}
@@ -892,14 +916,24 @@ func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) error
 	domain := netutil.ExtractDomain(testURL)
 	_, latency, err := m.fetcher(hash, testURL)
 	if err != nil {
-		m.pool.RecordResult(hash, false)
+		m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, false)
 		m.pool.RecordLatency(hash, domain, nil)
 		return err
 	}
 
-	m.pool.RecordResult(hash, true)
+	m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, true)
 	m.pool.RecordLatency(hash, domain, &latency)
 	return nil
+}
+
+func (key probeTaskKey) isValidation() bool {
+	return key.kind == probeTaskKindConfirmation || key.kind == probeTaskKindRecovery
+}
+
+func (m *ProbeManager) recordProbeTCPHealth(hash node.Hash, source topology.HealthSource, success bool) {
+	if err := m.pool.RecordTCPHealthResult(hash, source, success, ""); err != nil {
+		log.Printf("[node-health] event=probe_feedback_error source=%s node_hash=%s error=%q", source, hash.Hex(), err)
+	}
 }
 
 func (m *ProbeManager) currentLatencyTestURL() string {
