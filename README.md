@@ -88,7 +88,7 @@ services:
       RESIN_PORT: 2260
       RESIN_SOCKS5_UDP_IDLE_TIMEOUT: "5m"
     ports:
-      - "2260:2260"
+      - "2260:2260/tcp"
       - "2260:2260/udp"
     volumes:
       - ./data/cache:/var/cache/resin
@@ -97,6 +97,8 @@ services:
 ```
 
 Run `docker compose up -d` to start the service.
+
+Do not replace the two mappings with a bare `"2260"`: Compose would publish only container port `2260/tcp` on a random host port and would not publish UDP. A fixed SOCKS5 endpoint requires both `"2260:2260/tcp"` and `"2260:2260/udp"`.
 
 Custom endpoint ports must also be reachable from outside the container. Docker cannot add published ports to an already-running container, so pre-publish the required TCP range (for example `"2300-2399:2300-2399/tcp"`) or use host networking where appropriate. If SOCKS5 is enabled on those endpoints, publish the same range over UDP as well (for example `"2300-2399:2300-2399/udp"`); HTTP forward/reverse traffic remains TCP-only.
 

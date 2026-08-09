@@ -13,7 +13,7 @@ services:
       RESIN_PORT: 2260
       # TZ: <Your Time Zone>
     ports:
-      - "2260:2260"
+      - "2260:2260/tcp"
       - "2260:2260/udp"
     volumes:
       - resin_cache:/var/cache/resin

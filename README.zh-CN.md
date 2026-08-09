@@ -88,7 +88,7 @@ services:
       RESIN_PORT: 2260
       RESIN_SOCKS5_UDP_IDLE_TIMEOUT: "5m"
     ports:
-      - "2260:2260"
+      - "2260:2260/tcp"
       - "2260:2260/udp"
     volumes:
       - ./data/cache:/var/cache/resin
@@ -96,6 +96,8 @@ services:
       - ./data/log:/var/log/resin
 ```
 运行 `docker compose up -d` 启动服务。
+
+不要把上述两条映射简写成单独的 `"2260"`：Compose 此时只会把容器的 `2260/tcp` 发布到随机宿主机端口，不会发布 UDP。固定端口的 SOCKS5 接入必须同时配置 `"2260:2260/tcp"` 和 `"2260:2260/udp"`。
 
 自定义接入点端口还必须能从容器外访问。Docker 无法为已运行容器动态增加端口映射，因此请在 `ports` 中提前映射所需 TCP 端口范围（例如 `"2300-2399:2300-2399/tcp"`），或在适合的环境中使用 host 网络。若这些接入点启用了 SOCKS5，还必须映射同号 UDP 范围（例如 `"2300-2399:2300-2399/udp"`）；HTTP 正向/反向代理仍只使用 TCP。
 
