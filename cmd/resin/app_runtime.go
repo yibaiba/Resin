@@ -126,7 +126,9 @@ func newResinApp(envCfg *config.EnvConfig, engine *state.StateEngine) (_ *resinA
 		return nil, err
 	}
 
-	app.startBackgroundServices()
+	if err := app.startBackgroundServices(); err != nil {
+		return nil, err
+	}
 	return app, nil
 }
 
@@ -336,7 +338,7 @@ func (a *resinApp) initObservability() error {
 	return nil
 }
 
-func (a *resinApp) startBackgroundServices() {
+func (a *resinApp) startBackgroundServices() error {
 	// --- Step 8 Batch 1: CacheFlushWorker + GeoIP + MetricsManager ---
 	a.flushWorker.Start()
 	log.Println("Cache flush worker started")
@@ -352,23 +354,52 @@ func (a *resinApp) startBackgroundServices() {
 		a.metricsManager.OnProbeEvent(metrics.ProbeEvent{Kind: metrics.ProbeKind(kind)})
 	})
 
-	a.topoRuntime.probeMgr.Start()
-	a.topoRuntime.probeMgr.TriggerImmediateUDPProbes()
-	log.Println("Probe manager started (batch 2)")
-
-	a.requestlogSvc.Start()
-	log.Println("Request log service started (batch 2)")
-
-	a.topoRuntime.leaseCleaner.Start()
-	log.Println("Lease cleaner started (batch 2)")
-
-	a.topoRuntime.ephemeralCleaner.Start()
-	log.Println("Ephemeral cleaner started (batch 2)")
+	if err := startBackgroundBatch2(a.backgroundBatch2Hooks()); err != nil {
+		return err
+	}
 
 	// --- Step 8 Batch 3: Subscription scheduler (force full refresh on start) ---
 	a.topoRuntime.scheduler.Start()
 	a.topoRuntime.scheduler.ForceRefreshAllAsync()
 	log.Println("Subscription scheduler started; forced full refresh running in background (batch 3)")
+	return nil
+}
+
+type backgroundBatch2Hooks struct {
+	startProbe            func()
+	enqueueTCPRecovery    func() error
+	triggerUDP            func()
+	startRequestLog       func()
+	startLeaseCleaner     func()
+	startEphemeralCleaner func()
+}
+
+func (a *resinApp) backgroundBatch2Hooks() backgroundBatch2Hooks {
+	return backgroundBatch2Hooks{
+		startProbe:            a.topoRuntime.probeMgr.Start,
+		enqueueTCPRecovery:    a.topoRuntime.probeMgr.EnqueueTCPRecoveryValidations,
+		triggerUDP:            a.topoRuntime.probeMgr.TriggerImmediateUDPProbes,
+		startRequestLog:       a.requestlogSvc.Start,
+		startLeaseCleaner:     a.topoRuntime.leaseCleaner.Start,
+		startEphemeralCleaner: a.topoRuntime.ephemeralCleaner.Start,
+	}
+}
+
+func startBackgroundBatch2(hooks backgroundBatch2Hooks) error {
+	hooks.startProbe()
+	log.Println("Probe manager started (batch 2)")
+	if err := hooks.enqueueTCPRecovery(); err != nil {
+		return fmt.Errorf("enqueue TCP recovery validations: %w", err)
+	}
+	log.Println("TCP health recovery scan queued (batch 2)")
+	hooks.triggerUDP()
+	hooks.startRequestLog()
+	log.Println("Request log service started (batch 2)")
+	hooks.startLeaseCleaner()
+	log.Println("Lease cleaner started (batch 2)")
+	hooks.startEphemeralCleaner()
+	log.Println("Ephemeral cleaner started (batch 2)")
+	return nil
 }
 
 func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {

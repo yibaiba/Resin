@@ -164,6 +164,73 @@ func TestEphemeralCleaner_NoOutboundWithoutErrorSkipped(t *testing.T) {
 	}
 }
 
+func TestEphemeralCleaner_ValidationPendingPreventsEviction(t *testing.T) {
+	tests := []struct {
+		name string
+		kind node.TCPValidationKind
+	}{
+		{name: "confirmation", kind: node.TCPValidationConfirmation},
+		{name: "recovery", kind: node.TCPValidationRecovery},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			subMgr, pool, sub, hash, entry := newPendingCleanerNode(t, test.kind)
+			cleaner := NewEphemeralCleaner(subMgr, pool)
+			cleaner.sweep()
+			managed, _ := sub.ManagedNodes().LoadNode(hash)
+			if managed.Evicted {
+				t.Fatal("validation-pending node was evicted")
+			}
+
+			state := entry.TCPHealth()
+			pool.CancelTCPValidation(hash, node.TCPValidation{
+				Kind: test.kind, Generation: state.ValidationGeneration,
+			})
+			cleaner.sweep()
+			managed, _ = sub.ManagedNodes().LoadNode(hash)
+			if !managed.Evicted {
+				t.Fatal("node should become evictable after validation is canceled")
+			}
+		})
+	}
+}
+
+func newPendingCleanerNode(
+	t *testing.T,
+	kind node.TCPValidationKind,
+) (*SubscriptionManager, *GlobalNodePool, *subscription.Subscription, node.Hash, *node.NodeEntry) {
+	t.Helper()
+	subMgr := NewSubscriptionManager()
+	pool := NewGlobalNodePool(PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 2 },
+	})
+	sub := subscription.NewSubscription("pending-sub", "pending-sub", "http://example.com", true, true)
+	subMgr.Register(sub)
+	hash := node.HashFromRawOptions([]byte(`{"type":"pending-node"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"pending-node"}`), sub.ID)
+	sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"tag"}})
+	entry, _ := pool.GetEntry(hash)
+	entry.SetLastError("outbound build failed")
+	queued := false
+	pool.SetTCPValidationRequester(func(TCPValidationRequest) error {
+		queued = true
+		return nil
+	})
+	if kind == node.TCPValidationRecovery {
+		entry.RestoreTCPHealth(2, time.Now().Add(-time.Hour).UnixNano())
+	} else {
+		entry.RestoreTCPHealth(2, 0)
+	}
+	if err := pool.BeginTCPValidation(hash, kind, HealthSource(kind)); err != nil {
+		t.Fatalf("begin %s validation: %v", kind, err)
+	}
+	if !queued {
+		t.Fatalf("%s validation was not queued", kind)
+	}
+	return subMgr, pool, sub, hash, entry
+}
+
 func TestEphemeralCleaner_TOCTOU_NoOutboundErrorRecoveredBetweenScans(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := NewGlobalNodePool(PoolConfig{
