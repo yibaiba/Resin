@@ -23,7 +23,8 @@ type socks5UDPAssociationOptions struct {
 	platformName    string
 	account         string
 	// Ownership transfers to the association only when register succeeds.
-	lifecycle *requestLifecycle
+	lifecycle        *requestLifecycle
+	deferIdleTimeout bool
 }
 
 type socks5UDPSourceKey struct {
@@ -92,7 +93,9 @@ func (m *socks5UDPAssociationManager) register(
 		}
 		m.bySource[key] = association
 	}
-	association.timer = time.AfterFunc(m.idleTimeout, association.expireIfIdle)
+	if !options.deferIdleTimeout {
+		association.startIdleTimeout()
+	}
 	return association, nil
 }
 

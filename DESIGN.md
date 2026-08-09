@@ -185,21 +185,24 @@ URL 不允许包含查询部分与 ? 字符。
 
 ### SOCKS5 协议返回
 
-SOCKS5 正向代理只支持 SOCKS5 `CONNECT`。它使用标准 SOCKS5 / RFC1929 协议回复，不返回 HTTP 状态码或 `X-Resin-Error`。
+SOCKS5 正向代理支持 `CONNECT` 和已鉴权的 `UDP ASSOCIATE`。它使用标准 SOCKS5 / RFC1929 协议回复，不返回 HTTP 状态码或 `X-Resin-Error`。
 
 | 场景 | 协议回复 | 说明 |
 |------|----------|------|
 | 客户端未提供可接受的认证方法 | 方法协商回复 `0x05 0xFF` | 服务端拒绝继续会话。 |
 | RFC1929 用户名密码认证失败 | 用户名密码子协商回复 `0x01 0x01` | `RESIN_PROXY_TOKEN` 非空时密码必须等于 `PROXY_TOKEN`。 |
-| 命令不是 `CONNECT` | SOCKS5 reply `REP=0x07` | 当前实现不支持 `BIND` / `UDP ASSOCIATE`。 |
+| 命令为 `BIND` | SOCKS5 reply `REP=0x07` | 当前实现不支持 `BIND`。 |
 | 地址类型不支持 | SOCKS5 reply `REP=0x08` | 当前仅支持 IPv4 / IPv6 / 域名三类标准地址。 |
-| 路由失败、无可用节点、拨号失败、超时、向客户端写入成功回复失败 | SOCKS5 reply `REP=0x01` | 协议面统一暴露为 `GENERAL FAILURE`；更细粒度的 `resin_error` / `upstream_stage` 仅记录在请求日志中。 |
-| 成功建立隧道 | SOCKS5 reply `REP=0x00` | 回复成功后进入原始双向 TCP 隧道。 |
+| `UDP ASSOCIATE` 关联注册失败 | SOCKS5 reply `REP=0x01` | 包括关联冲突、来源地址非法或接入点 UDP 端口不可用。 |
+| `CONNECT` 路由失败、无可用节点、拨号失败、超时、向客户端写入成功回复失败 | SOCKS5 reply `REP=0x01` | 协议面统一暴露为 `GENERAL FAILURE`；更细粒度的 `resin_error` / `upstream_stage` 仅记录在请求日志中。 |
+| 成功建立 TCP 隧道 | SOCKS5 reply `REP=0x00` | 回复成功后进入原始双向 TCP 隧道。 |
+| 成功建立 UDP 关联 | SOCKS5 reply `REP=0x00` | 返回未指定地址和接入点同号 UDP 端口；TCP 控制连接关闭时关联失效。 |
 
 ### 隧道型正向代理特殊行为
 * HTTP 正向代理的 `CONNECT` 请求在成功建立隧道后，返回 `HTTP/1.1 200 Connection Established`。
-* SOCKS5 正向代理在成功建立隧道后，返回标准 SOCKS5 success reply（`REP=0x00`）。
+* SOCKS5 `CONNECT` 在成功建立隧道后，返回标准 SOCKS5 success reply（`REP=0x00`）。
 * 两种隧道在成功建立后，Resin 都不再介入更高层协议语义，连接进入双向 TCP 转发。隧道建立后的网络错误不会再生成 HTTP 响应或新的 SOCKS5 reply；连接将直接中断。
+* SOCKS5 `UDP ASSOCIATE` 不进入 TCP 隧道；TCP 连接只维持已鉴权关联，数据报通过接入点同号 UDP 端口转发。
 
 ### 错误响应示例
 正向代理认证失败：

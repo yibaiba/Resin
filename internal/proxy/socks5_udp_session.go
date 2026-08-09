@@ -56,6 +56,19 @@ func (a *socks5UDPAssociation) touch() bool {
 	return true
 }
 
+func (a *socks5UDPAssociation) startIdleTimeout() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed.Load() {
+		return false
+	}
+	if a.timer == nil {
+		a.lastActivity = time.Now()
+		a.timer = time.AfterFunc(a.manager.idleTimeout, a.expireIfIdle)
+	}
+	return true
+}
+
 func (a *socks5UDPAssociation) setSource(source netip.AddrPort) {
 	a.mu.Lock()
 	a.source = source

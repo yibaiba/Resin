@@ -256,6 +256,44 @@ func TestSocks5UDPAssociateRegistrationFailureFinishesLifecycle(t *testing.T) {
 	assertNoUDPAssociationLifecycle(t, emitter)
 }
 
+func TestSocks5UDPAssociateStartsIdleTimeoutAfterSuccessReply(t *testing.T) {
+	const idleTimeout = 5 * time.Millisecond
+	emitter := newMockEventEmitter()
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		Events: emitter, UDPIdleTimeout: idleTimeout,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	options := socks5UDPControlTestOptions{
+		scope: "deferred-idle", proxyPort: 2260,
+		clientIP: netip.MustParseAddr("198.51.100.25"), tcpPort: 40105,
+	}
+	client, reader, done := startSocks5UDPControlSession(t, inbound, options)
+	writeAll(t, client, []byte{socks5Version, 1, socks5MethodNoAuth})
+	_ = readExactly(t, reader, 2)
+	writeSocks5UDPAssociateRequest(t, client, "0.0.0.0:45005")
+
+	time.Sleep(10 * idleTimeout)
+	select {
+	case entry := <-emitter.logCh:
+		t.Fatalf("association expired before success reply: %+v", entry)
+	default:
+	}
+	if code, _ := readSocks5CommandReply(t, reader); code != socks5ReplySucceeded {
+		t.Fatalf("UDP ASSOCIATE reply: got %d", code)
+	}
+	select {
+	case entry := <-emitter.logCh:
+		if entry.HTTPMethod != "UDP_ASSOCIATE" || !entry.NetOK {
+			t.Fatalf("idle-expired association request log: %+v", entry)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("association did not expire after success reply")
+	}
+	_ = client.Close()
+	waitSocks5ControlDone(t, done)
+	assertNoUDPAssociationLifecycle(t, emitter)
+}
+
 func waitSocks5ControlDone(t *testing.T, done <-chan struct{}) {
 	t.Helper()
 	select {

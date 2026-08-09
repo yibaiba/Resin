@@ -45,6 +45,9 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 		return
 	}
 	association.recordSuccess()
+	if !association.startIdleTimeout() {
+		return
+	}
 	waitForSocks5UDPControlClose(session.ctx, session.conn, session.reader)
 }
 
@@ -72,12 +75,13 @@ func (s *Socks5Inbound) registerUDPAssociation(
 		return nil, nil, errSocks5UDPPortUnavailable
 	}
 	association, err := s.udpAssociations.register(socks5UDPAssociationOptions{
-		endpointID:      scope,
-		clientIP:        clientSource.Addr(),
-		requestedSource: requestedSource,
-		platformName:    registration.handshake.platformName,
-		account:         registration.handshake.account,
-		lifecycle:       registration.lifecycle,
+		endpointID:       scope,
+		clientIP:         clientSource.Addr(),
+		requestedSource:  requestedSource,
+		platformName:     registration.handshake.platformName,
+		account:          registration.handshake.account,
+		lifecycle:        registration.lifecycle,
+		deferIdleTimeout: true,
 	})
 	if err != nil {
 		return nil, nil, err
