@@ -3,10 +3,8 @@ package proxy
 import (
 	"bufio"
 	"context"
-	"encoding/binary"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -15,21 +13,12 @@ import (
 )
 
 const (
-	socks5Version                 = 0x05
-	socks5MethodNoAuth            = 0x00
-	socks5MethodUserPass          = 0x02
-	socks5MethodNoAcceptable      = 0xFF
-	socks5CommandConnect          = 0x01
-	socks5AddressTypeIPv4         = 0x01
-	socks5AddressTypeDomain       = 0x03
-	socks5AddressTypeIPv6         = 0x04
-	socks5ReplySucceeded          = 0x00
-	socks5ReplyGeneralFailure     = 0x01
-	socks5ReplyCommandUnsupported = 0x07
-	socks5ReplyAddressUnsupported = 0x08
-	socks5UserPassVersion         = 0x01
-	socks5UserPassStatusSuccess   = 0x00
-	socks5UserPassStatusFailure   = 0x01
+	socks5MethodNoAuth          = 0x00
+	socks5MethodUserPass        = 0x02
+	socks5MethodNoAcceptable    = 0xFF
+	socks5UserPassVersion       = 0x01
+	socks5UserPassStatusSuccess = 0x00
+	socks5UserPassStatusFailure = 0x01
 )
 
 var socks5HandshakeTimeout = 15 * time.Second
@@ -337,87 +326,4 @@ func containsSocks5Method(methods []byte, candidate byte) bool {
 		}
 	}
 	return false
-}
-
-func readSocks5ConnectRequest(reader *bufio.Reader) (string, byte, bool) {
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(reader, header); err != nil {
-		return "", 0, false
-	}
-	if header[0] != socks5Version {
-		return "", socks5ReplyGeneralFailure, false
-	}
-	if header[1] != socks5CommandConnect {
-		return "", socks5ReplyCommandUnsupported, false
-	}
-
-	host, ok := readSocks5Address(reader, header[3])
-	if !ok {
-		if header[3] != socks5AddressTypeIPv4 && header[3] != socks5AddressTypeDomain && header[3] != socks5AddressTypeIPv6 {
-			return "", socks5ReplyAddressUnsupported, false
-		}
-		return "", socks5ReplyGeneralFailure, false
-	}
-
-	portBuf := make([]byte, 2)
-	if _, err := io.ReadFull(reader, portBuf); err != nil {
-		return "", 0, false
-	}
-	port := strconv.Itoa(int(binary.BigEndian.Uint16(portBuf)))
-	return net.JoinHostPort(host, port), 0, true
-}
-
-func readSocks5Address(reader *bufio.Reader, atyp byte) (string, bool) {
-	switch atyp {
-	case socks5AddressTypeIPv4:
-		ip := make([]byte, net.IPv4len)
-		if _, err := io.ReadFull(reader, ip); err != nil {
-			return "", false
-		}
-		return net.IP(ip).String(), true
-	case socks5AddressTypeIPv6:
-		ip := make([]byte, net.IPv6len)
-		if _, err := io.ReadFull(reader, ip); err != nil {
-			return "", false
-		}
-		return net.IP(ip).String(), true
-	case socks5AddressTypeDomain:
-		size := []byte{0}
-		if _, err := io.ReadFull(reader, size); err != nil {
-			return "", false
-		}
-		domain := make([]byte, int(size[0]))
-		if _, err := io.ReadFull(reader, domain); err != nil {
-			return "", false
-		}
-		return string(domain), true
-	default:
-		return "", false
-	}
-}
-
-func writeSocks5Reply(w io.Writer, replyCode byte, addr net.Addr) error {
-	atyp := byte(socks5AddressTypeIPv4)
-	hostBytes := []byte{0, 0, 0, 0}
-	port := uint16(0)
-
-	if tcpAddr, ok := addr.(*net.TCPAddr); ok && tcpAddr != nil {
-		if ip4 := tcpAddr.IP.To4(); ip4 != nil {
-			atyp = socks5AddressTypeIPv4
-			hostBytes = append([]byte(nil), ip4...)
-		} else if ip16 := tcpAddr.IP.To16(); ip16 != nil {
-			atyp = socks5AddressTypeIPv6
-			hostBytes = append([]byte(nil), ip16...)
-		}
-		if tcpAddr.Port >= 0 && tcpAddr.Port <= 65535 {
-			port = uint16(tcpAddr.Port)
-		}
-	}
-
-	resp := make([]byte, 0, 6+len(hostBytes))
-	resp = append(resp, socks5Version, replyCode, 0x00, atyp)
-	resp = append(resp, hostBytes...)
-	resp = binary.BigEndian.AppendUint16(resp, port)
-	_, err := w.Write(resp)
-	return err
 }
