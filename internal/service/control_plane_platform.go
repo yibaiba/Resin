@@ -627,16 +627,18 @@ type NodeTag struct {
 }
 
 func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEntry) NodeSummary {
+	tcpHealth := entry.TCPHealth()
+	udpHealth := entry.UDPHealthState()
 	ns := NodeSummary{
 		NodeHash:        h.Hex(),
 		CreatedAt:       entry.CreatedAt.UTC().Format(time.RFC3339Nano),
 		Enabled:         true,
 		HasOutbound:     entry.HasOutbound(),
 		LastError:       entry.GetLastError(),
-		FailureCount:    int(entry.FailureCount.Load()),
+		FailureCount:    int(tcpHealth.FailureCount),
 		SupportsUDP:     entry.SupportsNetwork("udp"),
 		UDPHealth:       entry.UDPHealth(),
-		UDPFailureCount: int(entry.UDPFailureCount.Load()),
+		UDPFailureCount: int(udpHealth.FailureCount),
 	}
 
 	if s != nil && s.Pool != nil {
@@ -644,11 +646,11 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 		ns.DisplayTag = s.Pool.ResolveNodeDisplayTag(h)
 	}
 
-	if cos := entry.CircuitOpenSince.Load(); cos > 0 {
+	if cos := tcpHealth.CircuitOpenSince; cos > 0 {
 		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
 		ns.CircuitOpenSince = &t
 	}
-	if cos := entry.UDPCircuitOpenSince.Load(); cos > 0 {
+	if cos := udpHealth.CircuitOpenSince; cos > 0 {
 		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
 		ns.UDPCircuitOpenSince = &t
 	}

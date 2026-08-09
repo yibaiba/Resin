@@ -36,6 +36,22 @@ func addTestNode(pool *GlobalNodePool, sub *subscription.Subscription, raw strin
 	return h
 }
 
+func captureTCPValidations(pool *GlobalNodePool) chan TCPValidationRequest {
+	requests := make(chan TCPValidationRequest, 8)
+	pool.SetTCPValidationRequester(func(request TCPValidationRequest) error {
+		requests <- request
+		return nil
+	})
+	return requests
+}
+
+func completeTCPValidations(pool *GlobalNodePool, success bool) {
+	pool.SetTCPValidationRequester(func(request TCPValidationRequest) error {
+		pool.CompleteTCPValidation(request.Hash, request.Validation, success)
+		return nil
+	})
+}
+
 // --- RecordResult tests ---
 
 func TestRecordResult_CircuitBreak(t *testing.T) {
@@ -43,6 +59,7 @@ func TestRecordResult_CircuitBreak(t *testing.T) {
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"1"}`)
 	entry, _ := pool.GetEntry(h)
+	requests := captureTCPValidations(pool)
 
 	// New node starts circuit-open; mark one success to bring it to healthy state.
 	pool.RecordResult(h, true)
@@ -57,13 +74,47 @@ func TestRecordResult_CircuitBreak(t *testing.T) {
 		t.Fatal("should not be circuit-open after 2 failures")
 	}
 
-	// 3rd failure → circuit opens.
+	// The threshold failure requests confirmation while the route stays healthy.
 	pool.RecordResult(h, false)
-	if !entry.IsCircuitOpen() {
-		t.Fatal("should be circuit-open after 3 failures")
+	state := entry.TCPHealth()
+	if entry.IsCircuitOpen() || state.ValidationPending != node.TCPValidationConfirmation {
+		t.Fatalf("threshold state: %+v", state)
 	}
-	if entry.FailureCount.Load() != 3 {
-		t.Fatalf("expected FailureCount=3, got %d", entry.FailureCount.Load())
+	if state.FailureCount != 3 {
+		t.Fatalf("expected FailureCount=3, got %d", state.FailureCount)
+	}
+	request := <-requests
+	pool.RecordResult(h, false)
+	if got := entry.TCPHealth().FailureCount; got != 3 {
+		t.Fatalf("pending failure count changed: got %d, want 3", got)
+	}
+	select {
+	case duplicate := <-requests:
+		t.Fatalf("duplicate validation queued: %+v", duplicate)
+	default:
+	}
+
+	if !pool.CompleteTCPValidation(h, request.Validation, false) || !entry.IsCircuitOpen() {
+		t.Fatal("failed confirmation should open circuit")
+	}
+}
+
+func TestRecordResult_ConfirmationSuccessKeepsNodeHealthy(t *testing.T) {
+	pool, subMgr := newHealthTestPool(1)
+	h := addTestNode(pool, subMgr.Lookup("s1"), `{"type":"ss","n":"confirmed"}`)
+	entry, _ := pool.GetEntry(h)
+	requests := captureTCPValidations(pool)
+	pool.RecordResult(h, true)
+
+	pool.RecordResult(h, false)
+	request := <-requests
+	if !pool.CompleteTCPValidation(h, request.Validation, true) {
+		t.Fatal("confirmation result was not applied")
+	}
+	state := entry.TCPHealth()
+	if state.FailureCount != 0 || state.CircuitOpenSince != 0 ||
+		state.ValidationPending != node.TCPValidationNone {
+		t.Fatalf("confirmation success state: %+v", state)
 	}
 }
 
@@ -84,8 +135,8 @@ func TestRecordResult_Recovery(t *testing.T) {
 	if entry.IsCircuitOpen() {
 		t.Fatal("should not be circuit-open after success")
 	}
-	if entry.FailureCount.Load() != 0 {
-		t.Fatalf("expected FailureCount=0, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected FailureCount=0, got %d", entry.TCPHealth().FailureCount)
 	}
 }
 
@@ -123,7 +174,7 @@ func TestRecordUDPProbeResult_IsolatedFromTCPHealth(t *testing.T) {
 	if !entry.IsUDPCircuitOpen() || platform.NetworkView("udp").Contains(h) {
 		t.Fatal("UDP failure threshold should open UDP circuit and remove UDP route")
 	}
-	if entry.IsCircuitOpen() || !platform.View().Contains(h) || entry.FailureCount.Load() != 0 {
+	if entry.IsCircuitOpen() || !platform.View().Contains(h) || entry.TCPHealth().FailureCount != 0 {
 		t.Fatal("UDP circuit changes must not alter TCP health or route membership")
 	}
 
@@ -150,6 +201,7 @@ func TestRecordResult_MaxConsecutiveFailuresPulled(t *testing.T) {
 
 	h := addTestNode(pool, sub, `{"type":"ss","n":"pull-threshold"}`)
 	entry, _ := pool.GetEntry(h)
+	requests := captureTCPValidations(pool)
 	pool.RecordResult(h, true)
 	if entry.IsCircuitOpen() {
 		t.Fatal("node should recover after first success")
@@ -160,11 +212,15 @@ func TestRecordResult_MaxConsecutiveFailuresPulled(t *testing.T) {
 		t.Fatal("should not be circuit-open after first failure")
 	}
 
-	// Lower threshold dynamically. Next failure should open circuit.
+	// Lower threshold dynamically. Next failure should request confirmation.
 	maxFailures.Store(2)
 	pool.RecordResult(h, false)
-	if !entry.IsCircuitOpen() {
-		t.Fatal("should be circuit-open after threshold shrinks")
+	if entry.IsCircuitOpen() || entry.TCPHealth().ValidationPending != node.TCPValidationConfirmation {
+		t.Fatalf("threshold shrink state: %+v", entry.TCPHealth())
+	}
+	request := <-requests
+	if !pool.CompleteTCPValidation(h, request.Validation, false) || !entry.IsCircuitOpen() {
+		t.Fatal("failed confirmation should open circuit after threshold shrinks")
 	}
 }
 
@@ -205,6 +261,7 @@ func TestRecordResult_CircuitBreak_RemovesFromView(t *testing.T) {
 	})
 	plat := platform.NewPlatform("p1", "Test", nil, nil)
 	pool.RegisterPlatform(plat)
+	completeTCPValidations(pool, false)
 
 	h := addTestNode(pool, sub, `{"type":"ss","n":"view"}`)
 
@@ -244,6 +301,7 @@ func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
 	h := addTestNode(pool, sub, `{"type":"ss","n":"passive-disabled"}`)
 	entry, _ := pool.GetEntry(h)
 	pool.RecordResult(h, true)
+	completeTCPValidations(pool, false)
 
 	plat := platform.NewPlatform("p1", "NoPassiveBreaker", nil, nil)
 	plat.PassiveCircuitBreakerDisabled = true
@@ -251,7 +309,7 @@ func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
 
 	pool.RecordPassiveResult(plat.ID, h, false)
 	pool.RecordPassiveResult(plat.ID, h, false)
-	if got := entry.FailureCount.Load(); got != 0 {
+	if got := entry.TCPHealth().FailureCount; got != 0 {
 		t.Fatalf("passive failures should be ignored, failure count=%d", got)
 	}
 	if entry.IsCircuitOpen() {
@@ -270,6 +328,7 @@ func TestRecordPassiveResult_EnabledPlatformCountsFailures(t *testing.T) {
 	sub := subMgr.Lookup("s1")
 	h := addTestNode(pool, sub, `{"type":"ss","n":"passive-enabled"}`)
 	entry, _ := pool.GetEntry(h)
+	requests := captureTCPValidations(pool)
 	pool.RecordResult(h, true)
 
 	plat := platform.NewPlatform("p1", "PassiveBreaker", nil, nil)
@@ -278,11 +337,16 @@ func TestRecordPassiveResult_EnabledPlatformCountsFailures(t *testing.T) {
 
 	pool.RecordPassiveResult(plat.ID, h, false)
 	pool.RecordPassiveResult(plat.ID, h, false)
-	if got := entry.FailureCount.Load(); got != 2 {
+	if got := entry.TCPHealth().FailureCount; got != 2 {
 		t.Fatalf("passive failures should be counted, failure count=%d", got)
 	}
+	if entry.IsCircuitOpen() || entry.TCPHealth().ValidationPending != node.TCPValidationConfirmation {
+		t.Fatal("passive threshold should request confirmation while route remains healthy")
+	}
+	request := <-requests
+	pool.CompleteTCPValidation(h, request.Validation, false)
 	if !entry.IsCircuitOpen() {
-		t.Fatal("passive failures should open circuit when enabled")
+		t.Fatal("failed passive confirmation should open circuit")
 	}
 }
 

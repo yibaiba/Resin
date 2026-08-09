@@ -648,8 +648,8 @@ func TestBootstrapNodes_MissingDynamicDefaultsCircuitOpen(t *testing.T) {
 	if !entry.IsCircuitOpen() {
 		t.Fatal("node without dynamic record should default to circuit-open on bootstrap")
 	}
-	if entry.CircuitOpenSince.Load() <= 0 {
-		t.Fatalf("CircuitOpenSince should be set, got %d", entry.CircuitOpenSince.Load())
+	if entry.TCPHealth().CircuitOpenSince <= 0 {
+		t.Fatalf("CircuitOpenSince should be set, got %d", entry.TCPHealth().CircuitOpenSince)
 	}
 }
 
@@ -916,8 +916,7 @@ func TestMarkNodeRemovedDirty_DeletesStaticDynamicAndLatency(t *testing.T) {
 	hashHex := hash.Hex()
 
 	entry := node.NewNodeEntry(hash, raw, time.Now(), 16)
-	entry.FailureCount.Store(2)
-	entry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	entry.RestoreTCPHealth(2, time.Now().Add(-time.Minute).UnixNano())
 	entry.SetEgressIP(netip.MustParseAddr("203.0.113.50"))
 	entry.LastEgressUpdate.Store(time.Now().UnixNano())
 	entry.LastEgressUpdateAttempt.Store(time.Now().UnixNano())
@@ -943,8 +942,8 @@ func TestMarkNodeRemovedDirty_DeletesStaticDynamicAndLatency(t *testing.T) {
 			}
 			return &model.NodeDynamic{
 				Hash:                               hashHex,
-				FailureCount:                       int(entry.FailureCount.Load()),
-				CircuitOpenSince:                   entry.CircuitOpenSince.Load(),
+				FailureCount:                       int(entry.TCPHealth().FailureCount),
+				CircuitOpenSince:                   entry.TCPHealth().CircuitOpenSince,
 				EgressIP:                           entry.GetEgressIP().String(),
 				EgressUpdatedAtNs:                  entry.LastEgressUpdate.Load(),
 				LastLatencyProbeAttemptNs:          entry.LastLatencyProbeAttempt.Load(),

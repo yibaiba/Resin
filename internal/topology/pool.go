@@ -17,7 +17,6 @@ import (
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/puzpuzpuz/xsync/v4"
-	N "github.com/sagernet/sing/common/network"
 )
 
 // GlobalNodePool is the system's single source of truth for nodes.
@@ -43,8 +42,9 @@ type GlobalNodePool struct {
 	onSubNodeChanged func(subID string, hash node.Hash, added bool)
 
 	// Health callbacks (optional).
-	onNodeDynamicChanged func(hash node.Hash)                // fired on circuit/failure/egress changes
-	onNodeLatencyChanged func(hash node.Hash, domain string) // fired on latency upserts and evictions
+	onNodeDynamicChanged   func(hash node.Hash)                // fired on circuit/failure/egress changes
+	onNodeLatencyChanged   func(hash node.Hash, domain string) // fired on latency upserts and evictions
+	tcpValidationRequester TCPValidationRequester
 
 	// Health config
 	maxLatencyTableEntries int
@@ -111,7 +111,7 @@ func (p *GlobalNodePool) AddNodeFromSub(hash node.Hash, rawOpts json.RawMessage,
 			createdAt := time.Now()
 			entry = node.NewNodeEntry(hash, rawOpts, createdAt, p.maxLatencyTableEntries)
 			// New subscription nodes start as circuit-open and must be proven healthy by probes.
-			entry.CircuitOpenSince.Store(createdAt.UnixNano())
+			entry.RestoreTCPHealth(0, createdAt.UnixNano())
 			isNew = true
 		}
 		entry.AddSubscriptionID(subID)
@@ -516,153 +516,6 @@ func (p *GlobalNodePool) NotifyNodeDirty(hash node.Hash) {
 // The callback receives each node's hash and entry. Return false to stop.
 func (p *GlobalNodePool) RangeNodes(fn func(node.Hash, *node.NodeEntry) bool) {
 	p.nodes.Range(fn)
-}
-
-// RecordResult records a probe or passive health-check result.
-// On success, resets FailureCount and clears circuit-breaker.
-// On failure, increments FailureCount and opens circuit-breaker if threshold is reached.
-// Notifies platforms only when circuit state changes (open/recover).
-// Fires OnNodeDynamicChanged only when dynamic fields actually change.
-func (p *GlobalNodePool) RecordResult(hash node.Hash, success bool) {
-	p.RecordNetworkResult(hash, N.NetworkTCP, success)
-}
-
-// RecordNetworkResult records a transport-specific health result.
-func (p *GlobalNodePool) RecordNetworkResult(hash node.Hash, network string, success bool) {
-	if N.NetworkName(network) == N.NetworkUDP {
-		_ = p.recordUDPResult(hash, success)
-		return
-	}
-	p.recordTCPResult(hash, success)
-}
-
-func (p *GlobalNodePool) recordTCPResult(hash node.Hash, success bool) {
-	entry, ok := p.nodes.Load(hash)
-	if !ok {
-		return
-	}
-
-	dynamicChanged := false
-	circuitStateChanged := false
-
-	if success {
-		if entry.FailureCount.Swap(0) != 0 {
-			dynamicChanged = true
-		}
-		if entry.CircuitOpenSince.Swap(0) != 0 {
-			dynamicChanged = true
-			circuitStateChanged = true
-		}
-	} else {
-		newCount := entry.FailureCount.Add(1)
-		dynamicChanged = true
-		maxConsecutiveFailures := p.currentMaxConsecutiveFailures()
-		if maxConsecutiveFailures > 0 && int(newCount) >= maxConsecutiveFailures {
-			// Open circuit if not already open.
-			if entry.CircuitOpenSince.CompareAndSwap(0, time.Now().UnixNano()) {
-				circuitStateChanged = true
-			}
-		}
-	}
-
-	if circuitStateChanged {
-		p.notifyAllPlatformsDirty(hash)
-	}
-	if dynamicChanged && p.onNodeDynamicChanged != nil {
-		p.onNodeDynamicChanged(hash)
-	}
-}
-
-func (p *GlobalNodePool) recordUDPResult(hash node.Hash, success bool) bool {
-	entry, ok := p.nodes.Load(hash)
-	if !ok {
-		return false
-	}
-
-	dynamicChanged := false
-	circuitStateChanged := false
-	if success {
-		dynamicChanged = entry.UDPFailureCount.Swap(0) != 0
-		if entry.UDPCircuitOpenSince.Swap(0) != 0 {
-			dynamicChanged = true
-			circuitStateChanged = true
-		}
-	} else {
-		newCount := entry.UDPFailureCount.Add(1)
-		dynamicChanged = true
-		threshold := p.currentMaxConsecutiveFailures()
-		if threshold > 0 && int(newCount) >= threshold &&
-			entry.UDPCircuitOpenSince.CompareAndSwap(0, time.Now().UnixNano()) {
-			circuitStateChanged = true
-		}
-	}
-
-	if circuitStateChanged {
-		p.notifyAllPlatformsDirty(hash)
-	}
-	if dynamicChanged && p.onNodeDynamicChanged != nil {
-		p.onNodeDynamicChanged(hash)
-	}
-	return dynamicChanged
-}
-
-// RecordUDPProbeResult records an active UDP probe attempt and its health result.
-func (p *GlobalNodePool) RecordUDPProbeResult(hash node.Hash, success bool) {
-	entry, ok := p.nodes.Load(hash)
-	if !ok {
-		return
-	}
-	now := time.Now().UnixNano()
-	entry.LastUDPProbeAttempt.Store(now)
-	firstSuccess := false
-	if success {
-		firstSuccess = entry.LastUDPProbeSuccess.Swap(now) == 0
-	}
-	healthChanged := p.recordUDPResult(hash, success)
-	if firstSuccess {
-		p.notifyAllPlatformsDirty(hash)
-	}
-	if !healthChanged && p.onNodeDynamicChanged != nil {
-		p.onNodeDynamicChanged(hash)
-	}
-}
-
-// RecordPassiveResult records health feedback from user proxy traffic.
-// Failed passive traffic is ignored when the originating platform disables
-// passive circuit breaking; successes still count as positive health feedback.
-func (p *GlobalNodePool) RecordPassiveResult(platformID string, hash node.Hash, success bool) {
-	p.RecordPassiveNetworkResult(platformID, hash, N.NetworkTCP, success)
-}
-
-// RecordPassiveNetworkResult records proxy-traffic feedback for one transport.
-func (p *GlobalNodePool) RecordPassiveNetworkResult(
-	platformID string,
-	hash node.Hash,
-	network string,
-	success bool,
-) {
-	if success || !p.passiveCircuitBreakerDisabled(platformID) {
-		p.RecordNetworkResult(hash, network, success)
-	}
-}
-
-func (p *GlobalNodePool) passiveCircuitBreakerDisabled(platformID string) bool {
-	if platformID == "" {
-		return false
-	}
-
-	p.platMu.RLock()
-	defer p.platMu.RUnlock()
-
-	plat, ok := p.platformByID[platformID]
-	if !ok || plat == nil {
-		return false
-	}
-	return plat.PassiveCircuitBreakerDisabled
-}
-
-func (p *GlobalNodePool) currentMaxConsecutiveFailures() int {
-	return p.maxConsecutiveFailures()
 }
 
 // RecordLatency records a latency probe attempt for the given node and raw target.

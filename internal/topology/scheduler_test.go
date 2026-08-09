@@ -371,7 +371,7 @@ func TestScheduler_UpdateSubscription_IncrementalAliveModeKeepsHealthyOldNodes(t
 	}
 	outbound := testutil.NewNoopOutbound()
 	oldEntry.Outbound.Store(&outbound)
-	oldEntry.CircuitOpenSince.Store(0)
+	oldEntry.RestoreTCPHealth(0, 0)
 	oldEntry.SetLastError("")
 
 	newRaw := `{"type":"vmess","tag":"new-node","server":"2.2.2.2","server_port":443}`
@@ -409,7 +409,7 @@ func TestScheduler_UpdateSubscription_IncrementalAliveModeRemovesUnhealthyOldNod
 	if !ok {
 		t.Fatal("old node should exist after initial refresh")
 	}
-	oldEntry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	oldEntry.RestoreTCPHealth(0, time.Now().Add(-time.Minute).UnixNano())
 
 	newRaw := `{"type":"vmess","tag":"new-node","server":"2.2.2.2","server_port":443}`
 	sched.Fetcher = makeMockFetcher(makeSubscriptionJSON(newRaw), nil)
@@ -1095,7 +1095,7 @@ func TestEphemeralCleaner_DisabledEphemeralStillEvicted(t *testing.T) {
 	pool.AddNodeFromSub(h, raw, "s1")
 
 	entry, _ := pool.GetEntry(h)
-	entry.CircuitOpenSince.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	entry.RestoreTCPHealth(0, time.Now().Add(-2*time.Minute).UnixNano())
 
 	cleaner := NewEphemeralCleaner(subMgr, pool)
 	cleaner.sweep()

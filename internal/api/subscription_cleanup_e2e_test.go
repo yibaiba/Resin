@@ -39,7 +39,7 @@ func TestAPIContract_SubscriptionCleanupAction_E2E(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing circuit node %s in pool", circuitHash.Hex())
 	}
-	circuitEntry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	circuitEntry.RestoreTCPHealth(0, time.Now().Add(-time.Minute).UnixNano())
 
 	noOutboundErrRaw := []byte(`{"type":"ss","server":"2.2.2.2","port":443}`)
 	noOutboundErrHash := node.HashFromRawOptions(noOutboundErrRaw)
@@ -61,7 +61,7 @@ func TestAPIContract_SubscriptionCleanupAction_E2E(t *testing.T) {
 	}
 	outbound := testutil.NewNoopOutbound()
 	healthyEntry.Outbound.Store(&outbound)
-	healthyEntry.CircuitOpenSince.Store(0)
+	healthyEntry.RestoreTCPHealth(0, 0)
 
 	beforeCleanupSubRec := doJSONRequest(t, srv, http.MethodGet, "/api/v1/subscriptions/"+subID, nil, true)
 	if beforeCleanupSubRec.Code != http.StatusOK {

@@ -360,7 +360,7 @@ func TestRouteRequest_SameIPRotationPrefersTargetLatencySample(t *testing.T) {
 	}
 
 	// Force lease invalidation while keeping same-IP candidates in view.
-	currentEntry.CircuitOpenSince.Store(time.Now().UnixNano())
+	currentEntry.RestoreTCPHealth(0, time.Now().UnixNano())
 	plat.NotifyDirty(
 		currentHash,
 		pool.GetEntry,

@@ -512,12 +512,14 @@ func newFlushReaders(
 			if egressIP.IsValid() {
 				egressStr = egressIP.String()
 			}
+			tcpHealth := entry.TCPHealth()
+			udpHealth := entry.UDPHealthState()
 			return &model.NodeDynamic{
 				Hash:                               hash,
-				FailureCount:                       int(entry.FailureCount.Load()),
-				CircuitOpenSince:                   entry.CircuitOpenSince.Load(),
-				UDPFailureCount:                    int(entry.UDPFailureCount.Load()),
-				UDPCircuitOpenSince:                entry.UDPCircuitOpenSince.Load(),
+				FailureCount:                       int(tcpHealth.FailureCount),
+				CircuitOpenSince:                   tcpHealth.CircuitOpenSince,
+				UDPFailureCount:                    int(udpHealth.FailureCount),
+				UDPCircuitOpenSince:                udpHealth.CircuitOpenSince,
 				EgressIP:                           egressStr,
 				EgressRegion:                       entry.GetEgressRegion(),
 				EgressUpdatedAtNs:                  entry.LastEgressUpdate.Load(),
@@ -741,15 +743,15 @@ func loadBootstrapNodeStatics(
 			log.Printf("[bootstrap] skip node %s: %v", ns.Hash, err)
 			continue
 		}
-		entry := &node.NodeEntry{
-			Hash:       hash,
-			RawOptions: append(json.RawMessage(nil), ns.RawOptions...),
-			CreatedAt:  time.Unix(0, ns.CreatedAtNs),
-		}
+		entry := node.NewNodeEntry(
+			hash,
+			append(json.RawMessage(nil), ns.RawOptions...),
+			time.Unix(0, ns.CreatedAtNs),
+			envCfg.MaxLatencyTableEntries,
+		)
 		// Bootstrap default: treat nodes as circuit-open unless a persisted
 		// nodes_dynamic row later overrides this state.
-		entry.CircuitOpenSince.Store(bootstrapNowNs)
-		entry.LatencyTable = node.NewLatencyTable(envCfg.MaxLatencyTableEntries)
+		entry.RestoreTCPHealth(0, bootstrapNowNs)
 		pool.LoadNodeFromBootstrap(entry)
 		hashes = append(hashes, hash)
 	}
@@ -851,10 +853,8 @@ func restoreBootstrapNodeDynamics(
 		if !ok {
 			continue
 		}
-		entry.FailureCount.Store(int32(nd.FailureCount))
-		entry.CircuitOpenSince.Store(nd.CircuitOpenSince)
-		entry.UDPFailureCount.Store(int32(nd.UDPFailureCount))
-		entry.UDPCircuitOpenSince.Store(nd.UDPCircuitOpenSince)
+		entry.RestoreTCPHealth(int32(nd.FailureCount), nd.CircuitOpenSince)
+		entry.RestoreUDPHealth(int32(nd.UDPFailureCount), nd.UDPCircuitOpenSince)
 		entry.LastLatencyProbeAttempt.Store(nd.LastLatencyProbeAttemptNs)
 		entry.LastAuthorityLatencyProbeAttempt.Store(nd.LastAuthorityLatencyProbeAttemptNs)
 		entry.LastEgressUpdateAttempt.Store(nd.LastEgressUpdateAttemptNs)
