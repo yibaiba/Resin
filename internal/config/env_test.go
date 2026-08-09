@@ -71,6 +71,7 @@ func TestLoadEnvConfig_Defaults(t *testing.T) {
 	assertEqual(t, "NodeDNSUpstreams[1]", cfg.NodeDNSUpstreams[1], "https://dns.alidns.com/dns-query")
 	assertEqual(t, "NodeDNSUpstreams[2]", cfg.NodeDNSUpstreams[2], "tls://223.5.5.5?sni=dns.alidns.com")
 	assertEqual(t, "NodeDNSUpstreams[3]", cfg.NodeDNSUpstreams[3], "local")
+	assertEqual(t, "SingboxLogLevel", cfg.SingboxLogLevel, "warn")
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 1024)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 64)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 90*time.Second)
@@ -116,6 +117,7 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	envs["RESIN_PROBE_TIMEOUT"] = "20s"
 	envs["RESIN_RESOURCE_FETCH_TIMEOUT"] = "45s"
 	envs["RESIN_NODE_DNS_UPSTREAMS"] = `["udp://10.0.0.53","local"]`
+	envs["RESIN_SINGBOX_LOG_LEVEL"] = "debug"
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS"] = "2048"
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST"] = "128"
 	envs["RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT"] = "2m"
@@ -160,6 +162,7 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	assertEqual(t, "NodeDNSUpstreamsLength", len(cfg.NodeDNSUpstreams), 2)
 	assertEqual(t, "NodeDNSUpstreams[0]", cfg.NodeDNSUpstreams[0], "udp://10.0.0.53")
 	assertEqual(t, "NodeDNSUpstreams[1]", cfg.NodeDNSUpstreams[1], "local")
+	assertEqual(t, "SingboxLogLevel", cfg.SingboxLogLevel, "debug")
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 2048)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 128)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 2*time.Minute)
@@ -612,6 +615,34 @@ func TestLoadEnvConfig_InvalidProxyTransportSettings(t *testing.T) {
 	}
 	assertContains(t, err.Error(), "RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT")
 	assertContains(t, err.Error(), "RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST")
+}
+
+func TestLoadEnvConfig_SingboxLogLevels(t *testing.T) {
+	for _, level := range []string{"disabled", "error", "warn", "info", "debug", "trace"} {
+		t.Run(level, func(t *testing.T) {
+			envs := requiredEnvs()
+			envs["RESIN_SINGBOX_LOG_LEVEL"] = level
+			setEnvs(t, envs)
+
+			cfg, err := LoadEnvConfig()
+			if err != nil {
+				t.Fatalf("LoadEnvConfig() error: %v", err)
+			}
+			assertEqual(t, "SingboxLogLevel", cfg.SingboxLogLevel, level)
+		})
+	}
+}
+
+func TestLoadEnvConfig_InvalidSingboxLogLevel(t *testing.T) {
+	envs := requiredEnvs()
+	envs["RESIN_SINGBOX_LOG_LEVEL"] = "warning"
+	setEnvs(t, envs)
+
+	_, err := LoadEnvConfig()
+	if err == nil {
+		t.Fatal("expected error for invalid sing-box log level")
+	}
+	assertContains(t, err.Error(), "RESIN_SINGBOX_LOG_LEVEL")
 }
 
 // --- test helpers ---

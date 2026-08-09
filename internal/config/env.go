@@ -41,6 +41,7 @@ type EnvConfig struct {
 	ProbeTimeout                                    time.Duration
 	ResourceFetchTimeout                            time.Duration
 	NodeDNSUpstreams                                []string
+	SingboxLogLevel                                 string
 	ProxyTransportMaxIdleConns                      int
 	ProxyTransportMaxIdleConnsPerHost               int
 	ProxyTransportIdleConnTimeout                   time.Duration
@@ -123,6 +124,7 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	cfg.ProbeTimeout = envDuration("RESIN_PROBE_TIMEOUT", 15*time.Second, &errs)
 	cfg.ResourceFetchTimeout = envDuration("RESIN_RESOURCE_FETCH_TIMEOUT", 30*time.Second, &errs)
 	cfg.NodeDNSUpstreams = envStringSlice("RESIN_NODE_DNS_UPSTREAMS", DefaultNodeDNSUpstreams(), &errs)
+	cfg.SingboxLogLevel = envStr("RESIN_SINGBOX_LOG_LEVEL", "warn")
 	cfg.ProxyTransportMaxIdleConns = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS", 1024, &errs)
 	cfg.ProxyTransportMaxIdleConnsPerHost = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", 64, &errs)
 	cfg.ProxyTransportIdleConnTimeout = envDuration("RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT", 90*time.Second, &errs)
@@ -275,6 +277,12 @@ func LoadEnvConfig() (*EnvConfig, error) {
 			errs = append(errs, fmt.Sprintf("RESIN_NODE_DNS_UPSTREAMS[%d] must not be empty", i))
 		}
 	}
+	if !validSingboxLogLevel(cfg.SingboxLogLevel) {
+		errs = append(errs, fmt.Sprintf(
+			"RESIN_SINGBOX_LOG_LEVEL: invalid value %q (allowed: disabled, error, warn, info, debug, trace)",
+			cfg.SingboxLogLevel,
+		))
+	}
 	validatePositive("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS", cfg.ProxyTransportMaxIdleConns, &errs)
 	validatePositive("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", cfg.ProxyTransportMaxIdleConnsPerHost, &errs)
 	if cfg.ProxyTransportIdleConnTimeout <= 0 {
@@ -326,6 +334,15 @@ func envStr(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func validSingboxLogLevel(level string) bool {
+	switch level {
+	case "disabled", "error", "warn", "info", "debug", "trace":
+		return true
+	default:
+		return false
+	}
 }
 
 func envInt(key string, defaultVal int, errs *[]string) int {

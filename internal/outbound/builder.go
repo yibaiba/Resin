@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/endpoint"
@@ -29,6 +30,9 @@ type SingboxBuilderConfig struct {
 	// DNSUpstreams configures Resin's node DNS chain.
 	// Values are DNS upstream URI strings and the slice must not be empty.
 	DNSUpstreams []string
+	// SingboxLogLevel accepts disabled, error, warn, info, debug, or trace.
+	// An empty value uses warn for callers created before logging was exposed.
+	SingboxLogLevel string
 }
 
 // ---------------------------------------------------------------------------
@@ -44,85 +48,100 @@ type SingboxBuilder struct {
 	logFactory          log.Factory
 	dnsTransportManager *dns.TransportManager
 	dnsRouter           *dns.Router
+	closeOnce           sync.Once
+	closeErr            error
 }
 
 // NewSingboxBuilderWithConfig creates a SingboxBuilder with a complete
 // sing-box service graph (registries + DNS). The caller must call Close()
 // when done.
 func NewSingboxBuilderWithConfig(cfg SingboxBuilderConfig) (*SingboxBuilder, error) {
+	return newSingboxBuilderWithLogFactory(cfg, log.New)
+}
+
+func newSingboxBuilderWithLogFactory(cfg SingboxBuilderConfig, newFactory logFactoryConstructor) (*SingboxBuilder, error) {
 	ctx := context.Background()
 	ctx = include.Context(ctx) // inject protocol registries
 
-	logFactory := log.NewNOPFactory()
-	logger := logFactory.NewLogger("resin-outbound")
+	logFactory, err := newResinSingboxLogFactory(ctx, cfg.SingboxLogLevel, newFactory)
+	if err != nil {
+		return nil, fmt.Errorf("singbox builder: create log factory: %w", err)
+	}
+	if err := logFactory.Start(); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf("singbox builder: start log factory: %w", err),
+			logFactory.Close(),
+		)
+	}
 
-	dnsRegistry, ok := service.FromContext[adapter.DNSTransportRegistry](ctx).(*dns.TransportRegistry)
+	builder := &SingboxBuilder{ctx: ctx, logFactory: logFactory}
+	if err := builder.initialize(cfg.DNSUpstreams); err != nil {
+		return nil, errors.Join(err, builder.Close())
+	}
+	return builder, nil
+}
+
+func (b *SingboxBuilder) initialize(dnsUpstreams []string) error {
+	logger := b.logFactory.NewLogger("resin-outbound")
+
+	dnsRegistry, ok := service.FromContext[adapter.DNSTransportRegistry](b.ctx).(*dns.TransportRegistry)
 	if !ok {
-		return nil, fmt.Errorf("singbox builder: unexpected DNS transport registry type %T", service.FromContext[adapter.DNSTransportRegistry](ctx))
+		return fmt.Errorf("singbox builder: unexpected DNS transport registry type %T", service.FromContext[adapter.DNSTransportRegistry](b.ctx))
 	}
 	registerSecureDNSTransport(dnsRegistry)
 
 	// --- Service graph (same order as Demos/simple-proxy/main.go) -----------
 
 	// Endpoint Manager
-	endpointMgr := endpoint.NewManager(logger, service.FromContext[adapter.EndpointRegistry](ctx))
-	service.MustRegister[adapter.EndpointManager](ctx, endpointMgr)
+	endpointMgr := endpoint.NewManager(logger, service.FromContext[adapter.EndpointRegistry](b.ctx))
+	service.MustRegister[adapter.EndpointManager](b.ctx, endpointMgr)
 
 	// Inbound Manager (required dependency even though unused)
-	inboundMgr := inbound.NewManager(logger, service.FromContext[adapter.InboundRegistry](ctx), endpointMgr)
-	service.MustRegister[adapter.InboundManager](ctx, inboundMgr)
+	inboundMgr := inbound.NewManager(logger, service.FromContext[adapter.InboundRegistry](b.ctx), endpointMgr)
+	service.MustRegister[adapter.InboundManager](b.ctx, inboundMgr)
 
 	// Outbound Manager (sing-box's own manager, for detour resolution)
-	outboundMgr := sbOutbound.NewManager(logger, service.FromContext[adapter.OutboundRegistry](ctx), endpointMgr, "")
-	service.MustRegister[adapter.OutboundManager](ctx, outboundMgr)
+	outboundMgr := sbOutbound.NewManager(logger, service.FromContext[adapter.OutboundRegistry](b.ctx), endpointMgr, "")
+	service.MustRegister[adapter.OutboundManager](b.ctx, outboundMgr)
 
 	// DNS Transport Manager
-	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](ctx), outboundMgr, secureDNSFailoverTransportTag)
-	service.MustRegister[adapter.DNSTransportManager](ctx, dnsTransportMgr)
+	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](b.ctx), outboundMgr, secureDNSFailoverTransportTag)
+	service.MustRegister[adapter.DNSTransportManager](b.ctx, dnsTransportMgr)
 
 	// DNS Router
-	dnsRouter := dns.NewRouter(ctx, logFactory, option.DNSOptions{})
-	service.MustRegister[adapter.DNSRouter](ctx, dnsRouter)
+	dnsRouter := dns.NewRouter(b.ctx, b.logFactory, option.DNSOptions{})
+	service.MustRegister[adapter.DNSRouter](b.ctx, dnsRouter)
+	b.dnsTransportManager = dnsTransportMgr
+	b.dnsRouter = dnsRouter
 
-	dnsTransportSpecs, err := secureDNSTransportSpecsForUpstreams(cfg.DNSUpstreams)
+	dnsTransportSpecs, err := secureDNSTransportSpecsForUpstreams(dnsUpstreams)
 	if err != nil {
-		return nil, fmt.Errorf("singbox builder: configure DNS transports: %w", err)
+		return fmt.Errorf("singbox builder: configure DNS transports: %w", err)
 	}
 	for _, spec := range dnsTransportSpecs {
-		if err := dnsTransportMgr.Create(ctx, logger, spec.tag, spec.transportType, spec.options); err != nil {
-			return nil, fmt.Errorf("singbox builder: create DNS transport %s[%s]: %w", spec.transportType, spec.tag, err)
+		if err := dnsTransportMgr.Create(b.ctx, logger, spec.tag, spec.transportType, spec.options); err != nil {
+			return fmt.Errorf("singbox builder: create DNS transport %s[%s]: %w", spec.transportType, spec.tag, err)
 		}
 	}
 
 	// Start DNS Transport Manager lifecycle
 	if err := dnsTransportMgr.Start(adapter.StartStateInitialize); err != nil {
-		return nil, fmt.Errorf("singbox builder: initialize DNS transport manager: %w", err)
+		return fmt.Errorf("singbox builder: initialize DNS transport manager: %w", err)
 	}
 	if err := dnsTransportMgr.Start(adapter.StartStateStart); err != nil {
-		_ = dnsTransportMgr.Close()
-		return nil, fmt.Errorf("singbox builder: start DNS transport manager: %w", err)
+		return fmt.Errorf("singbox builder: start DNS transport manager: %w", err)
 	}
 
 	// Start DNS Router lifecycle
 	if err := dnsRouter.Initialize(nil); err != nil {
-		_ = dnsTransportMgr.Close()
-		return nil, fmt.Errorf("singbox builder: initialize DNS router: %w", err)
+		return fmt.Errorf("singbox builder: initialize DNS router: %w", err)
 	}
 	if err := dnsRouter.Start(adapter.StartStateStart); err != nil {
-		_ = dnsRouter.Close()
-		_ = dnsTransportMgr.Close()
-		return nil, fmt.Errorf("singbox builder: start DNS router: %w", err)
+		return fmt.Errorf("singbox builder: start DNS router: %w", err)
 	}
 
-	registry := service.FromContext[adapter.OutboundRegistry](ctx).(*sbOutbound.Registry)
-
-	return &SingboxBuilder{
-		registry:            registry,
-		ctx:                 ctx,
-		logFactory:          logFactory,
-		dnsTransportManager: dnsTransportMgr,
-		dnsRouter:           dnsRouter,
-	}, nil
+	b.registry = service.FromContext[adapter.OutboundRegistry](b.ctx).(*sbOutbound.Registry)
+	return nil
 }
 
 // Build parses rawOptions (a complete sing-box outbound JSON object with
@@ -137,7 +156,7 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 	}
 
 	// 2. Create the outbound instance via the registry.
-	logger := b.logFactory.NewLogger("outbound/" + outboundConfig.Type)
+	logger := b.logFactory.NewLogger(outboundLogTag(outboundConfig.Type, outboundConfig.Tag))
 	ob, err := b.registry.CreateOutbound(
 		b.ctx,
 		nil, // router — not needed for simple dialing
@@ -163,12 +182,18 @@ func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, er
 
 // Close shuts down the builder's internal DNS services.
 func (b *SingboxBuilder) Close() error {
-	var errs []error
-	if b.dnsRouter != nil {
-		errs = append(errs, b.dnsRouter.Close())
-	}
-	if b.dnsTransportManager != nil {
-		errs = append(errs, b.dnsTransportManager.Close())
-	}
-	return errors.Join(errs...)
+	b.closeOnce.Do(func() {
+		var errs []error
+		if b.dnsRouter != nil {
+			errs = append(errs, b.dnsRouter.Close())
+		}
+		if b.dnsTransportManager != nil {
+			errs = append(errs, b.dnsTransportManager.Close())
+		}
+		if b.logFactory != nil {
+			errs = append(errs, b.logFactory.Close())
+		}
+		b.closeErr = errors.Join(errs...)
+	})
+	return b.closeErr
 }

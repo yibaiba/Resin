@@ -240,7 +240,8 @@ func newTopologyRuntime(
 	log.Println("Topology: GlobalNodePool initialized")
 
 	singboxBuilder, err := outbound.NewSingboxBuilderWithConfig(outbound.SingboxBuilderConfig{
-		DNSUpstreams: envCfg.NodeDNSUpstreams,
+		DNSUpstreams:    envCfg.NodeDNSUpstreams,
+		SingboxLogLevel: envCfg.SingboxLogLevel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("singbox builder: %w", err)
