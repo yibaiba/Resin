@@ -73,14 +73,14 @@ func socks5ConnectIPv4Packet(addr string) []byte {
 
 func TestNewSocks5InboundUDPIdleTimeout(t *testing.T) {
 	inbound := NewSocks5Inbound(Socks5InboundConfig{})
-	if inbound.udpIdleTimeout != defaultSocks5UDPIdleTimeout {
-		t.Fatalf("default UDP idle timeout: got %v, want %v", inbound.udpIdleTimeout, defaultSocks5UDPIdleTimeout)
+	if inbound.udpAssociations.idleTimeout != defaultSocks5UDPIdleTimeout {
+		t.Fatalf("default UDP idle timeout: got %v, want %v", inbound.udpAssociations.idleTimeout, defaultSocks5UDPIdleTimeout)
 	}
 
 	want := 45 * time.Second
 	inbound = NewSocks5Inbound(Socks5InboundConfig{UDPIdleTimeout: want})
-	if inbound.udpIdleTimeout != want {
-		t.Fatalf("configured UDP idle timeout: got %v, want %v", inbound.udpIdleTimeout, want)
+	if inbound.udpAssociations.idleTimeout != want {
+		t.Fatalf("configured UDP idle timeout: got %v, want %v", inbound.udpAssociations.idleTimeout, want)
 	}
 }
 

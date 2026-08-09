@@ -39,10 +39,10 @@ type Socks5InboundConfig struct {
 
 // Socks5Inbound implements SOCKS5 CONNECT over a raw TCP connection.
 type Socks5Inbound struct {
-	token          string
-	tunnel         tunnelDeps
-	events         EventEmitter
-	udpIdleTimeout time.Duration
+	token           string
+	tunnel          tunnelDeps
+	events          EventEmitter
+	udpAssociations *socks5UDPAssociationManager
 }
 
 type socks5HandshakeResult struct {
@@ -71,8 +71,8 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 			metricsSink: cfg.MetricsSink,
 			bypass:      NewTargetBypassMatcher(cfg.ProxyBypassRules),
 		},
-		events:         ev,
-		udpIdleTimeout: udpIdleTimeout,
+		events:          ev,
+		udpAssociations: newSocks5UDPAssociationManager(udpIdleTimeout),
 	}
 }
 
