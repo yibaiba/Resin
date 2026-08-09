@@ -183,6 +183,13 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 			a.onLeaseEventForMetrics(e)
 		},
 	})
+	egressPolicies, err := engine.ListEgressIPPolicies()
+	if err != nil {
+		return nil, fmt.Errorf("load egress IP policies: %w", err)
+	}
+	if err := a.topoRuntime.router.ReplaceEgressPolicies(egressPolicies); err != nil {
+		return nil, fmt.Errorf("initialize egress IP policies: %w", err)
+	}
 	a.topoRuntime.leaseCleaner = routing.NewLeaseCleaner(a.topoRuntime.router)
 	log.Println("Router and LeaseCleaner initialized")
 	return retryDL, nil

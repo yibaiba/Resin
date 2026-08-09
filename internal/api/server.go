@@ -94,6 +94,11 @@ func NewServerWithAddress(
 		authed.Handle("PATCH /api/v1/routing-rules/{id}", HandleUpdateRoutingRule(cp))
 		authed.Handle("DELETE /api/v1/routing-rules/{id}", HandleDeleteRoutingRule(cp))
 
+		// Global egress IP pool.
+		authed.Handle("GET /api/v1/egress-ips", HandleListEgressIPs(cp))
+		authed.Handle("PATCH /api/v1/egress-ips/{ip}", HandleUpdateEgressIPPolicy(cp))
+		authed.Handle("POST /api/v1/egress-ips/actions/batch-drain", HandleBatchDrainEgressIPs(cp))
+
 		// Endpoints.
 		authed.Handle("GET /api/v1/endpoints", HandleListEndpoints(cp))
 		authed.Handle("POST /api/v1/endpoints", HandleCreateEndpoint(cp))

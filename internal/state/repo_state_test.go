@@ -670,6 +670,28 @@ func TestStateRepo_Platform_ValidationRejectsInvalidName(t *testing.T) {
 	}
 }
 
+func TestStateRepo_EgressIPPolicies_RoundTrip(t *testing.T) {
+	repo := newTestStateRepo(t)
+	policy := model.EgressIPPolicy{
+		EgressIP: "2001:db8::1", Status: "DRAINING",
+		MaxActiveLeases: 7, ResumeAtNs: 123, UpdatedAtNs: 456,
+	}
+	if err := repo.UpsertEgressIPPolicy(policy); err != nil {
+		t.Fatalf("UpsertEgressIPPolicy: %v", err)
+	}
+	got, err := repo.GetEgressIPPolicy(policy.EgressIP)
+	if err != nil {
+		t.Fatalf("GetEgressIPPolicy: %v", err)
+	}
+	if !reflect.DeepEqual(*got, policy) {
+		t.Fatalf("policy = %+v, want %+v", *got, policy)
+	}
+	all, err := repo.ListEgressIPPolicies()
+	if err != nil || len(all) != 1 || !reflect.DeepEqual(all[0], policy) {
+		t.Fatalf("ListEgressIPPolicies = %+v, err=%v", all, err)
+	}
+}
+
 // --- subscriptions ---
 
 func TestStateRepo_Subscriptions_CRUD(t *testing.T) {

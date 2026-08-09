@@ -960,6 +960,41 @@ func TestAPIContract_PlatformFallbackGraph(t *testing.T) {
 	assertErrorCode(t, rec, "CONFLICT")
 }
 
+func TestAPIContract_EgressIPPoliciesAndPartialBatchDrain(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+	resumeAt := time.Now().Add(time.Hour).UTC().Truncate(time.Second).Format(time.RFC3339)
+	ip := "2001:db8::42"
+
+	rec := doJSONRequest(t, srv, http.MethodPatch, "/api/v1/egress-ips/"+ip, map[string]any{
+		"status":            "BLOCKED",
+		"max_active_leases": 5,
+		"resume_at":         resumeAt,
+	}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("patch egress policy: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if body["egress_ip"] != ip || body["status"] != "BLOCKED" || body["max_active_leases"] != float64(5) {
+		t.Fatalf("egress policy response = %v", body)
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodGet, "/api/v1/egress-ips", nil, true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), ip) {
+		t.Fatalf("list egress policies: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPost, "/api/v1/egress-ips/actions/batch-drain", map[string]any{
+		"egress_ips": []string{ip, "not-an-ip"},
+		"resume_at":  resumeAt,
+	}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("batch drain: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"success":true`) || !strings.Contains(rec.Body.String(), `"success":false`) {
+		t.Fatalf("batch drain should expose partial results: body=%s", rec.Body.String())
+	}
+}
+
 func TestAPIContract_PlatformEmptyAccountBehavior(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 

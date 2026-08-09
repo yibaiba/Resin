@@ -121,12 +121,15 @@ func (c *LeaseCleaner) sweepPlatformState(platID string, state *PlatformRoutingS
 				}
 				// Double-check expiry inside lock
 				if current.ExpiryNs < nowNs {
+					c.router.allocationMu.Lock()
 					selectedPlatformID := current.SelectedPlatformID
 					if selectedPlatformID == "" {
 						selectedPlatformID = platID
 					}
 					state.Leases.stats.Dec(current.EgressIP)
 					c.router.ensureSelectedStats(selectedPlatformID).Dec(current.EgressIP)
+					c.router.globalStats.Dec(current.EgressIP)
+					c.router.allocationMu.Unlock()
 
 					if c.router.onLeaseEvent != nil {
 						c.router.onLeaseEvent(LeaseEvent{

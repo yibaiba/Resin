@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Resinat/Resin/internal/model"
@@ -33,6 +34,9 @@ type Router struct {
 	pool            PoolAccessor
 	states          *xsync.Map[string, *PlatformRoutingState]
 	selectedStats   *xsync.Map[string, *IPLoadStats]
+	globalStats     *IPLoadStats
+	egressPolicies  *EgressPolicyStore
+	allocationMu    sync.Mutex
 	authorities     func() []string
 	p2cWindow       func() time.Duration
 	onLeaseEvent    LeaseEventFunc
@@ -48,13 +52,20 @@ type RouterConfig struct {
 	// NodeTagResolver resolves a node hash to its display tag ("<Sub>/<Tag>").
 	// If nil, NodeTag will be empty.
 	NodeTagResolver func(node.Hash) string
+	EgressPolicies  *EgressPolicyStore
 }
 
 func NewRouter(cfg RouterConfig) *Router {
+	policies := cfg.EgressPolicies
+	if policies == nil {
+		policies = NewEgressPolicyStore()
+	}
 	return &Router{
 		pool:            cfg.Pool,
 		states:          xsync.NewMap[string, *PlatformRoutingState](),
 		selectedStats:   xsync.NewMap[string, *IPLoadStats](),
+		globalStats:     NewIPLoadStats(),
+		egressPolicies:  policies,
 		authorities:     cfg.Authorities,
 		p2cWindow:       cfg.P2CWindow,
 		onLeaseEvent:    cfg.OnLeaseEvent,
@@ -92,6 +103,7 @@ type routeAttempt struct {
 	account         string
 	targetDomain    string
 	now             time.Time
+	capacityCredit  netip.Addr
 }
 
 const livePickAttempts = 2 // first pick + one retry
@@ -264,7 +276,7 @@ func (r *Router) routeRandomAcross(request routeRequest) (RouteResult, error) {
 }
 
 func (r *Router) routeRandom(attempt routeAttempt) (RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(attempt)
+	h, entry, err := r.selectLiveRandomRoute(attempt, false)
 	if err != nil {
 		return RouteResult{}, err
 	}
@@ -329,10 +341,16 @@ func (r *Router) createStickyLeaseAcross(
 	hadPrevious bool,
 	invalidation leaseInvalidationReason,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
+	r.allocationMu.Lock()
+	defer r.allocationMu.Unlock()
+
 	path := make([]string, 0, len(request.candidates))
 	for _, candidate := range request.candidates {
 		path = append(path, candidate.ID)
 		attempt := r.attemptFor(request, candidate)
+		if hadPrevious {
+			attempt.capacityCredit = previous.EgressIP
+		}
 		next, result, err := r.createLease(attempt)
 		if errors.Is(err, ErrNoAvailableNodes) {
 			continue
@@ -394,6 +412,9 @@ func (r *Router) tryLeaseHit(
 	if !ok || !attempt.view.Contains(current.NodeHash) || entry.GetEgressIP() != current.EgressIP {
 		return Lease{}, RouteResult{}, false
 	}
+	if !r.allowsExistingEgress(current.EgressIP, attempt.now) {
+		return Lease{}, RouteResult{}, false
+	}
 
 	newLease := current
 	newLease.LastAccessedNs = attempt.now.UnixNano()
@@ -416,6 +437,9 @@ func (r *Router) tryLeaseSameIPRotation(
 	attempt routeAttempt,
 	current Lease,
 ) (Lease, RouteResult, bool) {
+	if !r.allowsExistingEgress(current.EgressIP, attempt.now) {
+		return Lease{}, RouteResult{}, false
+	}
 	bestHash, ok := chooseSameIPRotationCandidate(sameIPRotationOptions{
 		view:         attempt.view,
 		pool:         r.pool,
@@ -447,7 +471,7 @@ func (r *Router) tryLeaseSameIPRotation(
 }
 
 func (r *Router) createLease(attempt routeAttempt) (Lease, RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(attempt)
+	h, entry, err := r.selectLiveRandomRoute(attempt, true)
 	if err != nil {
 		return Lease{}, RouteResult{}, err
 	}
@@ -473,6 +497,9 @@ func (r *Router) createLease(attempt routeAttempt) (Lease, RouteResult, error) {
 }
 
 func (r *Router) leaseInvalidation(attempt routeAttempt, current Lease) leaseInvalidationReason {
+	if !r.allowsExistingEgress(current.EgressIP, attempt.now) {
+		return leaseInvalidationRemove
+	}
 	entry, ok := r.pool.GetEntry(current.NodeHash)
 	if ok && attempt.platform.View().Contains(current.NodeHash) && entry.GetEgressIP() == current.EgressIP {
 		return leaseInvalidationNetwork
@@ -530,24 +557,6 @@ func (r *Router) removeLeaseAccounting(
 	})
 }
 
-func (r *Router) incrementLeaseLoads(state *PlatformRoutingState, lease Lease) {
-	state.IPLoadStats.Inc(lease.EgressIP)
-	r.ensureSelectedStats(lease.SelectedPlatformID).Inc(lease.EgressIP)
-}
-
-func (r *Router) decrementLeaseLoads(
-	ownerPlatformID string,
-	state *PlatformRoutingState,
-	lease Lease,
-) {
-	selectedPlatformID := lease.SelectedPlatformID
-	if selectedPlatformID == "" {
-		selectedPlatformID = ownerPlatformID
-	}
-	state.IPLoadStats.Dec(lease.EgressIP)
-	r.ensureSelectedStats(selectedPlatformID).Dec(lease.EgressIP)
-}
-
 func (r *Router) emitLeaseEvent(event LeaseEvent) {
 	if r.onLeaseEvent != nil {
 		r.onLeaseEvent(event)
@@ -556,12 +565,14 @@ func (r *Router) emitLeaseEvent(event LeaseEvent) {
 
 func (r *Router) selectLiveRandomRoute(
 	attempt routeAttempt,
+	enforceCapacity bool,
 ) (node.Hash, *node.NodeEntry, error) {
+	view := r.newAllocationView(attempt, enforceCapacity)
 	var lastMissing node.Hash
 	for i := 0; i < livePickAttempts; i++ {
 		h, err := randomRoute(randomRouteOptions{
 			platform:     attempt.platform,
-			view:         attempt.view,
+			view:         view,
 			stats:        attempt.allocationStats,
 			pool:         r.pool,
 			targetDomain: attempt.targetDomain,
@@ -702,7 +713,14 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 	}
 
 	eventType := LeaseCreate
+	var allocationErr error
 	_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+		r.allocationMu.Lock()
+		defer r.allocationMu.Unlock()
+		if !r.canUpsertLease(lease, current, loaded, time.Now()) {
+			allocationErr = ErrNoAvailableNodes
+			return current, xsync.CancelOp
+		}
 		if loaded {
 			r.decrementLeaseLoads(platformID, state, current)
 			eventType = LeaseReplace
@@ -710,6 +728,9 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 		r.incrementLeaseLoads(state, lease)
 		return lease, xsync.UpdateOp
 	})
+	if allocationErr != nil {
+		return allocationErr
+	}
 
 	r.emitLeaseEvent(LeaseEvent{
 		Type:               eventType,
@@ -759,9 +780,15 @@ func (r *Router) RestoreLeases(leases []model.Lease) {
 		if l.SelectedPlatformID == "" {
 			l.SelectedPlatformID = ml.PlatformID
 		}
-		// Directly insert into table and stats
-		state.Leases.CreateLease(ml.Account, l)
-		r.ensureSelectedStats(l.SelectedPlatformID).Inc(l.EgressIP)
+		_, _ = state.Leases.leases.Compute(ml.Account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+			r.allocationMu.Lock()
+			defer r.allocationMu.Unlock()
+			if loaded {
+				r.decrementLeaseLoads(ml.PlatformID, state, current)
+			}
+			r.incrementLeaseLoads(state, l)
+			return l, xsync.UpdateOp
+		})
 	}
 }
 
@@ -783,7 +810,19 @@ func (r *Router) DeleteLease(platformID, account string) bool {
 	if !ok {
 		return false
 	}
-	lease, deleted := state.Leases.DeleteLease(account)
+	var lease Lease
+	deleted := false
+	_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+		if !loaded {
+			return current, xsync.CancelOp
+		}
+		r.allocationMu.Lock()
+		defer r.allocationMu.Unlock()
+		lease = current
+		deleted = true
+		r.decrementLeaseLoads(platformID, state, current)
+		return current, xsync.DeleteOp
+	})
 	if !deleted {
 		return false
 	}
@@ -791,7 +830,6 @@ func (r *Router) DeleteLease(platformID, account string) bool {
 	if selectedPlatformID == "" {
 		selectedPlatformID = platformID
 	}
-	r.ensureSelectedStats(selectedPlatformID).Dec(lease.EgressIP)
 	r.emitLeaseEvent(LeaseEvent{
 		Type:               LeaseRemove,
 		PlatformID:         platformID,
@@ -813,13 +851,24 @@ func (r *Router) DeleteAllLeases(platformID string) int {
 	}
 	count := 0
 	state.Leases.Range(func(account string, _ Lease) bool {
-		removed, deleted := state.Leases.DeleteLease(account)
+		var removed Lease
+		deleted := false
+		_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+			if !loaded {
+				return current, xsync.CancelOp
+			}
+			r.allocationMu.Lock()
+			defer r.allocationMu.Unlock()
+			removed = current
+			deleted = true
+			r.decrementLeaseLoads(platformID, state, current)
+			return current, xsync.DeleteOp
+		})
 		if deleted {
 			selectedPlatformID := removed.SelectedPlatformID
 			if selectedPlatformID == "" {
 				selectedPlatformID = platformID
 			}
-			r.ensureSelectedStats(selectedPlatformID).Dec(removed.EgressIP)
 			r.emitLeaseEvent(LeaseEvent{
 				Type:               LeaseRemove,
 				PlatformID:         platformID,

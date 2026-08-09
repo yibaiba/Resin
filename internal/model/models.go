@@ -26,6 +26,15 @@ type RoutingRule struct {
 	UpdatedAtNs              int64              `json:"updated_at_ns"`
 }
 
+// EgressIPPolicy controls global allocation for one observed egress IP.
+type EgressIPPolicy struct {
+	EgressIP        string `json:"egress_ip"`
+	Status          string `json:"status"`
+	MaxActiveLeases int64  `json:"max_active_leases"`
+	ResumeAtNs      int64  `json:"resume_at_ns"`
+	UpdatedAtNs     int64  `json:"updated_at_ns"`
+}
+
 // Platform represents a routing platform.
 type Platform struct {
 	ID                               string `json:"id"`
