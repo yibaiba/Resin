@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,6 +35,30 @@ import (
 )
 
 const testAdminToken = "test-admin-token"
+
+type recordingDiagnosticTCPProber struct {
+	directCalls int
+	routedCalls int
+	lastHash    node.Hash
+	lastTarget  string
+}
+
+func (p *recordingDiagnosticTCPProber) ProbeDirect(_ context.Context, target string) error {
+	p.directCalls++
+	p.lastTarget = target
+	return nil
+}
+
+func (p *recordingDiagnosticTCPProber) ProbeRouted(
+	_ context.Context,
+	hash node.Hash,
+	target string,
+) error {
+	p.routedCalls++
+	p.lastHash = hash
+	p.lastTarget = target
+	return nil
+}
 
 func newControlPlaneTestServer(t *testing.T) (*Server, *service.ControlPlaneService, *atomic.Pointer[config.RuntimeConfig]) {
 	return newControlPlaneTestServerWithBodyLimit(t, 1<<20)
@@ -1064,6 +1090,139 @@ func TestAPIContract_PlatformRotationAndManualLeaseAction(t *testing.T) {
 	if lease["node_hash"] != hashes[1].Hex() || lease["rotation_deferred"] != false {
 		t.Fatalf("manual rotation lease = %v", lease)
 	}
+	if err := cp.Router.UpsertLease(model.Lease{
+		PlatformID: platformID, Account: "batch-me", NodeHash: hashes[0].Hex(),
+		EgressIP: "198.51.100.121", CreatedAtNs: now.Add(-time.Minute).UnixNano(),
+		ExpiryNs: now.Add(time.Hour).UnixNano(), LastAccessedNs: now.UnixNano(),
+	}); err != nil {
+		t.Fatalf("seed batch rotation lease: %v", err)
+	}
+	rec = doJSONRequest(t, srv, http.MethodPost,
+		"/api/v1/egress-ips/198.51.100.121/actions/rotate-leases",
+		map[string]any{"strategy": "REQUIRE_NEW_IP"}, true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"rotated"`) {
+		t.Fatalf("batch lease rotation: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	batchLease := cp.Router.ReadLease(model.LeaseKey{PlatformID: platformID, Account: "batch-me"})
+	if batchLease == nil || batchLease.EgressIP != "198.51.100.122" {
+		t.Fatalf("batch lease rotation result = %+v", batchLease)
+	}
+}
+
+func TestAPIContract_RouteDiagnosticIsReproducibleAndLiveTCPIsNeutral(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	platformID := mustCreatePlatform(t, srv, "diagnostic-api")
+	sub := subscription.NewSubscription("diagnostic-sub", "Diagnostic", "https://example.com", true, false)
+	cp.SubMgr.Register(sub)
+	entries := make([]*node.NodeEntry, 0, 2)
+	for index, ip := range []string{"198.51.100.141", "198.51.100.142"} {
+		raw := json.RawMessage(fmt.Sprintf(`{"diagnostic":%d}`, index))
+		hash := node.HashFromRawOptions(raw)
+		sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"node"}})
+		cp.Pool.AddNodeFromSub(hash, raw, sub.ID)
+		entry, ok := cp.Pool.GetEntry(hash)
+		if !ok {
+			t.Fatalf("diagnostic node %d missing", index)
+		}
+		entry.SetEgressIP(netip.MustParseAddr(ip))
+		entry.LatencyTable.LoadEntry("cloudflare.com", node.DomainLatencyStats{
+			Ewma: time.Duration(index+1) * time.Millisecond, LastUpdated: time.Now(),
+		})
+		outbound := testutil.NewNoopOutbound()
+		entry.Outbound.Store(&outbound)
+		cp.Pool.RecordResult(hash, true)
+		entries = append(entries, entry)
+	}
+	cp.Pool.RebuildAllPlatforms()
+	platformModel, err := cp.Engine.GetPlatform(platformID)
+	if err != nil {
+		t.Fatalf("get diagnostic platform: %v", err)
+	}
+	beforeHealth := []node.TCPHealthState{entries[0].TCPHealth(), entries[1].TCPHealth()}
+	beforeLoads := cp.Router.SnapshotGlobalIPLoad()
+	request := map[string]any{
+		"mode": "DRY_RUN", "platform_name": platformModel.Name,
+		"account": "diagnostic-account", "target": "example.com:443",
+		"required_network": "tcp", "seed": 12345,
+	}
+	first := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", request, true)
+	second := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", request, true)
+	if first.Code != http.StatusOK || second.Code != http.StatusOK {
+		t.Fatalf("dry-run status: first=%d second=%d bodies=%s / %s", first.Code, second.Code, first.Body.String(), second.Body.String())
+	}
+	firstBody := decodeJSONMap(t, first)
+	secondBody := decodeJSONMap(t, second)
+	if !reflect.DeepEqual(firstBody["route"], secondBody["route"]) {
+		t.Fatalf("same seed route differs: first=%v second=%v", firstBody["route"], secondBody["route"])
+	}
+	if lease := cp.Router.ReadLease(model.LeaseKey{PlatformID: platformID, Account: "diagnostic-account"}); lease != nil {
+		t.Fatalf("dry-run created lease: %+v", lease)
+	}
+
+	prober := &recordingDiagnosticTCPProber{}
+	cp.DiagnosticTCPProber = prober
+	request["mode"] = "LIVE_TCP"
+	live := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", request, true)
+	if live.Code != http.StatusOK {
+		t.Fatalf("LIVE_TCP status=%d body=%s", live.Code, live.Body.String())
+	}
+	liveBody := decodeJSONMap(t, live)
+	liveResult := liveBody["live_tcp"].(map[string]any)
+	if liveResult["attempted"] != true || liveResult["success"] != true || prober.routedCalls != 1 {
+		t.Fatalf("LIVE_TCP result=%v prober=%+v", liveResult, prober)
+	}
+	if prober.lastTarget != "example.com:443" || prober.lastHash == node.Zero {
+		t.Fatalf("LIVE_TCP target/hash = %q/%s", prober.lastTarget, prober.lastHash.Hex())
+	}
+	if !reflect.DeepEqual(beforeLoads, cp.Router.SnapshotGlobalIPLoad()) ||
+		!reflect.DeepEqual(beforeHealth, []node.TCPHealthState{entries[0].TCPHealth(), entries[1].TCPHealth()}) {
+		t.Fatal("diagnostics mutated lease or health state")
+	}
+}
+
+func TestAPIContract_RouteDiagnosticDirectAndRejectSemantics(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	prober := &recordingDiagnosticTCPProber{}
+	cp.DiagnosticTCPProber = prober
+	cp.RoutingDecisions = routing.NewDecisionEngine(nil, cp.Pool)
+	directRule := model.RoutingRule{
+		ID: "direct", Name: "Direct", Enabled: true, HostType: routing.RuleHostAny,
+		Network: routing.RuleNetworkAny, Action: string(routing.DecisionDirect),
+	}
+	if err := cp.RoutingDecisions.ReplaceRules([]model.RoutingRule{directRule}); err != nil {
+		t.Fatalf("set direct rule: %v", err)
+	}
+	rec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", map[string]any{
+		"mode": "LIVE_TCP", "target": "example.com:443", "required_network": "tcp",
+	}, true)
+	if rec.Code != http.StatusOK || prober.directCalls != 1 || prober.routedCalls != 0 {
+		t.Fatalf("direct diagnostic: status=%d body=%s prober=%+v", rec.Code, rec.Body.String(), prober)
+	}
+
+	rejectRule := directRule
+	rejectRule.ID = "reject"
+	rejectRule.Name = "Reject"
+	rejectRule.Action = string(routing.DecisionReject)
+	if err := cp.RoutingDecisions.ReplaceRules([]model.RoutingRule{rejectRule}); err != nil {
+		t.Fatalf("set reject rule: %v", err)
+	}
+	rec = doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", map[string]any{
+		"mode": "LIVE_TCP", "target": "example.com:443", "required_network": "tcp",
+	}, true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reason":"route_rejected"`) {
+		t.Fatalf("reject diagnostic: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if prober.directCalls != 1 || prober.routedCalls != 0 {
+		t.Fatalf("reject diagnostic attempted a connection: %+v", prober)
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", map[string]any{
+		"mode": "LIVE_TCP", "target": "example.com:53", "required_network": "udp",
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("UDP LIVE_TCP status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
 }
 
 func TestAPIContract_PlatformEmptyAccountBehavior(t *testing.T) {

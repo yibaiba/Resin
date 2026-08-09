@@ -43,6 +43,10 @@ type BatchEgressIPResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type RotateEgressIPLeasesRequest struct {
+	Strategy *string `json:"strategy"`
+}
+
 type egressInventoryItem struct {
 	nodeCount   int
 	platformIDs map[string]struct{}
@@ -270,4 +274,23 @@ func (s *ControlPlaneService) BatchDrainEgressIPs(
 		results = append(results, result)
 	}
 	return results
+}
+
+func (s *ControlPlaneService) RotateEgressIPLeases(
+	rawIP string,
+	req RotateEgressIPLeasesRequest,
+) ([]routing.EgressLeaseRotationResult, error) {
+	normalized, svcErr := normalizeEgressIP(rawIP)
+	if svcErr != nil {
+		return nil, svcErr
+	}
+	ip := netip.MustParseAddr(normalized)
+	strategy := platform.RotationStrategy("")
+	if req.Strategy != nil {
+		strategy = platform.ParseRotationStrategy(*req.Strategy)
+		if strategy == "" {
+			return nil, invalidArg("strategy: must be ANY, SAME_IP, PREFER_NEW_IP, or REQUIRE_NEW_IP")
+		}
+	}
+	return s.Router.RotateLeasesByEgressIP(ip, strategy), nil
 }

@@ -62,6 +62,7 @@ type ControlPlaneService struct {
 	RuntimeCfg              *atomic.Pointer[config.RuntimeConfig]
 	EnvCfg                  *config.EnvConfig
 	EndpointRuntime         EndpointRuntime
+	DiagnosticTCPProber     DiagnosticTCPProber
 	OnUDPProbeConfigChanged func()
 
 	configMu      sync.Mutex

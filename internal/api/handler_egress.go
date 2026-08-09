@@ -70,3 +70,24 @@ func HandleBatchDrainEgressIPs(cp *service.ControlPlaneService) http.HandlerFunc
 		})
 	}
 }
+
+func HandleRotateEgressIPLeases(cp *service.ControlPlaneService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		rawIP, err := url.PathUnescape(PathParam(r, "ip"))
+		if err != nil {
+			writeInvalidArgument(w, "egress_ip: invalid path encoding")
+			return
+		}
+		var req service.RotateEgressIPLeasesRequest
+		if err := DecodeBody(r, &req); err != nil {
+			writeDecodeBodyError(w, err)
+			return
+		}
+		results, err := cp.RotateEgressIPLeases(rawIP, req)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+		WriteJSON(w, http.StatusOK, map[string]any{"items": results})
+	}
+}

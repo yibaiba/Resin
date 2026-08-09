@@ -2,6 +2,7 @@ package routing
 
 import (
 	"errors"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -16,6 +17,13 @@ type rotationTrigger struct {
 	strategy platform.RotationStrategy
 	reason   string
 	manual   bool
+}
+
+type EgressLeaseRotationResult struct {
+	PlatformID string `json:"platform_id"`
+	Account    string `json:"account"`
+	Status     string `json:"status"`
+	Error      string `json:"error,omitempty"`
 }
 
 func (r *Router) rotationDue(root *platform.Platform, lease Lease, now time.Time) (rotationTrigger, bool) {
@@ -235,4 +243,37 @@ func (r *Router) rotateLeaseRequest(request routeRequest, trigger rotationTrigge
 		result.NodeTag = r.nodeTagResolver(result.NodeHash)
 	}
 	return result, rotationErr
+}
+
+func (r *Router) RotateLeasesByEgressIP(
+	ip netip.Addr,
+	strategy platform.RotationStrategy,
+) []EgressLeaseRotationResult {
+	type leaseKey struct {
+		platformID string
+		account    string
+	}
+	keys := make([]leaseKey, 0)
+	r.states.Range(func(platformID string, state *PlatformRoutingState) bool {
+		state.Leases.Range(func(account string, lease Lease) bool {
+			if lease.EgressIP.Unmap() == ip.Unmap() {
+				keys = append(keys, leaseKey{platformID: platformID, account: account})
+			}
+			return true
+		})
+		return true
+	})
+	results := make([]EgressLeaseRotationResult, 0, len(keys))
+	for _, key := range keys {
+		result, err := r.RotateLease(key.platformID, key.account, strategy)
+		item := EgressLeaseRotationResult{
+			PlatformID: key.platformID, Account: key.account, Status: result.RotationStatus,
+		}
+		if err != nil {
+			item.Status = "failed"
+			item.Error = err.Error()
+		}
+		results = append(results, item)
+	}
+	return results
 }

@@ -48,6 +48,19 @@ type Decision struct {
 	Target               Target         `json:"target"`
 }
 
+type DecisionTrace struct {
+	EnvironmentBypassMatched bool                `json:"environment_bypass_matched"`
+	ExplicitPlatform         bool                `json:"explicit_platform"`
+	Rules                    []DecisionRuleTrace `json:"rules"`
+}
+
+type DecisionRuleTrace struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Matched bool   `json:"matched"`
+	Reason  string `json:"reason"`
+}
+
 type DecisionPlatformResolver interface {
 	GetPlatform(id string) (*platform.Platform, bool)
 }
@@ -85,27 +98,48 @@ func (e *DecisionEngine) ReplaceRules(rules []model.RoutingRule) error {
 }
 
 func (e *DecisionEngine) Decide(input DecisionInput) (Decision, error) {
+	decision, _, err := e.decide(input, false)
+	return decision, err
+}
+
+func (e *DecisionEngine) Diagnose(input DecisionInput) (Decision, DecisionTrace, error) {
+	return e.decide(input, true)
+}
+
+func (e *DecisionEngine) decide(input DecisionInput, includeTrace bool) (Decision, DecisionTrace, error) {
 	target, err := ParseTarget(input.Target)
 	if err != nil {
-		return Decision{}, err
+		return Decision{}, DecisionTrace{}, err
 	}
 	network, err := normalizeDecisionNetwork(input.RequiredNetwork)
 	if err != nil {
-		return Decision{}, err
+		return Decision{}, DecisionTrace{}, err
+	}
+	trace := DecisionTrace{
+		ExplicitPlatform: strings.TrimSpace(input.PlatformName) != "",
+		Rules:            []DecisionRuleTrace{},
 	}
 	if e.bypass != nil && e.bypass.ShouldBypass(input.Target) {
-		return Decision{Action: DecisionDirect, Reason: "environment_bypass", Target: target}, nil
+		trace.EnvironmentBypassMatched = true
+		return Decision{Action: DecisionDirect, Reason: "environment_bypass", Target: target}, trace, nil
 	}
 
-	explicit := strings.TrimSpace(input.PlatformName) != ""
+	explicit := trace.ExplicitPlatform
 	for _, rule := range e.snapshot.Load().rules {
-		if !rule.Enabled || (explicit && !rule.OverrideExplicitPlatform) {
+		reason := rule.mismatchReason(target, network, explicit)
+		if includeTrace {
+			trace.Rules = append(trace.Rules, DecisionRuleTrace{
+				ID: rule.ID, Name: rule.Name, Matched: reason == "matched", Reason: reason,
+			})
+		}
+		if reason != "matched" {
 			continue
 		}
-		if !rule.matches(target, network) {
-			continue
+		decision, decisionErr := e.ruleDecision(rule, target)
+		if decisionErr != nil {
+			return Decision{}, trace, decisionErr
 		}
-		return e.ruleDecision(rule, target)
+		return decision, trace, nil
 	}
 	return Decision{
 		Action:               DecisionRouted,
@@ -113,7 +147,26 @@ func (e *DecisionEngine) Decide(input DecisionInput) (Decision, error) {
 		Reason:               "requested_or_default_platform",
 		ExplicitPlatformKept: explicit,
 		Target:               target,
-	}, nil
+	}, trace, nil
+}
+
+func (r compiledDecisionRule) mismatchReason(target Target, network string, explicit bool) string {
+	if !r.Enabled {
+		return "disabled"
+	}
+	if explicit && !r.OverrideExplicitPlatform {
+		return "explicit_platform_kept"
+	}
+	if r.Network != RuleNetworkAny && r.Network != network {
+		return "network_mismatch"
+	}
+	if len(r.Ports) > 0 && !matchesRulePort(r.Ports, target.Port) {
+		return "port_mismatch"
+	}
+	if !r.matchesHost(target) {
+		return "host_mismatch"
+	}
+	return "matched"
 }
 
 func (e *DecisionEngine) ruleDecision(rule compiledDecisionRule, target Target) (Decision, error) {
@@ -265,6 +318,10 @@ func (r compiledDecisionRule) matches(target Target, network string) bool {
 	if len(r.Ports) > 0 && !matchesRulePort(r.Ports, target.Port) {
 		return false
 	}
+	return r.matchesHost(target)
+}
+
+func (r compiledDecisionRule) matchesHost(target Target) bool {
 	switch r.HostType {
 	case RuleHostAny:
 		return true

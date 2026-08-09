@@ -196,3 +196,26 @@ func TestBlockedLeaseCannotBeDeferred(t *testing.T) {
 		t.Fatalf("blocked lease was deferred: %+v", lease)
 	}
 }
+
+func TestRotateLeasesByEgressIPReturnsPerLeaseResults(t *testing.T) {
+	fixture := newRotationFixture(t, false, true)
+	fixture.seedLease(t, "second-account", time.Now())
+	results := fixture.router.RotateLeasesByEgressIP(
+		fixture.ipOne,
+		platform.RotationStrategyRequireNewIP,
+	)
+	if len(results) != 2 {
+		t.Fatalf("batch rotation results = %+v, want 2", results)
+	}
+	for _, result := range results {
+		if result.Status != "rotated" || result.Error != "" {
+			t.Fatalf("batch rotation result = %+v", result)
+		}
+		lease := fixture.router.ReadLease(model.LeaseKey{
+			PlatformID: fixture.platform.ID, Account: result.Account,
+		})
+		if lease == nil || lease.EgressIP != fixture.ipTwo.String() {
+			t.Fatalf("batch-rotated lease = %+v", lease)
+		}
+	}
+}

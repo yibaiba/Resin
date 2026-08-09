@@ -28,57 +28,36 @@ type randomRouteOptions struct {
 	p2cWindow    time.Duration
 }
 
+type P2CTrace struct {
+	FirstNodeHash  string  `json:"first_node_hash,omitempty"`
+	SecondNodeHash string  `json:"second_node_hash,omitempty"`
+	FirstScore     float64 `json:"first_score"`
+	SecondScore    float64 `json:"second_score"`
+	SelectedHash   string  `json:"selected_hash,omitempty"`
+}
+
 // randomRoute selects a routable node using P2C with latency/load scoring.
 // It intentionally trusts Platform.View as the routable source of truth and
 // does not do extra pool scans/availability validation on the hot path.
 // Post-pick race handling (node removed right after selection) is handled by
 // the caller in RouteWithOptions.
 func randomRoute(options randomRouteOptions) (node.Hash, error) {
-	size := options.view.Size()
-	if size == 0 {
-		return node.Zero, ErrNoAvailableNodes
-	}
-
 	rng := randomRouteRNGPool.Get().(*rand.Rand)
 	defer randomRouteRNGPool.Put(rng)
+	hash, _, err := randomRouteWithRNG(options, rng)
+	return hash, err
+}
 
-	pick := func() (node.Hash, bool) {
-		return options.view.RandomPick(rng)
+func randomRouteWithRNG(options randomRouteOptions, rng *rand.Rand) (node.Hash, P2CTrace, error) {
+	h1, h2, pairSize, err := pickP2CCandidates(options.view, rng)
+	if err != nil {
+		return node.Zero, P2CTrace{}, err
+	}
+	trace := P2CTrace{FirstNodeHash: h1.Hex(), SelectedHash: h1.Hex()}
+	if pairSize == 1 {
+		return h1, trace, nil
 	}
 
-	// Pick 1st candidate.
-	h1, ok1 := pick()
-	if !ok1 {
-		return node.Zero, ErrNoAvailableNodes
-	}
-
-	// If view has one node, use it directly.
-	if size == 1 {
-		return h1, nil
-	}
-
-	// Pick 2nd candidate; best-effort to make it distinct.
-	h2, ok2 := pick()
-	if !ok2 {
-		return h1, nil
-	}
-	if h2 == h1 {
-		for i := 0; i < 3; i++ {
-			candidate, ok := pick()
-			if !ok {
-				break
-			}
-			if candidate != h1 {
-				h2 = candidate
-				break
-			}
-		}
-		if h2 == h1 {
-			return h1, nil
-		}
-	}
-
-	// Determine effective latency for comparison.
 	lat1, lat2 := compareLatencies(
 		h1,
 		h2,
@@ -88,16 +67,46 @@ func randomRoute(options randomRouteOptions) (node.Hash, error) {
 		options.p2cWindow,
 	)
 
-	// Calculate scores.
 	s1 := calculateScore(h1, lat1, options.platform, options.stats, options.pool)
 	s2 := calculateScore(h2, lat2, options.platform, options.stats, options.pool)
-
-	// Lower score is better.
+	trace.SecondNodeHash = h2.Hex()
+	trace.FirstScore = s1
+	trace.SecondScore = s2
 	selected := h2 // favor h2 on tie
 	if s1 < s2 {
 		selected = h1
 	}
-	return selected, nil
+	trace.SelectedHash = selected.Hex()
+	return selected, trace, nil
+}
+
+func pickP2CCandidates(view platform.ReadOnlyView, rng *rand.Rand) (node.Hash, node.Hash, int, error) {
+	size := view.Size()
+	if size == 0 {
+		return node.Zero, node.Zero, 0, ErrNoAvailableNodes
+	}
+	h1, ok := view.RandomPick(rng)
+	if !ok {
+		return node.Zero, node.Zero, 0, ErrNoAvailableNodes
+	}
+	if size == 1 {
+		return h1, node.Zero, 1, nil
+	}
+	h2, ok := view.RandomPick(rng)
+	if !ok {
+		return h1, node.Zero, 1, nil
+	}
+	for i := 0; h2 == h1 && i < 3; i++ {
+		candidate, candidateOK := view.RandomPick(rng)
+		if !candidateOK {
+			break
+		}
+		h2 = candidate
+	}
+	if h2 == h1 {
+		return h1, node.Zero, 1, nil
+	}
+	return h1, h2, 2, nil
 }
 
 // compareLatencies determines the latency values for h1 and h2.

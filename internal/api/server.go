@@ -98,6 +98,10 @@ func NewServerWithAddress(
 		authed.Handle("GET /api/v1/egress-ips", HandleListEgressIPs(cp))
 		authed.Handle("PATCH /api/v1/egress-ips/{ip}", HandleUpdateEgressIPPolicy(cp))
 		authed.Handle("POST /api/v1/egress-ips/actions/batch-drain", HandleBatchDrainEgressIPs(cp))
+		authed.Handle("POST /api/v1/egress-ips/{ip}/actions/rotate-leases", HandleRotateEgressIPLeases(cp))
+
+		// Read-only route diagnostics and optional TCP connectivity checks.
+		authed.Handle("POST /api/v1/routing-diagnostics", HandleRouteDiagnostic(cp))
 
 		// Endpoints.
 		authed.Handle("GET /api/v1/endpoints", HandleListEndpoints(cp))
