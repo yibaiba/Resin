@@ -48,10 +48,10 @@ func TestProbeEgress_Success(t *testing.T) {
 	mgr.probeEgress(hash, entry)
 
 	// Verify RecordResult(true) was applied.
-	if entry.FailureCount.Load() != 0 {
-		t.Fatalf("expected 0 failures, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures, got %d", entry.TCPHealth().FailureCount)
 	}
-	if entry.CircuitOpenSince.Load() != 0 {
+	if entry.TCPHealth().CircuitOpenSince != 0 {
 		t.Fatal("circuit should not be open")
 	}
 
@@ -94,6 +94,7 @@ func TestProbeEgress_Failure(t *testing.T) {
 		t.Fatal("entry not found")
 	}
 	storeOutbound(entry)
+	pool.RecordResult(hash, true)
 
 	mgr := NewProbeManager(ProbeConfig{
 		Pool: pool,
@@ -104,8 +105,8 @@ func TestProbeEgress_Failure(t *testing.T) {
 
 	mgr.probeEgress(hash, entry)
 
-	if entry.FailureCount.Load() != 1 {
-		t.Fatalf("expected 1 failure, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 1 {
+		t.Fatalf("expected 1 failure, got %d", entry.TCPHealth().FailureCount)
 	}
 
 	// No latency or egress IP should be recorded.
@@ -129,6 +130,11 @@ func TestProbeEgress_CircuitBreak(t *testing.T) {
 		t.Fatal("entry not found")
 	}
 	storeOutbound(entry)
+	pool.RecordResult(hash, true)
+	pool.SetTCPValidationRequester(func(request topology.TCPValidationRequest) error {
+		pool.CompleteTCPValidation(request.Hash, request.Validation, false)
+		return nil
+	})
 
 	mgr := NewProbeManager(ProbeConfig{
 		Pool: pool,
@@ -140,7 +146,7 @@ func TestProbeEgress_CircuitBreak(t *testing.T) {
 	mgr.probeEgress(hash, entry)
 	mgr.probeEgress(hash, entry)
 
-	if entry.CircuitOpenSince.Load() == 0 {
+	if entry.TCPHealth().CircuitOpenSince == 0 {
 		t.Fatal("circuit should be open after 2 consecutive failures")
 	}
 }
@@ -170,8 +176,8 @@ func TestProbeLatency_Success(t *testing.T) {
 
 	mgr.probeLatency(hash, entry, "https://www.gstatic.com/generate_204")
 
-	if entry.FailureCount.Load() != 0 {
-		t.Fatalf("expected 0 failures, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures, got %d", entry.TCPHealth().FailureCount)
 	}
 
 	// Should have latency recorded.
@@ -195,6 +201,7 @@ func TestProbeLatency_Failure(t *testing.T) {
 		t.Fatal("entry not found")
 	}
 	storeOutbound(entry)
+	pool.RecordResult(hash, true)
 
 	mgr := NewProbeManager(ProbeConfig{
 		Pool: pool,
@@ -205,8 +212,8 @@ func TestProbeLatency_Failure(t *testing.T) {
 
 	mgr.probeLatency(hash, entry, "https://www.gstatic.com/generate_204")
 
-	if entry.FailureCount.Load() != 1 {
-		t.Fatalf("expected 1 failure, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 1 {
+		t.Fatalf("expected 1 failure, got %d", entry.TCPHealth().FailureCount)
 	}
 }
 
@@ -237,8 +244,8 @@ func TestProbeEgress_ZeroLatencyIgnored(t *testing.T) {
 
 	mgr.probeEgress(hash, entry)
 
-	if entry.FailureCount.Load() != 0 {
-		t.Fatalf("expected 0 failures, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures, got %d", entry.TCPHealth().FailureCount)
 	}
 	if entry.HasLatency() {
 		t.Fatal("zero latency sample should be ignored")
@@ -304,8 +311,8 @@ func TestProbeLatency_ZeroLatencyIgnored(t *testing.T) {
 
 	mgr.probeLatency(hash, entry, "https://www.gstatic.com/generate_204")
 
-	if entry.FailureCount.Load() != 0 {
-		t.Fatalf("expected 0 failures, got %d", entry.FailureCount.Load())
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures, got %d", entry.TCPHealth().FailureCount)
 	}
 	if entry.HasLatency() {
 		t.Fatal("zero latency sample should be ignored")

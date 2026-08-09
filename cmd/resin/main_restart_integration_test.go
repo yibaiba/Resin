@@ -112,9 +112,8 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	entry1.LastEgressUpdateAttempt.Store(egressAttemptAt)
 	entry1.LastLatencyProbeAttempt.Store(latencyAttemptAt)
 	entry1.LastAuthorityLatencyProbeAttempt.Store(authorityAttemptAt)
-	entry1.FailureCount.Store(2)
-	entry1.UDPFailureCount.Store(3)
-	entry1.UDPCircuitOpenSince.Store(egressUpdatedAt - int64(time.Minute))
+	entry1.RestoreTCPHealth(2, 0)
+	entry1.RestoreUDPHealth(3, egressUpdatedAt-int64(time.Minute))
 	entry1.LastUDPProbeAttempt.Store(udpAttemptAt)
 	entry1.LastUDPProbeSuccess.Store(udpSuccessAt)
 	if entry1.LatencyTable == nil {
@@ -232,13 +231,13 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	if !ok {
 		t.Fatalf("node %s missing after restart", hash.Hex())
 	}
-	if got := entry2.FailureCount.Load(); got != 2 {
+	if got := entry2.TCPHealth().FailureCount; got != 2 {
 		t.Fatalf("failure_count: got %d, want %d", got, 2)
 	}
-	if got := entry2.UDPFailureCount.Load(); got != 3 {
+	if got := entry2.UDPHealthState().FailureCount; got != 3 {
 		t.Fatalf("udp_failure_count: got %d, want %d", got, 3)
 	}
-	if got := entry2.UDPCircuitOpenSince.Load(); got == 0 {
+	if got := entry2.UDPHealthState().CircuitOpenSince; got == 0 {
 		t.Fatal("udp_circuit_open_since should be restored")
 	}
 	if got := entry2.GetEgressIP(); got != egressIP {

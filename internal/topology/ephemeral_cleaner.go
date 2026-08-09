@@ -148,6 +148,6 @@ func (c *EphemeralCleaner) shouldEvictEntry(entry *node.NodeEntry, now int64, ev
 	}
 
 	// Circuit remains open beyond configured eviction delay.
-	circuitSince := entry.CircuitOpenSince.Load()
+	circuitSince := entry.TCPHealth().CircuitOpenSince
 	return circuitSince > 0 && (now-circuitSince) > evictDelayNs
 }

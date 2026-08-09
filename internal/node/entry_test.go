@@ -286,12 +286,12 @@ func TestNodeEntry_CircuitBreaker(t *testing.T) {
 		t.Fatal("should not be circuit-open by default")
 	}
 
-	e.CircuitOpenSince.Store(time.Now().UnixNano())
+	e.RestoreTCPHealth(0, time.Now().UnixNano())
 	if !e.IsCircuitOpen() {
 		t.Fatal("should be circuit-open after store")
 	}
 
-	e.CircuitOpenSince.Store(0)
+	e.RestoreTCPHealth(0, 0)
 	if e.IsCircuitOpen() {
 		t.Fatal("should not be circuit-open after reset")
 	}
@@ -343,7 +343,7 @@ func TestNodeEntry_IsHealthy(t *testing.T) {
 		t.Fatal("node with outbound and no circuit should be healthy")
 	}
 
-	e.CircuitOpenSince.Store(time.Now().UnixNano())
+	e.RestoreTCPHealth(0, time.Now().UnixNano())
 	if e.IsHealthy() {
 		t.Fatal("circuit-open node should not be healthy")
 	}

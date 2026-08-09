@@ -33,8 +33,7 @@ func TestNodeEntryToSummary_UDPDiagnostics(t *testing.T) {
 		t.Fatalf("healthy summary: %+v", healthy)
 	}
 
-	entry.UDPFailureCount.Store(3)
-	entry.UDPCircuitOpenSince.Store(time.Now().UnixNano())
+	entry.RestoreUDPHealth(3, time.Now().UnixNano())
 	open := service.nodeEntryToSummary(hash, entry)
 	if open.UDPHealth != node.UDPHealthCircuitOpen || open.UDPFailureCount != 3 ||
 		open.UDPCircuitOpenSince == nil {

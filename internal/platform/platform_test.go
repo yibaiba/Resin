@@ -122,7 +122,7 @@ func TestPlatform_UDPViewRequiresVerifiedHealthyUDP(t *testing.T) {
 		t.Fatal("first successful UDP probe should add the node to the UDP view")
 	}
 
-	entry.UDPCircuitOpenSince.Store(time.Now().UnixNano())
+	entry.RestoreUDPHealth(0, time.Now().UnixNano())
 	rebuild()
 	if !p.View().Contains(h) || p.NetworkView("udp").Contains(h) {
 		t.Fatal("UDP circuit should remove only the UDP view membership")
@@ -133,7 +133,7 @@ func TestPlatform_EvaluateNode_CircuitOpen(t *testing.T) {
 	p := NewPlatform("p1", "Test", nil, nil)
 	h := makeHash(`{"type":"ss"}`)
 	entry := makeFullyRoutableEntry(h, "sub1")
-	entry.CircuitOpenSince.Store(time.Now().UnixNano()) // circuit open
+	entry.RestoreTCPHealth(0, time.Now().UnixNano()) // circuit open
 
 	p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
 		fn(h, entry)
@@ -382,14 +382,14 @@ func TestPlatform_NotifyDirty_AddRemove(t *testing.T) {
 	}
 
 	// Circuit-break → NotifyDirty removes.
-	entry.CircuitOpenSince.Store(time.Now().UnixNano())
+	entry.RestoreTCPHealth(0, time.Now().UnixNano())
 	p.NotifyDirty(h, getEntry, alwaysLookup, usGeoLookup)
 	if p.View().Size() != 0 {
 		t.Fatal("NotifyDirty should remove circuit-broken node")
 	}
 
 	// Recover → NotifyDirty re-adds.
-	entry.CircuitOpenSince.Store(0)
+	entry.RestoreTCPHealth(0, 0)
 	p.NotifyDirty(h, getEntry, alwaysLookup, usGeoLookup)
 	if p.View().Size() != 1 {
 		t.Fatal("NotifyDirty should re-add recovered node")

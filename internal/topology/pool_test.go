@@ -75,8 +75,8 @@ func TestPool_AddNodeFromSub_NewNodeStartsCircuitOpen(t *testing.T) {
 	if !entry.IsCircuitOpen() {
 		t.Fatal("newly added node should start circuit-open")
 	}
-	if entry.CircuitOpenSince.Load() <= 0 {
-		t.Fatalf("CircuitOpenSince should be set, got %d", entry.CircuitOpenSince.Load())
+	if entry.TCPHealth().CircuitOpenSince <= 0 {
+		t.Fatalf("CircuitOpenSince should be set, got %d", entry.TCPHealth().CircuitOpenSince)
 	}
 }
 
@@ -96,14 +96,14 @@ func TestPool_AddNodeFromSub_ReAddDoesNotResetCircuitOpenSince(t *testing.T) {
 	if !ok {
 		t.Fatal("entry not found")
 	}
-	originalCircuitSince := entry.CircuitOpenSince.Load()
+	originalCircuitSince := entry.TCPHealth().CircuitOpenSince
 	if originalCircuitSince <= 0 {
 		t.Fatalf("CircuitOpenSince should be set on first add, got %d", originalCircuitSince)
 	}
 
 	// Re-add from another subscription should only add reference, not reinitialize state.
 	pool.AddNodeFromSub(h, raw, "s2")
-	if got := entry.CircuitOpenSince.Load(); got != originalCircuitSince {
+	if got := entry.TCPHealth().CircuitOpenSince; got != originalCircuitSince {
 		t.Fatalf("CircuitOpenSince should not reset on re-add: got %d, want %d", got, originalCircuitSince)
 	}
 }
@@ -875,7 +875,7 @@ func TestEphemeralCleaner_EvictsCircuitBroken(t *testing.T) {
 
 	// Circuit-break the node for longer than evict delay.
 	entry, _ := pool.GetEntry(h)
-	entry.CircuitOpenSince.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	entry.RestoreTCPHealth(0, time.Now().Add(-2*time.Minute).UnixNano())
 
 	cleaner := NewEphemeralCleaner(subMgr, pool)
 	cleaner.sweep()
@@ -911,7 +911,7 @@ func TestEphemeralCleaner_SkipsNonEphemeral(t *testing.T) {
 	pool.AddNodeFromSub(h, raw, "s1")
 
 	entry, _ := pool.GetEntry(h)
-	entry.CircuitOpenSince.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	entry.RestoreTCPHealth(0, time.Now().Add(-2*time.Minute).UnixNano())
 
 	cleaner := NewEphemeralCleaner(subMgr, pool)
 	cleaner.sweep()
@@ -940,7 +940,7 @@ func TestEphemeralCleaner_SkipsRecentCircuitBreak(t *testing.T) {
 
 	// Circuit-break recently (less than evict delay).
 	entry, _ := pool.GetEntry(h)
-	entry.CircuitOpenSince.Store(time.Now().Add(-10 * time.Second).UnixNano())
+	entry.RestoreTCPHealth(0, time.Now().Add(-10*time.Second).UnixNano())
 
 	cleaner := NewEphemeralCleaner(subMgr, pool)
 	cleaner.sweep()

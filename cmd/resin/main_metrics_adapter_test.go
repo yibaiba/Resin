@@ -43,7 +43,7 @@ func TestNodePoolStatsAdapter_HealthyNodesRequiresOutbound(t *testing.T) {
 	circuitOpenOb := testutil.NewNoopOutbound()
 	circuitOpen.Outbound.Store(&circuitOpenOb)
 	circuitOpen.SetEgressIP(netip.MustParseAddr("203.0.113.11"))
-	circuitOpen.CircuitOpenSince.Store(time.Now().UnixNano())
+	circuitOpen.RestoreTCPHealth(0, time.Now().UnixNano())
 	pool.LoadNodeFromBootstrap(circuitOpen)
 
 	disabledHash := node.HashFromRawOptions([]byte(`{"type":"direct","server":"4.4.4.4","port":443}`))

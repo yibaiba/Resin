@@ -44,7 +44,7 @@ func TestCleanupSubscriptionCircuitOpenNodes_RemovesCircuitAndOutboundFailureNod
 	if !ok {
 		t.Fatalf("missing circuit node %s in pool", circuitHash.Hex())
 	}
-	circuitEntry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	circuitEntry.RestoreTCPHealth(0, time.Now().Add(-time.Minute).UnixNano())
 
 	noOutboundErrorRaw := []byte(`{"type":"ss","server":"2.2.2.2","port":443}`)
 	noOutboundErrorHash := node.HashFromRawOptions(noOutboundErrorRaw)
@@ -66,7 +66,7 @@ func TestCleanupSubscriptionCircuitOpenNodes_RemovesCircuitAndOutboundFailureNod
 	}
 	outbound := testutil.NewNoopOutbound()
 	healthyEntry.Outbound.Store(&outbound)
-	healthyEntry.CircuitOpenSince.Store(0)
+	healthyEntry.RestoreTCPHealth(0, 0)
 
 	sharedRaw := []byte(`{"type":"ss","server":"4.4.4.4","port":443}`)
 	sharedHash := node.HashFromRawOptions(sharedRaw)
@@ -78,7 +78,7 @@ func TestCleanupSubscriptionCircuitOpenNodes_RemovesCircuitAndOutboundFailureNod
 	if !ok {
 		t.Fatalf("missing shared node %s in pool", sharedHash.Hex())
 	}
-	sharedEntry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	sharedEntry.RestoreTCPHealth(0, time.Now().Add(-time.Minute).UnixNano())
 
 	cleanedCount, err := cp.CleanupSubscriptionCircuitOpenNodes(subA.ID)
 	if err != nil {
@@ -150,7 +150,7 @@ func TestCleanupSubscriptionCircuitOpenNodes_SecondConfirmSkipsRecoveredNodes(t 
 	if !ok {
 		t.Fatalf("missing recovering node %s in pool", recoveredHash.Hex())
 	}
-	recoveredEntry.CircuitOpenSince.Store(time.Now().Add(-time.Minute).UnixNano())
+	recoveredEntry.RestoreTCPHealth(0, time.Now().Add(-time.Minute).UnixNano())
 
 	failedRaw := []byte(`{"type":"ss","server":"6.6.6.6","port":443}`)
 	failedHash := node.HashFromRawOptions(failedRaw)
@@ -166,7 +166,7 @@ func TestCleanupSubscriptionCircuitOpenNodes_SecondConfirmSkipsRecoveredNodes(t 
 	cleanedCount, err := cp.cleanupSubscriptionCircuitOpenNodesWithHook(sub.ID, func() {
 		hookCalled = true
 		// Simulate node recovery in TOCTOU window.
-		recoveredEntry.CircuitOpenSince.Store(0)
+		recoveredEntry.RestoreTCPHealth(0, 0)
 	})
 	if err != nil {
 		t.Fatalf("cleanupSubscriptionCircuitOpenNodesWithHook: %v", err)

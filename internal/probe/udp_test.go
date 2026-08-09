@@ -74,15 +74,15 @@ func TestProbeManager_UDPResponseValidationAndHealth(t *testing.T) {
 				t.Fatalf("probe attempt not recorded: events=%d entry=%+v", probeEvents.Load(), entry)
 			}
 			if testCase.wantSuccess {
-				if entry.LastUDPProbeSuccess.Load() == 0 || entry.UDPFailureCount.Load() != 0 {
+				if entry.LastUDPProbeSuccess.Load() == 0 || entry.UDPHealthState().FailureCount != 0 {
 					t.Fatalf("successful health result: success=%d failures=%d",
-						entry.LastUDPProbeSuccess.Load(), entry.UDPFailureCount.Load())
+						entry.LastUDPProbeSuccess.Load(), entry.UDPHealthState().FailureCount)
 				}
 				return
 			}
-			if entry.LastUDPProbeSuccess.Load() != 0 || entry.UDPFailureCount.Load() != 1 {
+			if entry.LastUDPProbeSuccess.Load() != 0 || entry.UDPHealthState().FailureCount != 1 {
 				t.Fatalf("failed health result: success=%d failures=%d",
-					entry.LastUDPProbeSuccess.Load(), entry.UDPFailureCount.Load())
+					entry.LastUDPProbeSuccess.Load(), entry.UDPHealthState().FailureCount)
 			}
 		})
 	}
@@ -100,9 +100,10 @@ func TestProbeManager_StopDoesNotPenalizeBlockedUDPTask(t *testing.T) {
 	}
 
 	manager.Stop()
-	if entry.UDPFailureCount.Load() != 0 || entry.UDPCircuitOpenSince.Load() != 0 {
+	udpHealth := entry.UDPHealthState()
+	if udpHealth.FailureCount != 0 || udpHealth.CircuitOpenSince != 0 {
 		t.Fatalf("shutdown cancellation changed UDP health: failures=%d circuit=%d",
-			entry.UDPFailureCount.Load(), entry.UDPCircuitOpenSince.Load())
+			udpHealth.FailureCount, udpHealth.CircuitOpenSince)
 	}
 }
 
@@ -130,9 +131,9 @@ func TestProbeManager_UDPProbeUsesRealSingBoxDirectOutbound(t *testing.T) {
 	entry.Outbound.Store(&realOutbound)
 
 	manager.probeUDP(hash, entry)
-	if entry.LastUDPProbeSuccess.Load() == 0 || entry.UDPFailureCount.Load() != 0 {
+	if entry.LastUDPProbeSuccess.Load() == 0 || entry.UDPHealthState().FailureCount != 0 {
 		t.Fatalf("real sing-box UDP probe failed: success=%d failures=%d",
-			entry.LastUDPProbeSuccess.Load(), entry.UDPFailureCount.Load())
+			entry.LastUDPProbeSuccess.Load(), entry.UDPHealthState().FailureCount)
 	}
 }
 

@@ -52,7 +52,7 @@ func markNodeHealthyForNodeListTest(t *testing.T, cp *service.ControlPlaneServic
 	}
 	ob := testutil.NewNoopOutbound()
 	entry.Outbound.Store(&ob)
-	entry.CircuitOpenSince.Store(0)
+	entry.RestoreTCPHealth(0, 0)
 }
 
 func TestHandleListNodes_ExposesUDPDiagnostics(t *testing.T) {
@@ -70,7 +70,7 @@ func TestHandleListNodes_ExposesUDPDiagnostics(t *testing.T) {
 	markNodeHealthyForNodeListTest(t, cp, raw)
 	hash := node.HashFromRawOptions([]byte(raw))
 	entry, _ := cp.Pool.GetEntry(hash)
-	entry.UDPFailureCount.Store(2)
+	entry.RestoreUDPHealth(2, 0)
 	entry.LastUDPProbeAttempt.Store(time.Now().Add(-time.Second).UnixNano())
 	entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
 

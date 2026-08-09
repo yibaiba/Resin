@@ -223,7 +223,7 @@ func TestChooseSameIPRotationCandidate_PicksLowestLatency(t *testing.T) {
 	pool.rebuildPlatformView(plat)
 
 	// Invalidate current lease node and keep same-IP candidates routable.
-	currentEntry.CircuitOpenSince.Store(time.Now().UnixNano())
+	currentEntry.RestoreTCPHealth(0, time.Now().UnixNano())
 	plat.NotifyDirty(
 		currentHash,
 		pool.GetEntry,
@@ -260,7 +260,7 @@ func TestRouteRequest_SameIPRotationMissRecreatesLease(t *testing.T) {
 	pool.rebuildPlatformView(plat)
 
 	// Invalidate current lease node so route must rotate.
-	currentEntry.CircuitOpenSince.Store(time.Now().UnixNano())
+	currentEntry.RestoreTCPHealth(0, time.Now().UnixNano())
 	plat.NotifyDirty(
 		currentHash,
 		pool.GetEntry,
