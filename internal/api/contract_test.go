@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -992,6 +993,76 @@ func TestAPIContract_EgressIPPoliciesAndPartialBatchDrain(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"success":true`) || !strings.Contains(rec.Body.String(), `"success":false`) {
 		t.Fatalf("batch drain should expose partial results: body=%s", rec.Body.String())
+	}
+}
+
+func TestAPIContract_PlatformRotationAndManualLeaseAction(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	rec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/platforms", map[string]any{
+		"name":              "rotation-invalid",
+		"sticky_ttl":        "30m",
+		"rotation_interval": "30m",
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid rotation interval: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPost, "/api/v1/platforms", map[string]any{
+		"name":              "rotation-api",
+		"sticky_ttl":        "1h",
+		"rotation_interval": "10m",
+		"rotation_strategy": "PREFER_NEW_IP",
+	}, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rotation platform: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	platformID, _ := decodeJSONMap(t, rec)["id"].(string)
+
+	sub := subscription.NewSubscription("rotation-api-sub", "Rotation", "https://example.com", true, false)
+	cp.SubMgr.Register(sub)
+	hashes := make([]node.Hash, 0, 2)
+	for index, ip := range []string{"198.51.100.121", "198.51.100.122"} {
+		raw := json.RawMessage(fmt.Sprintf(`{"rotation_api":%d}`, index))
+		hash := node.HashFromRawOptions(raw)
+		sub.ManagedNodes().StoreNode(hash, subscription.ManagedNode{Tags: []string{"node"}})
+		cp.Pool.AddNodeFromSub(hash, raw, sub.ID)
+		entry, ok := cp.Pool.GetEntry(hash)
+		if !ok {
+			t.Fatalf("rotation node %d missing", index)
+		}
+		entry.SetEgressIP(netip.MustParseAddr(ip))
+		entry.LatencyTable.LoadEntry("cloudflare.com", node.DomainLatencyStats{
+			Ewma: 10 * time.Millisecond, LastUpdated: time.Now(),
+		})
+		outbound := testutil.NewNoopOutbound()
+		entry.Outbound.Store(&outbound)
+		cp.Pool.RecordResult(hash, true)
+		cp.Pool.NotifyNodeDirty(hash)
+		hashes = append(hashes, hash)
+	}
+	cp.Pool.RebuildAllPlatforms()
+	now := time.Now()
+	if err := cp.Router.UpsertLease(model.Lease{
+		PlatformID: platformID, Account: "rotate-me", NodeHash: hashes[0].Hex(),
+		EgressIP: "198.51.100.121", CreatedAtNs: now.Add(-time.Minute).UnixNano(),
+		ExpiryNs: now.Add(time.Hour).UnixNano(), LastAccessedNs: now.UnixNano(),
+	}); err != nil {
+		t.Fatalf("seed rotation API lease: %v", err)
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPost,
+		"/api/v1/platforms/"+platformID+"/leases/rotate-me/actions/rotate",
+		map[string]any{"strategy": "REQUIRE_NEW_IP"}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manual rotation: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	if body["status"] != "rotated" || body["strategy"] != "REQUIRE_NEW_IP" {
+		t.Fatalf("manual rotation response = %v", body)
+	}
+	lease := body["lease"].(map[string]any)
+	if lease["node_hash"] != hashes[1].Hex() || lease["rotation_deferred"] != false {
+		t.Fatalf("manual rotation lease = %v", lease)
 	}
 }
 

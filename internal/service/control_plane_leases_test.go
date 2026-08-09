@@ -223,13 +223,18 @@ func TestInheritLeaseByPlatformName_Success(t *testing.T) {
 	hash := node.HashFromRawOptions([]byte(`{"id":"parent-node"}`)).Hex()
 	now := time.Now().UnixNano()
 	parent := model.Lease{
-		PlatformID:     plat.ID,
-		Account:        "parent",
-		NodeHash:       hash,
-		EgressIP:       "203.0.113.10",
-		CreatedAtNs:    now - int64(5*time.Minute),
-		ExpiryNs:       now + int64(30*time.Minute),
-		LastAccessedNs: now - int64(time.Minute),
+		PlatformID:                plat.ID,
+		Account:                   "parent",
+		NodeHash:                  hash,
+		EgressIP:                  "203.0.113.10",
+		CreatedAtNs:               now - int64(5*time.Minute),
+		ExpiryNs:                  now + int64(30*time.Minute),
+		LastAccessedNs:            now - int64(time.Minute),
+		LastRotatedAtNs:           now - int64(2*time.Minute),
+		RotationRequestedAtNs:     now - int64(time.Minute),
+		RotationRequestedStrategy: "REQUIRE_NEW_IP",
+		RotationDeferred:          true,
+		RotationDeferredReason:    "no_candidate_for_require_new_ip",
 	}
 	seedLease(t, cp, parent)
 
@@ -255,6 +260,11 @@ func TestInheritLeaseByPlatformName_Success(t *testing.T) {
 	}
 	if child.LastAccessedNs != parent.LastAccessedNs {
 		t.Fatalf("child last_accessed_ns: got %d, want %d", child.LastAccessedNs, parent.LastAccessedNs)
+	}
+	if child.LastRotatedAtNs < now || child.RotationRequestedAtNs != 0 ||
+		child.RotationRequestedStrategy != "" || child.RotationDeferred ||
+		child.RotationDeferredReason != "" {
+		t.Fatalf("child rotation metadata was not reset: %+v", child)
 	}
 }
 

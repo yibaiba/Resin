@@ -42,6 +42,8 @@ type Platform struct {
 	AllocationPolicy                 AllocationPolicy
 	PassiveCircuitBreakerDisabled    bool
 	FallbackPlatformIDs              []string
+	RotationIntervalNs               int64
+	RotationStrategy                 RotationStrategy
 
 	// Routable view & its lock.
 	// viewMu serializes both FullRebuild and NotifyDirty.
@@ -59,12 +61,13 @@ func NewPlatform(id, name string, regexFilters []*regexp.Regexp, regionFilters [
 // NewPlatformWithTagFilter creates a Platform with compiled line-oriented tag rules.
 func NewPlatformWithTagFilter(id, name string, regexFilters node.TagFilter, regionFilters []string) *Platform {
 	return &Platform{
-		ID:            id,
-		Name:          name,
-		RegexFilters:  regexFilters,
-		RegionFilters: regionFilters,
-		tcpView:       NewRoutableView(),
-		udpView:       NewRoutableView(),
+		ID:               id,
+		Name:             name,
+		RegexFilters:     regexFilters,
+		RegionFilters:    regionFilters,
+		RotationStrategy: RotationStrategyAny,
+		tcpView:          NewRoutableView(),
+		udpView:          NewRoutableView(),
 	}
 }
 

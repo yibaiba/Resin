@@ -203,7 +203,12 @@ func (r *CacheRepo) BulkUpsertLeases(leases []model.Lease) error {
 		upsertLeasesSQL,
 		leases,
 		func(stmt *sql.Stmt, l model.Lease) error {
-			_, err := stmt.Exec(l.PlatformID, l.Account, l.NodeHash, l.EgressIP, l.CreatedAtNs, l.ExpiryNs, l.LastAccessedNs, l.SelectedPlatformID)
+			_, err := stmt.Exec(
+				l.PlatformID, l.Account, l.NodeHash, l.EgressIP,
+				l.CreatedAtNs, l.ExpiryNs, l.LastAccessedNs, l.SelectedPlatformID,
+				l.LastRotatedAtNs, l.RotationRequestedAtNs, l.RotationDeferred,
+				l.RotationRequestedStrategy, l.RotationDeferredReason,
+			)
 			return err
 		},
 	)
@@ -224,7 +229,10 @@ func (r *CacheRepo) BulkDeleteLeases(keys []model.LeaseKey) error {
 
 // LoadAllLeases reads all lease records.
 func (r *CacheRepo) LoadAllLeases() ([]model.Lease, error) {
-	rows, err := r.db.Query("SELECT platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id FROM leases")
+	rows, err := r.db.Query(`SELECT platform_id, account, node_hash, egress_ip,
+		created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id,
+		last_rotated_at_ns, rotation_requested_at_ns, rotation_deferred,
+		rotation_requested_strategy, rotation_deferred_reason FROM leases`)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +241,12 @@ func (r *CacheRepo) LoadAllLeases() ([]model.Lease, error) {
 	var result []model.Lease
 	for rows.Next() {
 		var l model.Lease
-		if err := rows.Scan(&l.PlatformID, &l.Account, &l.NodeHash, &l.EgressIP, &l.CreatedAtNs, &l.ExpiryNs, &l.LastAccessedNs, &l.SelectedPlatformID); err != nil {
+		if err := rows.Scan(
+			&l.PlatformID, &l.Account, &l.NodeHash, &l.EgressIP,
+			&l.CreatedAtNs, &l.ExpiryNs, &l.LastAccessedNs, &l.SelectedPlatformID,
+			&l.LastRotatedAtNs, &l.RotationRequestedAtNs, &l.RotationDeferred,
+			&l.RotationRequestedStrategy, &l.RotationDeferredReason,
+		); err != nil {
 			return nil, err
 		}
 		result = append(result, l)
@@ -431,6 +444,11 @@ func (r *CacheRepo) FlushTx(ops FlushOps) error {
 				l.ExpiryNs,
 				l.LastAccessedNs,
 				l.SelectedPlatformID,
+				l.LastRotatedAtNs,
+				l.RotationRequestedAtNs,
+				l.RotationDeferred,
+				l.RotationRequestedStrategy,
+				l.RotationDeferredReason,
 			)
 			return err
 		}},
@@ -501,15 +519,21 @@ const (
 			ewma_ns         = excluded.ewma_ns,
 			last_updated_ns = excluded.last_updated_ns`
 
-	upsertLeasesSQL = `INSERT INTO leases (platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	upsertLeasesSQL = `INSERT INTO leases (platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id,
+		 last_rotated_at_ns, rotation_requested_at_ns, rotation_deferred, rotation_requested_strategy, rotation_deferred_reason)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(platform_id, account) DO UPDATE SET
 			node_hash       = excluded.node_hash,
 			egress_ip       = excluded.egress_ip,
 			created_at_ns   = excluded.created_at_ns,
 			expiry_ns       = excluded.expiry_ns,
 			last_accessed_ns = excluded.last_accessed_ns,
-			selected_platform_id = excluded.selected_platform_id`
+			selected_platform_id = excluded.selected_platform_id,
+			last_rotated_at_ns = excluded.last_rotated_at_ns,
+			rotation_requested_at_ns = excluded.rotation_requested_at_ns,
+			rotation_deferred = excluded.rotation_deferred,
+			rotation_requested_strategy = excluded.rotation_requested_strategy,
+			rotation_deferred_reason = excluded.rotation_deferred_reason`
 
 	upsertSubscriptionNodesSQL = `INSERT INTO subscription_nodes (subscription_id, node_hash, tags_json, evicted)
 		 VALUES (?, ?, ?, ?)

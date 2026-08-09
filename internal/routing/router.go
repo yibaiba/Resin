@@ -84,6 +84,9 @@ type RouteResult struct {
 	EgressIP             netip.Addr
 	NodeTag              string // display tag: "<Subscription>/<Tag>" (DESIGN.md §601)
 	LeaseCreated         bool
+	RotationStatus       string
+	RotationReason       string
+	RotationStrategy     string
 }
 
 // RouteOptions describes one routing request. RequiredNetwork defaults to TCP.
@@ -316,6 +319,9 @@ func (r *Router) decideStickyLeaseAcross(
 	if loaded && current.IsExpired(request.now) {
 		invalidation = leaseInvalidationExpire
 	} else if loaded {
+		if trigger, due := r.rotationDue(request.root, current, request.now); due {
+			return r.rotateStickyLeaseAcross(request, current, trigger)
+		}
 		if selected := findCandidatePlatform(request.candidates, current.SelectedPlatformID); selected != nil {
 			attempt := r.attemptFor(request, selected)
 			if next, hit, ok := r.tryLeaseHit(attempt, current); ok {
@@ -488,6 +494,7 @@ func (r *Router) createLease(attempt routeAttempt) (Lease, RouteResult, error) {
 		CreatedAtNs:        nowNs,
 		ExpiryNs:           attempt.now.Add(time.Duration(ttl)).UnixNano(),
 		LastAccessedNs:     nowNs,
+		LastRotatedAtNs:    nowNs,
 	}
 	return lease, RouteResult{
 		NodeHash:     lease.NodeHash,
@@ -667,14 +674,19 @@ func (r *Router) ReadLease(key model.LeaseKey) *model.Lease {
 		return nil
 	}
 	return &model.Lease{
-		PlatformID:         key.PlatformID,
-		SelectedPlatformID: lease.SelectedPlatformID,
-		Account:            key.Account,
-		NodeHash:           lease.NodeHash.Hex(),
-		EgressIP:           lease.EgressIP.String(),
-		CreatedAtNs:        lease.CreatedAtNs,
-		ExpiryNs:           lease.ExpiryNs,
-		LastAccessedNs:     lease.LastAccessedNs,
+		PlatformID:                key.PlatformID,
+		SelectedPlatformID:        lease.SelectedPlatformID,
+		Account:                   key.Account,
+		NodeHash:                  lease.NodeHash.Hex(),
+		EgressIP:                  lease.EgressIP.String(),
+		CreatedAtNs:               lease.CreatedAtNs,
+		ExpiryNs:                  lease.ExpiryNs,
+		LastAccessedNs:            lease.LastAccessedNs,
+		LastRotatedAtNs:           lease.LastRotatedAtNs,
+		RotationRequestedAtNs:     lease.RotationRequestedAtNs,
+		RotationRequestedStrategy: lease.RotationRequestedStrategy,
+		RotationDeferred:          lease.RotationDeferred,
+		RotationDeferredReason:    lease.RotationDeferredReason,
 	}
 }
 
@@ -701,12 +713,17 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 
 	state := r.ensurePlatformState(platformID)
 	lease := Lease{
-		NodeHash:           h,
-		EgressIP:           ip,
-		SelectedPlatformID: strings.TrimSpace(ml.SelectedPlatformID),
-		CreatedAtNs:        ml.CreatedAtNs,
-		ExpiryNs:           ml.ExpiryNs,
-		LastAccessedNs:     ml.LastAccessedNs,
+		NodeHash:                  h,
+		EgressIP:                  ip,
+		SelectedPlatformID:        strings.TrimSpace(ml.SelectedPlatformID),
+		CreatedAtNs:               ml.CreatedAtNs,
+		ExpiryNs:                  ml.ExpiryNs,
+		LastAccessedNs:            ml.LastAccessedNs,
+		LastRotatedAtNs:           ml.LastRotatedAtNs,
+		RotationRequestedAtNs:     ml.RotationRequestedAtNs,
+		RotationRequestedStrategy: ml.RotationRequestedStrategy,
+		RotationDeferred:          ml.RotationDeferred,
+		RotationDeferredReason:    ml.RotationDeferredReason,
 	}
 	if lease.SelectedPlatformID == "" {
 		lease.SelectedPlatformID = platformID
@@ -770,12 +787,17 @@ func (r *Router) RestoreLeases(leases []model.Lease) {
 		})
 
 		l := Lease{
-			NodeHash:           h,
-			EgressIP:           ip,
-			SelectedPlatformID: strings.TrimSpace(ml.SelectedPlatformID),
-			CreatedAtNs:        ml.CreatedAtNs,
-			ExpiryNs:           ml.ExpiryNs,
-			LastAccessedNs:     ml.LastAccessedNs,
+			NodeHash:                  h,
+			EgressIP:                  ip,
+			SelectedPlatformID:        strings.TrimSpace(ml.SelectedPlatformID),
+			CreatedAtNs:               ml.CreatedAtNs,
+			ExpiryNs:                  ml.ExpiryNs,
+			LastAccessedNs:            ml.LastAccessedNs,
+			LastRotatedAtNs:           ml.LastRotatedAtNs,
+			RotationRequestedAtNs:     ml.RotationRequestedAtNs,
+			RotationRequestedStrategy: ml.RotationRequestedStrategy,
+			RotationDeferred:          ml.RotationDeferred,
+			RotationDeferredReason:    ml.RotationDeferredReason,
 		}
 		if l.SelectedPlatformID == "" {
 			l.SelectedPlatformID = ml.PlatformID

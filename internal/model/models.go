@@ -48,6 +48,8 @@ type Platform struct {
 	AllocationPolicy                 string   `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	RotationIntervalNs               int64    `json:"rotation_interval_ns"`
+	RotationStrategy                 string   `json:"rotation_strategy"`
 	UpdatedAtNs                      int64    `json:"updated_at_ns"`
 }
 
@@ -130,14 +132,19 @@ type NodeLatencyKey struct {
 
 // Lease represents a sticky routing lease.
 type Lease struct {
-	PlatformID         string `json:"platform_id"`
-	SelectedPlatformID string `json:"selected_platform_id"`
-	Account            string `json:"account"`
-	NodeHash           string `json:"node_hash"`
-	EgressIP           string `json:"egress_ip"`
-	CreatedAtNs        int64  `json:"created_at_ns"`
-	ExpiryNs           int64  `json:"expiry_ns"`
-	LastAccessedNs     int64  `json:"last_accessed_ns"`
+	PlatformID                string `json:"platform_id"`
+	SelectedPlatformID        string `json:"selected_platform_id"`
+	Account                   string `json:"account"`
+	NodeHash                  string `json:"node_hash"`
+	EgressIP                  string `json:"egress_ip"`
+	CreatedAtNs               int64  `json:"created_at_ns"`
+	ExpiryNs                  int64  `json:"expiry_ns"`
+	LastAccessedNs            int64  `json:"last_accessed_ns"`
+	LastRotatedAtNs           int64  `json:"last_rotated_at_ns"`
+	RotationRequestedAtNs     int64  `json:"rotation_requested_at_ns"`
+	RotationRequestedStrategy string `json:"rotation_requested_strategy"`
+	RotationDeferred          bool   `json:"rotation_deferred"`
+	RotationDeferredReason    string `json:"rotation_deferred_reason"`
 }
 
 // LeaseKey is the composite primary key for leases.

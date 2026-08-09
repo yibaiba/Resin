@@ -473,6 +473,8 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 		RegexFilters: []string{}, RegionFilters: []string{},
 		ReverseProxyMissAction: "TREAT_AS_EMPTY", AllocationPolicy: "BALANCED",
 		PassiveCircuitBreakerDisabled: true,
+		RotationIntervalNs:            500,
+		RotationStrategy:              "REQUIRE_NEW_IP",
 		UpdatedAtNs:                   now,
 	}
 	if err := repo.UpsertPlatform(p); err != nil {
@@ -495,6 +497,9 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	}
 	if !got.PassiveCircuitBreakerDisabled {
 		t.Fatal("expected passive_circuit_breaker_disabled to round-trip true")
+	}
+	if got.RotationIntervalNs != 500 || got.RotationStrategy != "REQUIRE_NEW_IP" {
+		t.Fatalf("rotation config did not round-trip: %+v", got)
 	}
 
 	// List.

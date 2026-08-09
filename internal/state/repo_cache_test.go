@@ -234,7 +234,7 @@ func TestCacheRepo_Leases_BulkUpsertAndLoad(t *testing.T) {
 	repo := newTestCacheRepo(t)
 
 	leases := []model.Lease{
-		{PlatformID: "p1", SelectedPlatformID: "p2", Account: "user1", NodeHash: "n1", EgressIP: "1.2.3.4", CreatedAtNs: 50, ExpiryNs: 9999, LastAccessedNs: 100},
+		{PlatformID: "p1", SelectedPlatformID: "p2", Account: "user1", NodeHash: "n1", EgressIP: "1.2.3.4", CreatedAtNs: 50, ExpiryNs: 9999, LastAccessedNs: 100, LastRotatedAtNs: 75, RotationRequestedAtNs: 80, RotationRequestedStrategy: "REQUIRE_NEW_IP", RotationDeferred: true, RotationDeferredReason: "no_candidate_for_require_new_ip"},
 	}
 	if err := repo.BulkUpsertLeases(leases); err != nil {
 		t.Fatal(err)
@@ -252,6 +252,10 @@ func TestCacheRepo_Leases_BulkUpsertAndLoad(t *testing.T) {
 	}
 	if loaded[0].SelectedPlatformID != "p2" {
 		t.Fatalf("selected_platform_id: got %q, want p2", loaded[0].SelectedPlatformID)
+	}
+	if loaded[0].LastRotatedAtNs != 75 || !loaded[0].RotationDeferred ||
+		loaded[0].RotationRequestedStrategy != "REQUIRE_NEW_IP" {
+		t.Fatalf("rotation metadata: %+v", loaded[0])
 	}
 }
 

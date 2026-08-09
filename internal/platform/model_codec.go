@@ -106,6 +106,10 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 	if err := ValidateRegionFilters(mp.RegionFilters); err != nil {
 		return nil, err
 	}
+	if mp.RotationIntervalNs < 0 ||
+		(mp.RotationIntervalNs > 0 && mp.RotationIntervalNs >= mp.StickyTTLNs) {
+		return nil, fmt.Errorf("decode platform %s rotation_interval_ns: must be 0 or less than sticky_ttl_ns", mp.ID)
+	}
 	emptyAccountBehavior := mp.ReverseProxyEmptyAccountBehavior
 	if !ReverseProxyEmptyAccountBehavior(emptyAccountBehavior).IsValid() {
 		emptyAccountBehavior = string(ReverseProxyEmptyAccountBehaviorRandom)
@@ -143,5 +147,13 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		mp.PassiveCircuitBreakerDisabled,
 	)
 	configured.FallbackPlatformIDs = append([]string(nil), mp.FallbackPlatformIDs...)
+	configured.RotationIntervalNs = mp.RotationIntervalNs
+	configured.RotationStrategy = ParseRotationStrategy(mp.RotationStrategy)
+	if configured.RotationStrategy == "" {
+		if strings.TrimSpace(mp.RotationStrategy) != "" {
+			return nil, fmt.Errorf("decode platform %s rotation_strategy: invalid value %q", mp.ID, mp.RotationStrategy)
+		}
+		configured.RotationStrategy = RotationStrategyAny
+	}
 	return configured, nil
 }

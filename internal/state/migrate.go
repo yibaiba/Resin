@@ -31,7 +31,8 @@ const (
 	stateVersionRoutingRules                     = 10
 	stateVersionPlatformFallback                 = 11
 	stateVersionEgressIPPolicies                 = 12
-	stateLatestVersion                           = stateVersionEgressIPPolicies
+	stateVersionPlatformRotation                 = 13
+	stateLatestVersion                           = stateVersionPlatformRotation
 	stateLegacyBaselineVersion                   = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"

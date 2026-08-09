@@ -20,6 +20,8 @@ func TestBuildFromModel_Success(t *testing.T) {
 		ReverseProxyFixedAccountHeader:   "x-account-id",
 		AllocationPolicy:                 "PREFER_LOW_LATENCY",
 		PassiveCircuitBreakerDisabled:    true,
+		RotationIntervalNs:               1000,
+		RotationStrategy:                 "PREFER_NEW_IP",
 	}
 
 	plat, err := BuildFromModel(mp)
@@ -55,6 +57,9 @@ func TestBuildFromModel_Success(t *testing.T) {
 	}
 	if !plat.PassiveCircuitBreakerDisabled {
 		t.Fatal("passive circuit breaker flag mismatch: got false want true")
+	}
+	if plat.RotationIntervalNs != 1000 || plat.RotationStrategy != RotationStrategyPreferNewIP {
+		t.Fatalf("rotation config mismatch: interval=%d strategy=%q", plat.RotationIntervalNs, plat.RotationStrategy)
 	}
 	if len(plat.RegexFilters.Any) != 1 || !plat.RegexFilters.Any[0].MatchString("us-node") {
 		t.Fatalf("regex filters not compiled as expected: %+v", plat.RegexFilters)

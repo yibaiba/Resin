@@ -33,6 +33,8 @@ type PlatformResponse struct {
 	AllocationPolicy                 string   `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	RotationInterval                 string   `json:"rotation_interval"`
+	RotationStrategy                 string   `json:"rotation_strategy"`
 	UpdatedAt                        string   `json:"updated_at"`
 }
 
@@ -52,6 +54,8 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		AllocationPolicy:                 p.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    p.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), p.FallbackPlatformIDs...),
+		RotationInterval:                 time.Duration(p.RotationIntervalNs).String(),
+		RotationStrategy:                 normalizeRotationStrategy(p.RotationStrategy),
 		UpdatedAt:                        time.Unix(0, p.UpdatedAtNs).UTC().Format(time.RFC3339Nano),
 	}
 }
@@ -79,6 +83,8 @@ type platformConfig struct {
 	AllocationPolicy                 string
 	PassiveCircuitBreakerDisabled    bool
 	FallbackPlatformIDs              []string
+	RotationIntervalNs               int64
+	RotationStrategy                 string
 }
 
 func normalizePlatformMissAction(raw string) string {
@@ -110,6 +116,7 @@ func (s *ControlPlaneService) defaultPlatformConfig(name string) platformConfig 
 			s.EnvCfg.DefaultPlatformReverseProxyFixedAccountHeader,
 		),
 		AllocationPolicy: s.EnvCfg.DefaultPlatformAllocationPolicy,
+		RotationStrategy: string(platform.RotationStrategyAny),
 	}
 }
 
@@ -125,6 +132,8 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		AllocationPolicy:                 mp.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    mp.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), mp.FallbackPlatformIDs...),
+		RotationIntervalNs:               mp.RotationIntervalNs,
+		RotationStrategy:                 normalizeRotationStrategy(mp.RotationStrategy),
 	}
 }
 
@@ -141,6 +150,8 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		AllocationPolicy:                 cfg.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    cfg.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), cfg.FallbackPlatformIDs...),
+		RotationIntervalNs:               cfg.RotationIntervalNs,
+		RotationStrategy:                 cfg.RotationStrategy,
 		UpdatedAtNs:                      updatedAtNs,
 	}
 }
@@ -163,7 +174,17 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		cfg.PassiveCircuitBreakerDisabled,
 	)
 	configured.FallbackPlatformIDs = append([]string(nil), cfg.FallbackPlatformIDs...)
+	configured.RotationIntervalNs = cfg.RotationIntervalNs
+	configured.RotationStrategy = platform.ParseRotationStrategy(cfg.RotationStrategy)
 	return configured, nil
+}
+
+func normalizeRotationStrategy(raw string) string {
+	strategy := platform.ParseRotationStrategy(raw)
+	if strategy == "" {
+		strategy = platform.RotationStrategyAny
+	}
+	return string(strategy)
 }
 
 func validatePlatformMissAction(raw string) *ServiceError {
@@ -238,6 +259,23 @@ func setPlatformStickyTTL(cfg *platformConfig, d time.Duration) *ServiceError {
 	return nil
 }
 
+func setPlatformRotationInterval(cfg *platformConfig, interval time.Duration) *ServiceError {
+	if interval < 0 {
+		return invalidArg("rotation_interval: must be >= 0")
+	}
+	cfg.RotationIntervalNs = int64(interval)
+	return nil
+}
+
+func setPlatformRotationStrategy(cfg *platformConfig, raw string) *ServiceError {
+	strategy := platform.ParseRotationStrategy(raw)
+	if strategy == "" {
+		return invalidArg("rotation_strategy: must be ANY, SAME_IP, PREFER_NEW_IP, or REQUIRE_NEW_IP")
+	}
+	cfg.RotationStrategy = string(strategy)
+	return nil
+}
+
 func setPlatformMissAction(cfg *platformConfig, missAction string) *ServiceError {
 	if err := validatePlatformMissAction(missAction); err != nil {
 		return err
@@ -269,6 +307,12 @@ func validatePlatformConfig(cfg *platformConfig, validateRegionFilters bool) *Se
 		}
 	}
 	if err := validatePlatformEmptyAccountConfig(cfg); err != nil {
+		return err
+	}
+	if cfg.RotationIntervalNs > 0 && cfg.RotationIntervalNs >= cfg.StickyTTLNs {
+		return invalidArg("rotation_interval: must be less than sticky_ttl")
+	}
+	if err := setPlatformRotationStrategy(cfg, cfg.RotationStrategy); err != nil {
 		return err
 	}
 	return nil
@@ -348,6 +392,8 @@ type CreatePlatformRequest struct {
 	AllocationPolicy                 *string  `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    *bool    `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	RotationInterval                 *string  `json:"rotation_interval"`
+	RotationStrategy                 *string  `json:"rotation_strategy"`
 }
 
 // CreatePlatform creates a new platform.
@@ -407,6 +453,20 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	}
 	if req.FallbackPlatformIDs != nil {
 		cfg.FallbackPlatformIDs = append([]string(nil), req.FallbackPlatformIDs...)
+	}
+	if req.RotationInterval != nil {
+		interval, err := time.ParseDuration(*req.RotationInterval)
+		if err != nil {
+			return nil, invalidArg("rotation_interval: " + err.Error())
+		}
+		if svcErr := setPlatformRotationInterval(&cfg, interval); svcErr != nil {
+			return nil, svcErr
+		}
+	}
+	if req.RotationStrategy != nil {
+		if svcErr := setPlatformRotationStrategy(&cfg, *req.RotationStrategy); svcErr != nil {
+			return nil, svcErr
+		}
 	}
 	if err := validatePlatformConfig(&cfg, true); err != nil {
 		return nil, err
@@ -529,6 +589,20 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 		return nil, err
 	} else if ok {
 		cfg.FallbackPlatformIDs = fallbackIDs
+	}
+	if interval, ok, err := patch.optionalDurationString("rotation_interval"); err != nil {
+		return nil, err
+	} else if ok {
+		if svcErr := setPlatformRotationInterval(&cfg, interval); svcErr != nil {
+			return nil, svcErr
+		}
+	}
+	if strategy, ok, err := patch.optionalString("rotation_strategy"); err != nil {
+		return nil, err
+	} else if ok {
+		if svcErr := setPlatformRotationStrategy(&cfg, strategy); svcErr != nil {
+			return nil, svcErr
+		}
 	}
 	if err := validatePlatformConfig(&cfg, regionFiltersPatched); err != nil {
 		return nil, err

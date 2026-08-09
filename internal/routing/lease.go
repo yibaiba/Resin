@@ -12,12 +12,17 @@ import (
 // Lease represents a sticky routing lease.
 // It is a value type to avoid pointer aliasing races.
 type Lease struct {
-	NodeHash           node.Hash
-	EgressIP           netip.Addr
-	SelectedPlatformID string
-	CreatedAtNs        int64
-	ExpiryNs           int64
-	LastAccessedNs     int64
+	NodeHash                  node.Hash
+	EgressIP                  netip.Addr
+	SelectedPlatformID        string
+	CreatedAtNs               int64
+	ExpiryNs                  int64
+	LastAccessedNs            int64
+	LastRotatedAtNs           int64
+	RotationRequestedAtNs     int64
+	RotationRequestedStrategy string
+	RotationDeferred          bool
+	RotationDeferredReason    string
 }
 
 // LeaseTable manages per-account sticky leases for a single platform.
