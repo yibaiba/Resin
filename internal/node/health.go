@@ -15,6 +15,15 @@ type TCPValidation struct {
 	Kind       TCPValidationKind
 }
 
+// TCPValidationCompletion applies validation-owned side effects only while the
+// generation is still current. ApplyIfCurrent must not mutate TCP health.
+type TCPValidationCompletion struct {
+	Validation      TCPValidation
+	Success         bool
+	CircuitOpenedAt int64
+	ApplyIfCurrent  func()
+}
+
 // TCPHealthState is an immutable snapshot published through one atomic pointer.
 type TCPHealthState struct {
 	FailureCount         int32
@@ -87,6 +96,8 @@ func (e *NodeEntry) UDPHealthState() UDPHealthState {
 
 // RestoreTCPHealth rebuilds persisted TCP fields and resets process-local validation state.
 func (e *NodeEntry) RestoreTCPHealth(failureCount int32, circuitOpenSince int64) {
+	e.tcpHealthMu.Lock()
+	defer e.tcpHealthMu.Unlock()
 	e.tcpHealth.Store(&TCPHealthState{
 		FailureCount:      failureCount,
 		CircuitOpenSince:  circuitOpenSince,
@@ -105,6 +116,8 @@ func (e *NodeEntry) RestoreUDPHealth(failureCount int32, circuitOpenSince int64)
 // RecordTCPHealth applies ordinary success/failure feedback. Threshold failures
 // request confirmation but do not open the circuit themselves.
 func (e *NodeEntry) RecordTCPHealth(success bool, threshold int) TCPHealthTransition {
+	e.tcpHealthMu.Lock()
+	defer e.tcpHealthMu.Unlock()
 	return e.updateTCPHealth(func(current TCPHealthState) (TCPHealthState, *TCPValidation) {
 		if success {
 			return healthyTCPState(current.ValidationGeneration), nil
@@ -133,6 +146,8 @@ func (e *NodeEntry) RecordTCPHealth(success bool, threshold int) TCPHealthTransi
 
 // BeginTCPValidation rebuilds a pending confirmation or recovery, such as at startup.
 func (e *NodeEntry) BeginTCPValidation(kind TCPValidationKind, threshold int) TCPHealthTransition {
+	e.tcpHealthMu.Lock()
+	defer e.tcpHealthMu.Unlock()
 	return e.updateTCPHealth(func(current TCPHealthState) (TCPHealthState, *TCPValidation) {
 		if current.ValidationPending != TCPValidationNone || !canBeginValidation(current, kind, threshold) {
 			return current, nil
@@ -150,6 +165,8 @@ func (e *NodeEntry) BeginTCPValidation(kind TCPValidationKind, threshold int) TC
 
 // CancelTCPValidation clears an exact pending generation after enqueue failure.
 func (e *NodeEntry) CancelTCPValidation(validation TCPValidation) TCPHealthTransition {
+	e.tcpHealthMu.Lock()
+	defer e.tcpHealthMu.Unlock()
 	return e.updateTCPHealth(func(current TCPHealthState) (TCPHealthState, *TCPValidation) {
 		if !matchesValidation(current, validation) {
 			return current, nil
@@ -166,18 +183,45 @@ func (e *NodeEntry) CompleteTCPValidation(
 	success bool,
 	circuitOpenedAt int64,
 ) TCPHealthTransition {
+	return e.CompleteTCPValidationWithEffect(TCPValidationCompletion{
+		Validation:      validation,
+		Success:         success,
+		CircuitOpenedAt: circuitOpenedAt,
+	})
+}
+
+// CompleteTCPValidationWithEffect linearizes validation completion and its
+// metadata writeback against every ordinary TCP health transition.
+func (e *NodeEntry) CompleteTCPValidationWithEffect(
+	completion TCPValidationCompletion,
+) TCPHealthTransition {
+	e.tcpHealthMu.Lock()
+	defer e.tcpHealthMu.Unlock()
+
+	if !matchesValidation(e.TCPHealth(), completion.Validation) {
+		state := e.TCPHealth()
+		return TCPHealthTransition{Previous: state, Current: state}
+	}
+	transition := e.completeTCPValidation(completion)
+	if completion.ApplyIfCurrent != nil {
+		completion.ApplyIfCurrent()
+	}
+	return transition
+}
+
+func (e *NodeEntry) completeTCPValidation(completion TCPValidationCompletion) TCPHealthTransition {
 	return e.updateTCPHealth(func(current TCPHealthState) (TCPHealthState, *TCPValidation) {
-		if !matchesValidation(current, validation) {
+		if !matchesValidation(current, completion.Validation) {
 			return current, nil
 		}
-		if success {
+		if completion.Success {
 			return healthyTCPState(current.ValidationGeneration), nil
 		}
 
 		next := current
 		next.ValidationPending = TCPValidationNone
-		if validation.Kind == TCPValidationConfirmation {
-			next.CircuitOpenSince = circuitOpenedAt
+		if completion.Validation.Kind == TCPValidationConfirmation {
+			next.CircuitOpenSince = completion.CircuitOpenedAt
 		}
 		return next, nil
 	})

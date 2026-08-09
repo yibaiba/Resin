@@ -54,6 +54,7 @@ type NodeEntry struct {
 	LastError       string
 
 	// Atomic dynamic fields for concurrent hot-path reads.
+	tcpHealthMu      sync.Mutex
 	tcpHealth        atomic.Pointer[TCPHealthState]
 	udpHealth        atomic.Pointer[UDPHealthState]
 	egressIP         atomic.Pointer[netip.Addr] // nil before first store

@@ -11,6 +11,7 @@ import (
 type upstreamRequestTrace struct {
 	gotConn              atomic.Bool
 	wroteRequest         atomic.Bool
+	firstResponseByte    atomic.Bool
 	gotFirstResponseByte func()
 }
 
@@ -35,6 +36,7 @@ func (t *upstreamRequestTrace) clientTrace() *httptrace.ClientTrace {
 			}
 		},
 		GotFirstResponseByte: func() {
+			t.firstResponseByte.Store(true)
 			if t.gotFirstResponseByte != nil {
 				t.gotFirstResponseByte()
 			}
@@ -44,4 +46,8 @@ func (t *upstreamRequestTrace) clientTrace() *httptrace.ClientTrace {
 
 func (t *upstreamRequestTrace) shouldCommitEgress() bool {
 	return t.gotConn.Load() && t.wroteRequest.Load()
+}
+
+func (t *upstreamRequestTrace) sawFirstResponseByte() bool {
+	return t != nil && t.firstResponseByte.Load()
 }

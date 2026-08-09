@@ -258,9 +258,12 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	outReq = outReq.WithContext(httptrace.WithClientTrace(outReq.Context(), upstreamTrace.clientTrace()))
 	pendingEgressHeaderBytes := headerWireLen(outReq.Header)
+	requestBodyObserver := &responseTransferObserver{}
 	var egressBodyCounter *countingReadCloser
 	if outReq.Body != nil && outReq.Body != http.NoBody {
-		egressBodyCounter = newCountingReadCloser(outReq.Body)
+		egressBodyCounter = newObservedCountingReadCloser(outReq.Body, func(err error) {
+			requestBodyObserver.record("forward_client_body_read", err)
+		})
 		outReq.Body = egressBodyCounter
 	}
 
@@ -282,10 +285,18 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			feedback.record(passiveHealthNeutral)
 			return
 		}
+		stage := "forward_roundtrip"
+		stageErr := err
+		if failure := requestBodyObserver.firstFailure(); failure != nil {
+			stage = failure.stage
+			stageErr = failure.err
+		}
 		lifecycle.setProxyError(proxyErr)
-		lifecycle.setUpstreamError("forward_roundtrip", err)
+		lifecycle.setUpstreamError(stage, stageErr)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-		if hasRoute {
+		if requestBodyObserver.firstFailure() != nil {
+			feedback.record(passiveHealthNeutral)
+		} else if hasRoute {
 			feedback.record(passiveHealthFailure)
 		}
 		writeProxyError(w, proxyErr)

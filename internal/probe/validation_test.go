@@ -160,6 +160,57 @@ func TestTCPValidation_OrdinarySuccessInvalidatesQueuedGeneration(t *testing.T) 
 	}
 }
 
+func TestTCPValidation_OrdinarySuccessDuringFetchPreventsStaleMetadataWriteback(t *testing.T) {
+	pool, hash, entry := newValidationTestNode(t, 1)
+	fetchStarted := make(chan struct{})
+	releaseFetch := make(chan struct{})
+	manager := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(node.Hash, string) ([]byte, time.Duration, error) {
+			close(fetchStarted)
+			<-releaseFetch
+			return []byte("ip=198.51.100.20\nloc=CA"), 5 * time.Millisecond, nil
+		},
+	})
+	if err := pool.RecordTCPHealthResult(hash, topology.HealthSourcePassive, false, "request-inflight"); err != nil {
+		t.Fatalf("record threshold failure: %v", err)
+	}
+	state := entry.TCPHealth()
+	task := probeTask{key: probeTaskKey{
+		hash:       hash,
+		kind:       probeTaskKindConfirmation,
+		generation: state.ValidationGeneration,
+	}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.executeTCPValidation(task)
+	}()
+	<-fetchStarted
+
+	if err := pool.RecordTCPHealthResult(hash, topology.HealthSourceLatencyProbe, true, ""); err != nil {
+		t.Fatalf("record newer success: %v", err)
+	}
+	newIP := netip.MustParseAddr("203.0.113.99")
+	newRegion := "jp"
+	newLatency := 99 * time.Millisecond
+	pool.UpdateNodeEgressIP(hash, &newIP, &newRegion)
+	pool.RecordLatency(hash, egressTraceDomain, &newLatency)
+	close(releaseFetch)
+	<-done
+
+	if got := entry.GetEgressIP(); got != newIP {
+		t.Fatalf("egress IP = %s, want newer %s", got, newIP)
+	}
+	if got := entry.GetEgressRegion(); got != newRegion {
+		t.Fatalf("egress region = %q, want %q", got, newRegion)
+	}
+	stats, ok := entry.LatencyTable.GetDomainStats(egressTraceDomain)
+	if !ok || stats.Ewma != newLatency {
+		t.Fatalf("latency stats = %+v, ok=%v, want %s", stats, ok, newLatency)
+	}
+}
+
 func TestTCPValidation_EnqueueFailuresCancelPending(t *testing.T) {
 	t.Run("outbound missing", func(t *testing.T) {
 		pool, hash, entry := newValidationTestNode(t, 1)

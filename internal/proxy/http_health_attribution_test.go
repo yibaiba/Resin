@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,8 @@ import (
 type routedHTTPExercise struct {
 	reverse        bool
 	upstreamURL    string
+	requestMethod  string
+	requestBody    io.Reader
 	requestHeaders http.Header
 	responseWriter http.ResponseWriter
 }
@@ -55,7 +58,11 @@ func exerciseRoutedHTTP(t *testing.T, exercise routedHTTPExercise) routedHTTPRes
 		})
 	}
 
-	req := httptest.NewRequest(http.MethodGet, requestURL, nil)
+	method := exercise.requestMethod
+	if method == "" {
+		method = http.MethodGet
+	}
+	req := httptest.NewRequest(method, requestURL, exercise.requestBody)
 	for name, values := range exercise.requestHeaders {
 		for _, value := range values {
 			req.Header.Add(name, value)
@@ -189,6 +196,78 @@ func TestReverseProxy_LocalHijackFailureIsHealthNeutral(t *testing.T) {
 	}
 }
 
+func TestReverseProxy_FirstResponseByteBeforeMalformedHeadersRecordsSuccess(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(writeMalformedHTTPResponse))
+	defer upstream.Close()
+
+	result := exerciseRoutedHTTP(t, routedHTTPExercise{
+		reverse:     true,
+		upstreamURL: upstream.URL + "/malformed",
+	})
+	assertOneHealthSuccess(t, result.health)
+	if result.log.NetOK {
+		t.Fatal("malformed upstream response must remain a request failure")
+	}
+	if result.log.UpstreamStage != "reverse_roundtrip" {
+		t.Fatalf("upstream stage = %q, want reverse_roundtrip", result.log.UpstreamStage)
+	}
+}
+
+func TestHTTPProxies_ClientRequestBodyReadFailureIsHealthNeutral(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	for _, reverse := range []bool{false, true} {
+		name := "forward"
+		wantStage := "forward_client_body_read"
+		if reverse {
+			name = "reverse"
+			wantStage = "reverse_client_body_read"
+		}
+		t.Run(name, func(t *testing.T) {
+			result := exerciseRoutedHTTP(t, routedHTTPExercise{
+				reverse:       reverse,
+				upstreamURL:   upstream.URL + "/upload",
+				requestMethod: http.MethodPost,
+				requestBody:   resetRequestBody{},
+			})
+			if calls := result.health.resultCalls.Load(); calls != 0 {
+				t.Fatalf("client body failure health calls = %d, want 0", calls)
+			}
+			if result.log.NetOK {
+				t.Fatal("client body read error must remain a request failure")
+			}
+			if result.log.UpstreamStage != wantStage {
+				t.Fatalf("upstream stage = %q, want %q", result.log.UpstreamStage, wantStage)
+			}
+		})
+	}
+}
+
+func TestReverseProxy_FlushFailureIsLoggedWithoutPenalizingNode(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: ready\n\n"))
+	}))
+	defer upstream.Close()
+
+	writer := &flushErrorResponseWriter{ResponseRecorder: httptest.NewRecorder()}
+	result := exerciseRoutedHTTP(t, routedHTTPExercise{
+		reverse:        true,
+		upstreamURL:    upstream.URL + "/events",
+		responseWriter: writer,
+	})
+	assertOneHealthSuccess(t, result.health)
+	if result.log.NetOK {
+		t.Fatal("client flush error must remain a request failure")
+	}
+	if result.log.UpstreamStage != "reverse_response_flush" {
+		t.Fatalf("upstream stage = %q, want reverse_response_flush", result.log.UpstreamStage)
+	}
+}
+
 func writeTruncatedHTTPResponse(w http.ResponseWriter, _ *http.Request) {
 	hijacker := w.(http.Hijacker)
 	conn, buffered, err := hijacker.Hijack()
@@ -197,6 +276,16 @@ func writeTruncatedHTTPResponse(w http.ResponseWriter, _ *http.Request) {
 	}
 	defer conn.Close()
 	_, _ = buffered.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\npartial")
+	_ = buffered.Flush()
+}
+
+func writeMalformedHTTPResponse(w http.ResponseWriter, _ *http.Request) {
+	conn, buffered, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_, _ = buffered.WriteString("HTTP/1.1 invalid status\r\n\r\n")
 	_ = buffered.Flush()
 }
 
@@ -212,6 +301,24 @@ func assertOneHealthSuccess(t *testing.T, health *mockHealthRecorder) {
 
 type failingBodyResponseWriter struct {
 	*httptest.ResponseRecorder
+}
+
+type resetRequestBody struct{}
+
+func (resetRequestBody) Read([]byte) (int, error) {
+	return 0, syscall.ECONNRESET
+}
+
+func (resetRequestBody) Close() error {
+	return nil
+}
+
+type flushErrorResponseWriter struct {
+	*httptest.ResponseRecorder
+}
+
+func (w *flushErrorResponseWriter) FlushError() error {
+	return syscall.EPIPE
 }
 
 func (w *failingBodyResponseWriter) Write([]byte) (int, error) {
