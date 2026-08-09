@@ -279,11 +279,20 @@ func newTopologyRuntime(
 		MaxAuthorityLatencyTestInterval: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxAuthorityLatencyTestInterval)
 		},
+		MaxUDPTestInterval: func() time.Duration {
+			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxUDPTestInterval)
+		},
 		LatencyTestURL: func() string {
 			return runtimeConfigSnapshot(runtimeCfg).LatencyTestURL
 		},
 		LatencyAuthorities: func() []string {
 			return runtimeConfigSnapshot(runtimeCfg).LatencyAuthorities
+		},
+		UDPProbeTarget: func() string {
+			return runtimeConfigSnapshot(runtimeCfg).UDPProbeTarget
+		},
+		Timeout: func() time.Duration {
+			return envCfg.ProbeTimeout
 		},
 	})
 
@@ -292,6 +301,7 @@ func newTopologyRuntime(
 		outboundMgr.EnsureNodeOutbound(hash)
 		// No NotifyNodeDirty here — AddNodeFromSub already notifies all platforms.
 		probeMgr.TriggerImmediateEgressProbe(hash)
+		probeMgr.TriggerImmediateUDPProbe(hash)
 	})
 	pool.SetOnNodeRemoved(func(hash node.Hash, entry *node.NodeEntry) {
 		markNodeRemovedDirty(engine, hash, entry)
@@ -313,6 +323,7 @@ func newTopologyRuntime(
 			outboundMgr.EnsureNodeOutbound(hash)
 			probeMgr.TriggerImmediateEgressProbe(hash)
 			probeMgr.TriggerImmediateLatencyProbe(hash)
+			probeMgr.TriggerImmediateUDPProbe(hash)
 		},
 	})
 	ephemeralCleaner := topology.NewEphemeralCleaner(

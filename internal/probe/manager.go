@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math/rand/v2"
@@ -36,12 +37,15 @@ type ProbeConfig struct {
 	MaxEgressTestInterval           func() time.Duration
 	MaxLatencyTestInterval          func() time.Duration
 	MaxAuthorityLatencyTestInterval func() time.Duration
+	MaxUDPTestInterval              func() time.Duration
 
 	LatencyTestURL     func() string
 	LatencyAuthorities func() []string
+	UDPProbeTarget     func() string
+	Timeout            func() time.Duration
 
-	// OnProbeEvent is called after each probe attempt completes (egress or latency).
-	// The kind parameter is "egress" or "latency".
+	// OnProbeEvent is called after each probe attempt begins.
+	// The kind parameter is "egress", "latency", or "udp".
 	OnProbeEvent func(kind string)
 
 	// ChooseNormalWhenBoth chooses whether to pop normal-priority queue when
@@ -55,6 +59,8 @@ type ProbeConfig struct {
 type ProbeManager struct {
 	pool        *topology.GlobalNodePool
 	stopCh      chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
 	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	fetcher     Fetcher
@@ -65,8 +71,11 @@ type ProbeManager struct {
 	maxEgressTestInterval           func() time.Duration
 	maxLatencyTestInterval          func() time.Duration
 	maxAuthorityLatencyTestInterval func() time.Duration
+	maxUDPTestInterval              func() time.Duration
 	latencyTestURL                  func() string
 	latencyAuthorities              func() []string
+	udpProbeTarget                  func() string
+	timeout                         func() time.Duration
 	onProbeEvent                    func(kind string)
 }
 
@@ -89,6 +98,7 @@ type probeTaskKind uint8
 const (
 	probeTaskKindEgress probeTaskKind = iota
 	probeTaskKindLatency
+	probeTaskKindUDP
 )
 
 type probeTaskKey struct {
@@ -257,9 +267,12 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ProbeManager{
 		pool:                            cfg.Pool,
 		stopCh:                          make(chan struct{}),
+		ctx:                             ctx,
+		cancel:                          cancel,
 		fetcher:                         cfg.Fetcher,
 		workerCount:                     conc,
 		taskQueue:                       newProbeTaskQueue(queueCap, queueCap, cfg.ChooseNormalWhenBoth),
@@ -267,8 +280,11 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		maxEgressTestInterval:           cfg.MaxEgressTestInterval,
 		maxLatencyTestInterval:          cfg.MaxLatencyTestInterval,
 		maxAuthorityLatencyTestInterval: cfg.MaxAuthorityLatencyTestInterval,
+		maxUDPTestInterval:              cfg.MaxUDPTestInterval,
 		latencyTestURL:                  cfg.LatencyTestURL,
 		latencyAuthorities:              cfg.LatencyAuthorities,
+		udpProbeTarget:                  cfg.UDPProbeTarget,
+		timeout:                         cfg.Timeout,
 		onProbeEvent:                    cfg.OnProbeEvent,
 	}
 }
@@ -284,6 +300,12 @@ func (m *ProbeManager) Start() {
 	go func() {
 		defer m.wg.Done()
 		scanloop.Run(m.stopCh, scanloop.DefaultMinInterval, scanloop.DefaultJitterRange, m.scanEgress)
+	}()
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		scanloop.Run(m.stopCh, scanloop.DefaultMinInterval, scanloop.DefaultJitterRange, m.scanUDP)
 	}()
 
 	m.wg.Add(1)
@@ -310,6 +332,7 @@ func (m *ProbeManager) Start() {
 //     state; expected ownership is that callers stop upstream event sources first.
 func (m *ProbeManager) Stop() {
 	m.stopOnce.Do(func() {
+		m.cancel()
 		close(m.stopCh)
 		m.taskQueue.StopDropPending()
 	})
@@ -326,6 +349,36 @@ func (m *ProbeManager) TriggerImmediateEgressProbe(hash node.Hash) {
 // Caller returns immediately.
 func (m *ProbeManager) TriggerImmediateLatencyProbe(hash node.Hash) {
 	m.enqueueProbe(hash, probeTaskKindLatency, probePriorityNormal)
+}
+
+// TriggerImmediateUDPProbe enqueues an async UDP probe for a dual-stack node.
+func (m *ProbeManager) TriggerImmediateUDPProbe(hash node.Hash) {
+	if !m.udpProbeReady() {
+		return
+	}
+	entry, ok := m.pool.GetEntry(hash)
+	if !ok || !isDualStack(entry) {
+		return
+	}
+	m.enqueueProbe(hash, probeTaskKindUDP, probePriorityNormal)
+}
+
+// TriggerImmediateUDPProbes enqueues UDP probes for every dual-stack node.
+func (m *ProbeManager) TriggerImmediateUDPProbes() {
+	if !m.udpProbeReady() {
+		return
+	}
+	m.pool.Range(func(hash node.Hash, entry *node.NodeEntry) bool {
+		select {
+		case <-m.stopCh:
+			return false
+		default:
+		}
+		if isDualStack(entry) {
+			m.enqueueProbe(hash, probeTaskKindUDP, probePriorityNormal)
+		}
+		return true
+	})
 }
 
 // EgressProbeResult holds the results of a synchronous egress probe.
@@ -515,6 +568,36 @@ func (m *ProbeManager) scanLatency() {
 	})
 }
 
+func (m *ProbeManager) scanUDP() {
+	if !m.udpProbeReady() {
+		return
+	}
+	now := time.Now()
+	interval := 5 * time.Minute
+	if m.maxUDPTestInterval != nil {
+		interval = m.maxUDPTestInterval()
+	}
+	const lookahead = 15 * time.Second
+	subLookup := m.pool.MakeSubLookup()
+
+	m.pool.Range(func(hash node.Hash, entry *node.NodeEntry) bool {
+		select {
+		case <-m.stopCh:
+			return false
+		default:
+		}
+		if entry.IsDisabledBySubscriptions(subLookup) || !isDualStack(entry) {
+			return true
+		}
+		lastAttempt := entry.LastUDPProbeAttempt.Load()
+		if lastAttempt > 0 && now.Before(time.Unix(0, lastAttempt).Add(interval).Add(-lookahead)) {
+			return true
+		}
+		m.enqueueProbe(hash, probeTaskKindUDP, probePriorityNormal)
+		return true
+	})
+}
+
 func (m *ProbeManager) runProbeWorker() {
 	for {
 		task, ok := m.taskQueue.Dequeue()
@@ -546,6 +629,8 @@ func (m *ProbeManager) executeTask(task probeTask) {
 		m.probeEgress(task.key.hash, entry)
 	case probeTaskKindLatency:
 		m.probeLatency(task.key.hash, entry, m.currentLatencyTestURL())
+	case probeTaskKindUDP:
+		m.probeUDP(task.key.hash, entry)
 	}
 }
 

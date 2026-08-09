@@ -345,6 +345,7 @@ func (a *resinApp) startBackgroundServices() {
 	})
 
 	a.topoRuntime.probeMgr.Start()
+	a.topoRuntime.probeMgr.TriggerImmediateUDPProbes()
 	log.Println("Probe manager started (batch 2)")
 
 	a.requestlogSvc.Start()
@@ -372,16 +373,17 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 	}
 
 	cpService := &service.ControlPlaneService{
-		RuntimeCfg:     a.runtimeCfg,
-		EnvCfg:         a.envCfg,
-		Engine:         engine,
-		Pool:           a.topoRuntime.pool,
-		SubMgr:         a.topoRuntime.subManager,
-		Scheduler:      a.topoRuntime.scheduler,
-		Router:         a.topoRuntime.router,
-		ProbeMgr:       a.topoRuntime.probeMgr,
-		GeoIP:          a.geoSvc,
-		MatcherRuntime: a.accountMatcher,
+		RuntimeCfg:              a.runtimeCfg,
+		EnvCfg:                  a.envCfg,
+		Engine:                  engine,
+		Pool:                    a.topoRuntime.pool,
+		SubMgr:                  a.topoRuntime.subManager,
+		Scheduler:               a.topoRuntime.scheduler,
+		Router:                  a.topoRuntime.router,
+		ProbeMgr:                a.topoRuntime.probeMgr,
+		GeoIP:                   a.geoSvc,
+		MatcherRuntime:          a.accountMatcher,
+		OnUDPProbeConfigChanged: a.topoRuntime.probeMgr.TriggerImmediateUDPProbes,
 	}
 
 	apiSrv := api.NewServerWithAddress(
