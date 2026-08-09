@@ -177,3 +177,14 @@ func (l *requestLifecycle) setRouteResult(result routing.RouteResult) {
 	l.log.NodeTag = result.NodeTag
 	l.log.EgressIP = result.EgressIP.String()
 }
+
+func (l *requestLifecycle) clearTargetAndRoute() {
+	l.finished.PlatformID = ""
+	l.log.TargetHost = ""
+	l.log.TargetURL = ""
+	l.log.PlatformID = ""
+	l.log.PlatformName = ""
+	l.log.NodeHash = ""
+	l.log.NodeTag = ""
+	l.log.EgressIP = ""
+}

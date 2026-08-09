@@ -24,7 +24,8 @@ type socks5UDPAssociation struct {
 	flows        map[string]*socks5UDPFlowRef
 	lifecycle    *requestLifecycle
 	done         chan struct{}
-	targetSet    bool
+	loggedTarget string
+	multiTarget  bool
 	netFailed    bool
 	closed       atomic.Bool
 }
@@ -134,12 +135,16 @@ func (a *socks5UDPAssociation) removeFlow(target string, flow socks5UDPFlow) err
 func (a *socks5UDPAssociation) recordRoute(target string, route routing.RouteResult) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.lifecycle == nil {
+	if a.lifecycle == nil || a.multiTarget {
 		return
 	}
-	if !a.targetSet {
+	if a.loggedTarget == "" {
+		a.loggedTarget = target
 		a.lifecycle.setTarget(target, "")
-		a.targetSet = true
+	} else if a.loggedTarget != target {
+		a.multiTarget = true
+		a.lifecycle.clearTargetAndRoute()
+		return
 	}
 	if route.PlatformID != "" {
 		a.lifecycle.setRouteResult(route)
