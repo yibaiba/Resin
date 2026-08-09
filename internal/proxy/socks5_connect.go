@@ -14,13 +14,14 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 	lifecycle.setAccount(session.handshake.account)
 	defer lifecycle.finish()
 
-	prepare := prepareConnectTunnel(
-		session.ctx,
-		s.tunnel,
-		session.handshake.platformName,
-		session.handshake.account,
-		session.handshake.request.target,
-	)
+	prepare := prepareConnectTunnel(connectTunnelRequest{
+		ctx:          session.ctx,
+		deps:         s.tunnel,
+		platformName: session.handshake.platformName,
+		account:      session.handshake.account,
+		target:       session.handshake.request.target,
+		requestID:    lifecycle.log.ID,
+	})
 	if prepare.route.PlatformID != "" {
 		lifecycle.setRouteResult(prepare.route)
 	}
@@ -31,6 +32,7 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 
 	if err := writeSocks5Reply(session.conn, socks5ReplySucceeded, prepare.session.upstreamConn.LocalAddr()); err != nil {
 		_ = prepare.session.upstreamConn.Close()
+		prepare.session.health.record(passiveHealthNeutral)
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("socks5_connect_response_write", err)
 		lifecycle.setNetOK(false)
@@ -47,7 +49,6 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 		lifecycle.setUpstreamError(relay.upstreamStage, relay.upstreamErr)
 	}
 	lifecycle.setNetOK(relay.netOK)
-	prepare.session.recordResult(relay.netOK)
 }
 
 func (s *Socks5Inbound) finishFailedConnect(

@@ -278,7 +278,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
 		if hasRoute {
-			recordPassiveResultAsync(p.health, route, false)
+			recordPassiveResult(p.health, route, false, lifecycle.log.ID)
 		}
 		writeProxyError(w, proxyErr)
 		return
@@ -299,7 +299,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setUpstreamError("forward_upstream_to_client_copy", copyErr)
 			lifecycle.setNetOK(false)
 			if hasRoute {
-				recordPassiveResultAsync(p.health, route, false)
+				recordPassiveResult(p.health, route, false, lifecycle.log.ID)
 			}
 		}
 		return
@@ -307,7 +307,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Full body transfer succeeded — count as network success even for 5xx HTTP.
 	if hasRoute {
-		recordPassiveResultAsync(p.health, route, true)
+		recordPassiveResult(p.health, route, true, lifecycle.log.ID)
 	}
 }
 
@@ -324,19 +324,20 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	defer lifecycle.finish()
 	lifecycle.setAccount(account)
 
-	prepare := prepareConnectTunnel(
-		r.Context(),
-		tunnelDeps{
+	prepare := prepareConnectTunnel(connectTunnelRequest{
+		ctx: r.Context(),
+		deps: tunnelDeps{
 			router:      p.router,
 			pool:        p.pool,
 			health:      p.health,
 			metricsSink: p.metricsSink,
 			bypass:      p.bypass,
 		},
-		platName,
-		account,
-		target,
-	)
+		platformName: platName,
+		account:      account,
+		target:       target,
+		requestID:    lifecycle.log.ID,
+	})
 	if prepare.route.PlatformID != "" {
 		lifecycle.setRouteResult(prepare.route)
 	}
@@ -358,10 +359,10 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		prepare.session.upstreamConn.Close()
+		prepare.session.health.record(passiveHealthNeutral)
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_hijack", errors.New("response writer does not support hijacking"))
 		lifecycle.setHTTPStatus(ErrUpstreamRequestFailed.HTTPCode)
-		prepare.session.recordResult(false)
 		writeProxyError(w, ErrUpstreamRequestFailed)
 		return
 	}
@@ -369,15 +370,16 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	clientConn, clientBuf, err := hijacker.Hijack()
 	if err != nil {
 		prepare.session.upstreamConn.Close()
+		prepare.session.health.record(passiveHealthNeutral)
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_hijack", err)
-		prepare.session.recordResult(false)
 		return
 	}
 
 	// Write the raw CONNECT success line with proper reason phrase.
 	if _, err := clientBuf.WriteString("HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
 		prepare.session.upstreamConn.Close()
+		prepare.session.health.record(passiveHealthNeutral)
 		clientConn.Close()
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_client_response_write", err)
@@ -386,6 +388,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := clientBuf.Flush(); err != nil {
 		prepare.session.upstreamConn.Close()
+		prepare.session.health.record(passiveHealthNeutral)
 		clientConn.Close()
 		lifecycle.setProxyError(ErrUpstreamRequestFailed)
 		lifecycle.setUpstreamError("connect_client_response_flush", err)
@@ -404,7 +407,6 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setUpstreamError(relay.upstreamStage, relay.upstreamErr)
 	}
 	lifecycle.setNetOK(relay.netOK)
-	prepare.session.recordResult(relay.netOK)
 }
 
 // shouldRecordForwardCopyFailure decides whether an HTTP response body copy

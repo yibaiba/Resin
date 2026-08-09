@@ -1,11 +1,65 @@
 package proxy
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func TestClassifyTunnelHealth_UsesErrorOwnershipAndFirstByte(t *testing.T) {
+	networkErr := errors.New("network failure")
+	tests := []struct {
+		name    string
+		ingress tunnelDirectionResult
+		egress  tunnelDirectionResult
+		want    passiveHealthOutcome
+	}{
+		{name: "upstream read before first byte", ingress: tunnelDirectionResult{operation: tunnelIORead, err: networkErr}, want: passiveHealthFailure},
+		{name: "client write before first byte", ingress: tunnelDirectionResult{operation: tunnelIOWrite, err: networkErr}, want: passiveHealthNeutral},
+		{name: "upstream write before first byte", egress: tunnelDirectionResult{operation: tunnelIOWrite, err: networkErr}, want: passiveHealthFailure},
+		{name: "client read before first byte", egress: tunnelDirectionResult{operation: tunnelIORead, err: networkErr}, want: passiveHealthNeutral},
+		{name: "first upstream byte wins", ingress: tunnelDirectionResult{bytes: 1, operation: tunnelIORead, err: networkErr}, want: passiveHealthSuccess},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := classifyTunnelHealth(test.ingress, test.egress); got != test.want {
+				t.Fatalf("outcome = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTunnelRelayResult_PreservesDirectionalTerminationDetails(t *testing.T) {
+	ingressErr := fmt.Errorf("upstream read failed\nwith newline: %w", syscall.ECONNRESET)
+	ingress := finalizeTunnelDirectionResult(tunnelDirectionResult{
+		direction: tunnelDirectionIngress, bytes: 7, endOrder: 2, operation: tunnelIORead, err: ingressErr,
+	})
+	egress := finalizeTunnelDirectionResult(tunnelDirectionResult{
+		direction: tunnelDirectionEgress, bytes: 11, endOrder: 1, operation: tunnelIORead, err: io.EOF,
+	})
+	result := buildTunnelRelayResult(ingress, egress, tunnelPumpOptions{})
+
+	if result.firstEnded != tunnelDirectionEgress {
+		t.Fatalf("first ended = %q, want %q", result.firstEnded, tunnelDirectionEgress)
+	}
+	if result.ingress.bytes != 7 || result.egress.bytes != 11 {
+		t.Fatalf("direction bytes: ingress=%d egress=%d", result.ingress.bytes, result.egress.bytes)
+	}
+	if result.ingress.operation != tunnelIORead || result.ingress.errorKind != "connection_reset" ||
+		result.ingress.errno != "ECONNRESET" {
+		t.Fatalf("ingress detail: %+v", result.ingress)
+	}
+	if result.ingress.errorMessage != "upstream read failed with newline: connection reset by peer" {
+		t.Fatalf("sanitized ingress message = %q", result.ingress.errorMessage)
+	}
+	if result.egress.errorKind != "eof" || result.egress.endOrder != 1 {
+		t.Fatalf("egress detail: %+v", result.egress)
+	}
+}
 
 func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t *testing.T) {
 	clientBase, clientPeer := net.Pipe()
@@ -32,7 +86,6 @@ func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t
 			clientConn,
 			&preparedTunnel{
 				upstreamConn: upstreamConn,
-				recordResult: func(bool) {},
 			},
 			tunnelPumpOptions{},
 		)
@@ -128,7 +181,6 @@ func TestPumpPreparedTunnelReader_ClientReadResetAfterIngressDoesNotFail(t *test
 			proxyClientConn,
 			&preparedTunnel{
 				upstreamConn: proxyUpstreamConn,
-				recordResult: func(bool) {},
 			},
 			tunnelPumpOptions{},
 		)
