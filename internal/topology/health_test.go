@@ -89,6 +89,50 @@ func TestRecordResult_Recovery(t *testing.T) {
 	}
 }
 
+func TestRecordUDPProbeResult_IsolatedFromTCPHealth(t *testing.T) {
+	pool, subMgr := newHealthTestPool(2)
+	sub := subMgr.Lookup("s1")
+	h := addTestNode(pool, sub, `{"type":"ss","n":"udp-isolated"}`)
+	entry, _ := pool.GetEntry(h)
+	entry.LatencyTable.LoadEntry("example.com", node.DomainLatencyStats{
+		Ewma:        100 * time.Millisecond,
+		LastUpdated: time.Now(),
+	})
+	outbound := testutil.NewNoopOutbound()
+	entry.Outbound.Store(&outbound)
+	entry.SetEgressIP(netip.MustParseAddr("1.2.3.4"))
+
+	platform := platform.NewPlatform("p-udp", "UDP", nil, nil)
+	pool.RegisterPlatform(platform)
+	pool.RecordResult(h, true)
+	pool.RebuildAllPlatforms()
+	if !platform.View().Contains(h) || platform.NetworkView("udp").Contains(h) {
+		t.Fatal("unverified UDP node should remain TCP-routable only")
+	}
+
+	pool.RecordUDPProbeResult(h, true)
+	if !platform.NetworkView("udp").Contains(h) {
+		t.Fatal("successful UDP probe should add UDP route membership")
+	}
+	if entry.LastUDPProbeAttempt.Load() == 0 || entry.LastUDPProbeSuccess.Load() == 0 {
+		t.Fatal("successful UDP probe should record attempt and success timestamps")
+	}
+
+	pool.RecordUDPProbeResult(h, false)
+	pool.RecordUDPProbeResult(h, false)
+	if !entry.IsUDPCircuitOpen() || platform.NetworkView("udp").Contains(h) {
+		t.Fatal("UDP failure threshold should open UDP circuit and remove UDP route")
+	}
+	if entry.IsCircuitOpen() || !platform.View().Contains(h) || entry.FailureCount.Load() != 0 {
+		t.Fatal("UDP circuit changes must not alter TCP health or route membership")
+	}
+
+	pool.RecordNetworkResult(h, "udp", true)
+	if entry.IsUDPCircuitOpen() || !platform.NetworkView("udp").Contains(h) {
+		t.Fatal("successful UDP response should recover the existing verified UDP route")
+	}
+}
+
 func TestRecordResult_MaxConsecutiveFailuresPulled(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	sub := subscription.NewSubscription("s1", "TestSub", "url", true, false)

@@ -101,7 +101,7 @@ func (f *socks5UDPRelayFlow) recordResponse(payloadLength int) {
 	}
 	f.healthOKOnce.Do(func() {
 		if f.health != nil && f.route.PlatformID != "" {
-			recordPassiveResultAsync(f.health, f.route, true)
+			recordPassiveUDPResultAsync(f.health, f.route, true)
 		}
 	})
 }
@@ -152,7 +152,7 @@ func (f *socks5UDPRelayFlow) fail(stage string, err error, nodeFailure bool) {
 			f.association.recordFailure(stage, err, proxyErr)
 		}
 		if nodeFailure && proxyErr != nil && f.health != nil && f.route.PlatformID != "" {
-			recordPassiveResultAsync(f.health, f.route, false)
+			recordPassiveUDPResultAsync(f.health, f.route, false)
 		}
 		_ = f.association.removeFlow(f.target, f)
 	})

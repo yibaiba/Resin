@@ -55,6 +55,47 @@ func markNodeHealthyForNodeListTest(t *testing.T, cp *service.ControlPlaneServic
 	entry.CircuitOpenSince.Store(0)
 }
 
+func TestHandleListNodes_ExposesUDPDiagnostics(t *testing.T) {
+	srv, cp, _ := newControlPlaneTestServer(t)
+	sub := subscription.NewSubscription(
+		"11111111-1111-1111-1111-111111111111",
+		"sub-udp",
+		"https://example.com/udp",
+		true,
+		false,
+	)
+	cp.SubMgr.Register(sub)
+	const raw = `{"type":"ss","server":"1.1.1.1","port":443}`
+	addNodeForNodeListTest(t, cp, sub, raw, "203.0.113.10")
+	markNodeHealthyForNodeListTest(t, cp, raw)
+	hash := node.HashFromRawOptions([]byte(raw))
+	entry, _ := cp.Pool.GetEntry(hash)
+	entry.UDPFailureCount.Store(2)
+	entry.LastUDPProbeAttempt.Store(time.Now().Add(-time.Second).UnixNano())
+	entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
+
+	rec := doJSONRequest(t, srv, http.MethodGet, "/api/v1/nodes?subscription_id="+sub.ID, nil, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list nodes status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	items, ok := body["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items: %#v", body["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("item: %#v", items[0])
+	}
+	if item["supports_udp"] != true || item["udp_health"] != "healthy" ||
+		item["udp_failure_count"] != float64(2) {
+		t.Fatalf("UDP diagnostics: %#v", item)
+	}
+	if item["last_udp_probe_attempt"] == "" || item["last_udp_probe_success"] == "" {
+		t.Fatalf("UDP timestamps: %#v", item)
+	}
+}
+
 func TestHandleListNodes_TagKeywordFiltersByNodeName(t *testing.T) {
 	srv, cp, _ := newControlPlaneTestServer(t)
 

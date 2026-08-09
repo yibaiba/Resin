@@ -308,6 +308,7 @@ func replaceProxyE2EOutbound(
 		t.Fatal("proxy E2E node not found")
 	}
 	entry.Outbound.Store(&replacement)
+	entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
 	env.pool.NotifyNodeDirty(hash)
 	platform, ok := env.pool.GetPlatformByName("plat")
 	if !ok || !platform.NetworkView("udp").Contains(hash) {

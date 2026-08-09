@@ -104,6 +104,7 @@ type bucketCounterBaseline struct {
 	Success      int64
 	ProbeEgress  int64
 	ProbeLatency int64
+	ProbeUDP     int64
 }
 
 type leaseLifetimeSample struct {
@@ -468,8 +469,8 @@ func (m *Manager) aggregateCollectorDeltasIntoBucketLocked() {
 		globalSuccessDelta = globalRequestsDelta
 	}
 	globalProbeDelta := nonNegativeDelta(
-		globalCurrent.ProbeEgress+globalCurrent.ProbeLatency,
-		globalBase.ProbeEgress+globalBase.ProbeLatency,
+		globalCurrent.ProbeEgress+globalCurrent.ProbeLatency+globalCurrent.ProbeUDP,
+		globalBase.ProbeEgress+globalBase.ProbeLatency+globalBase.ProbeUDP,
 	)
 
 	currentPlatforms := m.collector.PlatformSnapshots()
@@ -572,6 +573,7 @@ func baselineFromSnapshot(s CountersSnapshot) bucketCounterBaseline {
 		Success:      s.SuccessRequests,
 		ProbeEgress:  s.ProbeEgress,
 		ProbeLatency: s.ProbeLatency,
+		ProbeUDP:     s.ProbeUDP,
 	}
 }
 

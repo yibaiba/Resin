@@ -589,22 +589,28 @@ type PlatformSpecFilter struct {
 
 // NodeSummary is the API response for a node.
 type NodeSummary struct {
-	NodeHash                         string    `json:"node_hash"`
-	CreatedAt                        string    `json:"created_at"`
-	Enabled                          bool      `json:"enabled"`
-	DisplayTag                       string    `json:"display_tag,omitempty"`
-	HasOutbound                      bool      `json:"has_outbound"`
-	LastError                        string    `json:"last_error,omitempty"`
-	CircuitOpenSince                 *string   `json:"circuit_open_since"`
-	FailureCount                     int       `json:"failure_count"`
-	EgressIP                         string    `json:"egress_ip,omitempty"`
-	Region                           string    `json:"region,omitempty"`
-	LastEgressUpdate                 string    `json:"last_egress_update,omitempty"`
-	LastLatencyProbeAttempt          string    `json:"last_latency_probe_attempt,omitempty"`
-	LastAuthorityLatencyProbeAttempt string    `json:"last_authority_latency_probe_attempt,omitempty"`
-	ReferenceLatencyMs               *float64  `json:"reference_latency_ms,omitempty"`
-	LastEgressUpdateAttempt          string    `json:"last_egress_update_attempt,omitempty"`
-	Tags                             []NodeTag `json:"tags"`
+	NodeHash                         string         `json:"node_hash"`
+	CreatedAt                        string         `json:"created_at"`
+	Enabled                          bool           `json:"enabled"`
+	DisplayTag                       string         `json:"display_tag,omitempty"`
+	HasOutbound                      bool           `json:"has_outbound"`
+	LastError                        string         `json:"last_error,omitempty"`
+	CircuitOpenSince                 *string        `json:"circuit_open_since"`
+	FailureCount                     int            `json:"failure_count"`
+	SupportsUDP                      bool           `json:"supports_udp"`
+	UDPHealth                        node.UDPHealth `json:"udp_health"`
+	UDPFailureCount                  int            `json:"udp_failure_count"`
+	UDPCircuitOpenSince              *string        `json:"udp_circuit_open_since"`
+	EgressIP                         string         `json:"egress_ip,omitempty"`
+	Region                           string         `json:"region,omitempty"`
+	LastEgressUpdate                 string         `json:"last_egress_update,omitempty"`
+	LastLatencyProbeAttempt          string         `json:"last_latency_probe_attempt,omitempty"`
+	LastAuthorityLatencyProbeAttempt string         `json:"last_authority_latency_probe_attempt,omitempty"`
+	ReferenceLatencyMs               *float64       `json:"reference_latency_ms,omitempty"`
+	LastEgressUpdateAttempt          string         `json:"last_egress_update_attempt,omitempty"`
+	LastUDPProbeAttempt              string         `json:"last_udp_probe_attempt,omitempty"`
+	LastUDPProbeSuccess              string         `json:"last_udp_probe_success,omitempty"`
+	Tags                             []NodeTag      `json:"tags"`
 }
 
 // IsHealthyAndEnabled follows the node-summary health rule used by API/UI
@@ -622,12 +628,15 @@ type NodeTag struct {
 
 func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEntry) NodeSummary {
 	ns := NodeSummary{
-		NodeHash:     h.Hex(),
-		CreatedAt:    entry.CreatedAt.UTC().Format(time.RFC3339Nano),
-		Enabled:      true,
-		HasOutbound:  entry.HasOutbound(),
-		LastError:    entry.GetLastError(),
-		FailureCount: int(entry.FailureCount.Load()),
+		NodeHash:        h.Hex(),
+		CreatedAt:       entry.CreatedAt.UTC().Format(time.RFC3339Nano),
+		Enabled:         true,
+		HasOutbound:     entry.HasOutbound(),
+		LastError:       entry.GetLastError(),
+		FailureCount:    int(entry.FailureCount.Load()),
+		SupportsUDP:     entry.SupportsNetwork("udp"),
+		UDPHealth:       entry.UDPHealth(),
+		UDPFailureCount: int(entry.UDPFailureCount.Load()),
 	}
 
 	if s != nil && s.Pool != nil {
@@ -638,6 +647,10 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	if cos := entry.CircuitOpenSince.Load(); cos > 0 {
 		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
 		ns.CircuitOpenSince = &t
+	}
+	if cos := entry.UDPCircuitOpenSince.Load(); cos > 0 {
+		t := time.Unix(0, cos).UTC().Format(time.RFC3339Nano)
+		ns.UDPCircuitOpenSince = &t
 	}
 
 	egressIP := entry.GetEgressIP()
@@ -667,6 +680,12 @@ func (s *ControlPlaneService) nodeEntryToSummary(h node.Hash, entry *node.NodeEn
 	}
 	if lastEgressAttempt := entry.LastEgressUpdateAttempt.Load(); lastEgressAttempt > 0 {
 		ns.LastEgressUpdateAttempt = time.Unix(0, lastEgressAttempt).UTC().Format(time.RFC3339Nano)
+	}
+	if lastUDPAttempt := entry.LastUDPProbeAttempt.Load(); lastUDPAttempt > 0 {
+		ns.LastUDPProbeAttempt = time.Unix(0, lastUDPAttempt).UTC().Format(time.RFC3339Nano)
+	}
+	if lastUDPSuccess := entry.LastUDPProbeSuccess.Load(); lastUDPSuccess > 0 {
+		ns.LastUDPProbeSuccess = time.Unix(0, lastUDPSuccess).UTC().Format(time.RFC3339Nano)
 	}
 
 	// Build tags.

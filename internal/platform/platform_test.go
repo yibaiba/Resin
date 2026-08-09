@@ -26,6 +26,11 @@ func setEntryNetworks(entry *node.NodeEntry, networks ...string) {
 		networks:     networks,
 	}
 	entry.Outbound.Store(&outbound)
+	for _, network := range networks {
+		if network == "udp" {
+			entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
+		}
+	}
 }
 
 // makeFullyRoutableEntry creates a NodeEntry that passes all 5 filter conditions.
@@ -91,6 +96,36 @@ func TestPlatform_MaintainsTCPAndUDPNetworkViews(t *testing.T) {
 	udpView := p.NetworkView("udp")
 	if udpView.Size() != 1 || !udpView.Contains(dualHash) {
 		t.Fatalf("unexpected UDP view contents: size=%d", udpView.Size())
+	}
+}
+
+func TestPlatform_UDPViewRequiresVerifiedHealthyUDP(t *testing.T) {
+	p := NewPlatform("p-udp-health", "UDP Health", nil, nil)
+	h := makeHash(`{"network":"dual-unknown"}`)
+	entry := makeFullyRoutableEntry(h, "sub1")
+	setEntryNetworks(entry, "tcp", "udp")
+	entry.LastUDPProbeSuccess.Store(0)
+
+	rebuild := func() {
+		p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
+			fn(h, entry)
+		}, alwaysLookup, usGeoLookup)
+	}
+	rebuild()
+	if !p.View().Contains(h) || p.NetworkView("udp").Contains(h) {
+		t.Fatal("unknown UDP health should affect only the UDP view")
+	}
+
+	entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
+	rebuild()
+	if !p.NetworkView("udp").Contains(h) {
+		t.Fatal("first successful UDP probe should add the node to the UDP view")
+	}
+
+	entry.UDPCircuitOpenSince.Store(time.Now().UnixNano())
+	rebuild()
+	if !p.View().Contains(h) || p.NetworkView("udp").Contains(h) {
+		t.Fatal("UDP circuit should remove only the UDP view membership")
 	}
 }
 

@@ -13,6 +13,15 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+type UDPHealth string
+
+const (
+	UDPHealthUnsupported UDPHealth = "unsupported"
+	UDPHealthUnknown     UDPHealth = "unknown"
+	UDPHealthHealthy     UDPHealth = "healthy"
+	UDPHealthCircuitOpen UDPHealth = "circuit_open"
+)
+
 // SubLookupFunc resolves a subscription ID + node hash to the subscription's
 // name, enabled status, and the tags for that node in that subscription.
 // Returns ok=false if the subscription does not exist.
@@ -237,6 +246,33 @@ func matchesAny(s string, regexes []*regexp.Regexp) bool {
 // IsCircuitOpen returns true if the node is currently circuit-broken.
 func (e *NodeEntry) IsCircuitOpen() bool {
 	return e.CircuitOpenSince.Load() != 0
+}
+
+// IsUDPCircuitOpen reports whether UDP health is circuit-broken.
+func (e *NodeEntry) IsUDPCircuitOpen() bool {
+	return e != nil && e.UDPCircuitOpenSince.Load() != 0
+}
+
+// UDPHealth reports the transport-specific health state exposed by the API.
+func (e *NodeEntry) UDPHealth() UDPHealth {
+	if e == nil {
+		return UDPHealthUnsupported
+	}
+	if !e.SupportsNetwork(N.NetworkUDP) {
+		return UDPHealthUnsupported
+	}
+	if e.IsUDPCircuitOpen() {
+		return UDPHealthCircuitOpen
+	}
+	if e.LastUDPProbeSuccess.Load() == 0 {
+		return UDPHealthUnknown
+	}
+	return UDPHealthHealthy
+}
+
+// IsUDPRouteHealthy reports whether the node satisfies UDP routing health.
+func (e *NodeEntry) IsUDPRouteHealthy() bool {
+	return e != nil && e.IsHealthy() && e.SupportsNetwork(N.NetworkTCP) && e.UDPHealth() == UDPHealthHealthy
 }
 
 // HasLatency returns true if the node has at least one latency record.

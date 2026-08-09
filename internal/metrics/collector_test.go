@@ -53,3 +53,13 @@ func TestCollector_SwapConnectionWindowMax_TracksPeakAndResetsBaseline(t *testin
 		t.Fatalf("second window max mismatch: inbound=%d outbound=%d", inboundMax, outboundMax)
 	}
 }
+
+func TestCollector_RecordProbe_UDP(t *testing.T) {
+	c := NewCollector(100, 3000)
+	c.RecordProbe(ProbeKindUDP)
+
+	snapshot := c.Snapshot()
+	if snapshot.ProbeUDP != 1 {
+		t.Fatalf("UDP probe count: got %d, want 1", snapshot.ProbeUDP)
+	}
+}

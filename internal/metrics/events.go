@@ -9,6 +9,7 @@ type ProbeKind string
 const (
 	ProbeKindEgress  ProbeKind = "egress"
 	ProbeKindLatency ProbeKind = "latency"
+	ProbeKindUDP     ProbeKind = "udp"
 )
 
 // TrafficDeltaEvent reports byte counts from a countingConn flush.

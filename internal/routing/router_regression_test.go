@@ -145,6 +145,11 @@ func setRouteEntryNetworks(entry *node.NodeEntry, networks ...string) {
 		networks:     networks,
 	}
 	entry.Outbound.Store(&outbound)
+	for _, network := range networks {
+		if network == "udp" {
+			entry.LastUDPProbeSuccess.Store(time.Now().UnixNano())
+		}
+	}
 }
 
 func waitForDomainLatency(t *testing.T, e *node.NodeEntry, domain string) {

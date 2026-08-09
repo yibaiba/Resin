@@ -68,7 +68,18 @@ type mockPassiveHealthRecorder struct {
 	platformID   string
 	nodeHash     node.Hash
 	success      bool
+	network      string
 	done         chan struct{}
+}
+
+func (m *mockPassiveHealthRecorder) RecordPassiveNetworkResult(
+	platformID string,
+	hash node.Hash,
+	network string,
+	success bool,
+) {
+	m.network = network
+	m.RecordPassiveResult(platformID, hash, success)
 }
 
 func (m *mockPassiveHealthRecorder) RecordPassiveResult(platformID string, hash node.Hash, success bool) {
@@ -147,6 +158,26 @@ func TestRecordPassiveResultAsync_UsesPlatformAwareRecorder(t *testing.T) {
 	}
 	if rec.platformID != "plat-1" || rec.nodeHash != h || rec.success {
 		t.Fatalf("unexpected passive call payload: platform=%q hash=%s success=%v", rec.platformID, rec.nodeHash.Hex(), rec.success)
+	}
+}
+
+func TestRecordPassiveUDPResultAsync_UsesNetworkAwareRecorder(t *testing.T) {
+	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"udp-aware"}`))
+	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+
+	recordPassiveUDPResultAsync(rec, routing.RouteResult{PlatformID: "plat-udp", NodeHash: h}, false)
+
+	select {
+	case <-rec.done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for UDP health result")
+	}
+	if rec.passiveCalls.Load() != 1 || rec.resultCalls.Load() != 0 {
+		t.Fatalf("network-aware calls=%d fallback=%d", rec.passiveCalls.Load(), rec.resultCalls.Load())
+	}
+	if rec.network != "udp" || rec.platformID != "plat-udp" || rec.nodeHash != h || rec.success {
+		t.Fatalf("unexpected UDP health payload: network=%q platform=%q hash=%s success=%v",
+			rec.network, rec.platformID, rec.nodeHash.Hex(), rec.success)
 	}
 }
 

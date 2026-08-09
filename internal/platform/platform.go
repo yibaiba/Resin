@@ -134,7 +134,7 @@ func (p *Platform) updateNetworkViews(h node.Hash, entry *node.NodeEntry) {
 		return
 	}
 	p.tcpView.Add(h)
-	if entry.SupportsNetwork(N.NetworkUDP) {
+	if entry.IsUDPRouteHealthy() {
 		p.udpView.Add(h)
 		return
 	}

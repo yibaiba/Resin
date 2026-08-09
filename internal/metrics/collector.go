@@ -26,6 +26,7 @@ type counters struct {
 	outboundConnsPeak atomic.Int64
 	probeEgress       atomic.Int64
 	probeLatency      atomic.Int64
+	probeUDP          atomic.Int64
 
 	// Latency histogram: fixed-bucket durations.
 	// Each regular bucket[i] = count of requests with latency in
@@ -45,6 +46,7 @@ type CountersSnapshot struct {
 	OutboundConns   int64
 	ProbeEgress     int64
 	ProbeLatency    int64
+	ProbeUDP        int64
 	LatencyBuckets  []int64
 	LatencyBinMs    int
 	LatencyOverMs   int
@@ -195,6 +197,8 @@ func (c *Collector) RecordProbe(kind ProbeKind) {
 		c.global.probeEgress.Add(1)
 	case ProbeKindLatency:
 		c.global.probeLatency.Add(1)
+	case ProbeKindUDP:
+		c.global.probeUDP.Add(1)
 	}
 }
 
@@ -232,6 +236,7 @@ func snapshot(ct *counters) CountersSnapshot {
 		OutboundConns:   ct.outboundConns.Load(),
 		ProbeEgress:     ct.probeEgress.Load(),
 		ProbeLatency:    ct.probeLatency.Load(),
+		ProbeUDP:        ct.probeUDP.Load(),
 		LatencyBuckets:  make([]int64, len(ct.latencyBuckets)),
 		LatencyBinMs:    ct.latencyBinMs,
 		LatencyOverMs:   ct.latencyOverMs,
