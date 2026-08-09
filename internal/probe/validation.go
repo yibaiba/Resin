@@ -3,8 +3,9 @@ package probe
 import (
 	"errors"
 	"fmt"
-	"log"
+	"strconv"
 
+	"github.com/Resinat/Resin/internal/diagnosticlog"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/topology"
 )
@@ -101,6 +102,7 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	}
 	body, latency, fetchErr := m.fetcher(task.key.hash, egressTraceURL)
 	if fetchErr != nil {
+		logValidationTransportError(task.key.hash, validation, fetchErr)
 		m.pool.UpdateNodeEgressIP(task.key.hash, nil, nil)
 		m.pool.CompleteTCPValidation(task.key.hash, validation, false)
 		return
@@ -108,17 +110,26 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	if latency > 0 {
 		m.pool.RecordLatency(task.key.hash, egressTraceDomain, &latency)
 	}
-	updateEgressFromValidation(m.pool, task.key.hash, body)
+	if err := updateEgressFromValidation(m.pool, task.key.hash, body); err != nil {
+		diagnosticlog.Print("[node-health]",
+			diagnosticlog.F("event", "validation_trace_parse_failed"),
+			diagnosticlog.F("source", string(validation.Kind)),
+			diagnosticlog.F("node_hash", task.key.hash.Hex()),
+			diagnosticlog.F("generation", strconv.FormatUint(validation.Generation, 10)),
+			diagnosticlog.F("error", err.Error()),
+		)
+	}
 	m.pool.CompleteTCPValidation(task.key.hash, validation, true)
 }
 
-func updateEgressFromValidation(pool *topology.GlobalNodePool, hash node.Hash, body []byte) {
+func updateEgressFromValidation(pool *topology.GlobalNodePool, hash node.Hash, body []byte) error {
 	ip, loc, err := ParseCloudflareTrace(body)
 	if err != nil {
 		pool.UpdateNodeEgressIP(hash, nil, nil)
-		return
+		return err
 	}
 	pool.UpdateNodeEgressIP(hash, &ip, loc)
+	return nil
 }
 
 func (m *ProbeManager) cancelDroppedValidation(task probeTask, reason string) {
@@ -162,11 +173,21 @@ func validationMatches(state node.TCPHealthState, validation node.TCPValidation)
 }
 
 func logValidationDrop(hash node.Hash, validation node.TCPValidation, reason string) {
-	log.Printf(
-		"[node-health] event=validation_dropped source=%s node_hash=%s generation=%d reason=%q",
-		validation.Kind,
-		hash.Hex(),
-		validation.Generation,
-		reason,
+	diagnosticlog.Print("[node-health]",
+		diagnosticlog.F("event", "validation_dropped"),
+		diagnosticlog.F("source", string(validation.Kind)),
+		diagnosticlog.F("node_hash", hash.Hex()),
+		diagnosticlog.F("generation", strconv.FormatUint(validation.Generation, 10)),
+		diagnosticlog.F("reason", reason),
+	)
+}
+
+func logValidationTransportError(hash node.Hash, validation node.TCPValidation, err error) {
+	diagnosticlog.Print("[node-health]",
+		diagnosticlog.F("event", "validation_transport_failed"),
+		diagnosticlog.F("source", string(validation.Kind)),
+		diagnosticlog.F("node_hash", hash.Hex()),
+		diagnosticlog.F("generation", strconv.FormatUint(validation.Generation, 10)),
+		diagnosticlog.F("error", err.Error()),
 	)
 }

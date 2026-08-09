@@ -51,6 +51,19 @@ func TestSanitizeUpstreamErrMsg_TruncatesAndNormalizes(t *testing.T) {
 	}
 }
 
+func TestSanitizeUpstreamErrMsg_RemovesSensitiveURLDetails(t *testing.T) {
+	raw := `Get "https://alice:password@example.com/private/path?token=abc": password=hunter2`
+	got := sanitizeUpstreamErrMsg(raw)
+	for _, forbidden := range []string{"alice", "password@", "/private/path", "token=abc", "hunter2"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("sanitized error contains %q: %q", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "https://example.com") {
+		t.Fatalf("sanitized error lost URL host: %q", got)
+	}
+}
+
 func TestIsBenignTunnelCopyError(t *testing.T) {
 	cases := []struct {
 		name string

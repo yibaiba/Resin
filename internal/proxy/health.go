@@ -1,10 +1,11 @@
 package proxy
 
 import (
-	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/Resinat/Resin/internal/diagnosticlog"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/routing"
 	N "github.com/sagernet/sing/common/network"
@@ -39,6 +40,7 @@ const (
 
 type requestHealthFeedback struct {
 	once      sync.Once
+	recorded  atomic.Uint32
 	health    HealthRecorder
 	route     routing.RouteResult
 	requestID string
@@ -57,6 +59,7 @@ func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
 		return
 	}
 	f.once.Do(func() {
+		f.recorded.Store(uint32(outcome) + 1)
 		switch outcome {
 		case passiveHealthSuccess:
 			recordPassiveResult(f.health, f.route, true, f.requestID)
@@ -66,13 +69,30 @@ func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
 	})
 }
 
+func (f *requestHealthFeedback) outcome() passiveHealthOutcome {
+	if f == nil {
+		return passiveHealthNeutral
+	}
+	recorded := f.recorded.Load()
+	if recorded == 0 {
+		return passiveHealthNeutral
+	}
+	return passiveHealthOutcome(recorded - 1)
+}
+
 func recordPassiveResult(health HealthRecorder, route routing.RouteResult, success bool, requestID string) {
 	if health == nil {
 		return
 	}
 	if recorder, ok := health.(passiveRequestHealthRecorder); ok {
 		if err := recorder.RecordPassiveResultWithRequest(route.PlatformID, route.NodeHash, success, requestID); err != nil {
-			log.Printf("[node-health] event=passive_feedback_error source=passive request_id=%q node_hash=%s error=%q", requestID, route.NodeHash.Hex(), err)
+			diagnosticlog.Print("[node-health]",
+				diagnosticlog.F("event", "passive_feedback_error"),
+				diagnosticlog.F("source", "passive"),
+				diagnosticlog.F("request_id", requestID),
+				diagnosticlog.F("node_hash", route.NodeHash.Hex()),
+				diagnosticlog.F("error", err.Error()),
+			)
 		}
 		return
 	}

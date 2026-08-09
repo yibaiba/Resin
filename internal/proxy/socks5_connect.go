@@ -22,6 +22,7 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 		target:       session.handshake.request.target,
 		requestID:    lifecycle.log.ID,
 	})
+	lifecycle.setHealthFeedback(prepare.health)
 	if prepare.route.PlatformID != "" {
 		lifecycle.setRouteResult(prepare.route)
 	}
@@ -42,6 +43,7 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 	relay := pumpPreparedTunnel(session.conn, session.reader, prepare.session, tunnelPumpOptions{
 		onFirstIngressByte: lifecycle.markFirstByteReceived,
 	})
+	lifecycle.setTunnelRelay(relay)
 	lifecycle.addIngressBytes(relay.ingressBytes)
 	lifecycle.addEgressBytes(relay.egressBytes)
 	if relay.proxyErr != nil {

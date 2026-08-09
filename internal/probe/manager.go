@@ -3,13 +3,13 @@ package probe
 import (
 	"context"
 	"fmt"
-	"log"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/Resinat/Resin/internal/diagnosticlog"
 	"github.com/Resinat/Resin/internal/netutil"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/scanloop"
@@ -860,10 +860,10 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 	_, stage, err := m.performEgressProbe(hash)
 	if err != nil {
 		if stage == egressProbeParseError {
-			log.Printf("[probe] parse egress IP for %s: %v", hash.Hex(), err)
+			logProbeFailure(topology.HealthSourceEgressProbe, hash, "trace_parse_failed", err)
 			return
 		}
-		log.Printf("[probe] egress probe failed for %s: %v", hash.Hex(), err)
+		logProbeFailure(topology.HealthSourceEgressProbe, hash, "transport_failed", err)
 		return
 	}
 }
@@ -885,7 +885,7 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 	}
 
 	if err := m.performLatencyProbe(hash, testURL); err != nil {
-		log.Printf("[probe] latency probe failed for %s: %v", hash.Hex(), err)
+		logProbeFailure(topology.HealthSourceLatencyProbe, hash, "transport_failed", err)
 		return
 	}
 }
@@ -932,8 +932,17 @@ func (key probeTaskKey) isValidation() bool {
 
 func (m *ProbeManager) recordProbeTCPHealth(hash node.Hash, source topology.HealthSource, success bool) {
 	if err := m.pool.RecordTCPHealthResult(hash, source, success, ""); err != nil {
-		log.Printf("[node-health] event=probe_feedback_error source=%s node_hash=%s error=%q", source, hash.Hex(), err)
+		logProbeFailure(source, hash, "probe_feedback_error", err)
 	}
+}
+
+func logProbeFailure(source topology.HealthSource, hash node.Hash, event string, err error) {
+	diagnosticlog.Print("[node-health]",
+		diagnosticlog.F("event", event),
+		diagnosticlog.F("source", string(source)),
+		diagnosticlog.F("node_hash", hash.Hex()),
+		diagnosticlog.F("error", err.Error()),
+	)
 }
 
 func (m *ProbeManager) currentLatencyTestURL() string {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/proxy"
+	"github.com/google/uuid"
 )
 
 func ptrInt(v int) *int { return &v }
@@ -680,5 +681,28 @@ func TestRepo_InsertBatchWithoutOpenReturnsNoActiveDB(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no active db") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRepo_InsertBatchGeneratesIDForExternalEntry(t *testing.T) {
+	repo := NewRepo(t.TempDir(), 1<<20, 5)
+	if err := repo.Open(); err != nil {
+		t.Fatalf("repo.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	inserted, err := repo.InsertBatch([]proxy.RequestLogEntry{{
+		StartedAtNs: time.Now().UnixNano(),
+		ProxyType:   proxy.ProxyTypeForward,
+	}})
+	if err != nil || inserted != 1 {
+		t.Fatalf("InsertBatch: inserted=%d err=%v", inserted, err)
+	}
+	rows, _, _, err := repo.List(ListFilter{Limit: 10})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("List: rows=%d err=%v", len(rows), err)
+	}
+	if _, err := uuid.Parse(rows[0].ID); err != nil {
+		t.Fatalf("generated ID = %q: %v", rows[0].ID, err)
 	}
 }

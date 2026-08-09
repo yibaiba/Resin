@@ -248,6 +248,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		transport = p.outboundHTTPTransport(routed)
 	}
 	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
+	lifecycle.setHealthFeedback(feedback)
 	outReq := prepareForwardOutboundRequest(r)
 	upstreamTrace := newUpstreamRequestTrace(func() {
 		lifecycle.markFirstByteReceived()
@@ -346,6 +347,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		target:       target,
 		requestID:    lifecycle.log.ID,
 	})
+	lifecycle.setHealthFeedback(prepare.health)
 	if prepare.route.PlatformID != "" {
 		lifecycle.setRouteResult(prepare.route)
 	}
@@ -408,6 +410,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		requireBidirectionalTraffic: true,
 		onFirstIngressByte:          lifecycle.markFirstByteReceived,
 	})
+	lifecycle.setTunnelRelay(relay)
 	lifecycle.addIngressBytes(relay.ingressBytes)
 	lifecycle.addEgressBytes(relay.egressBytes)
 	if relay.proxyErr != nil {

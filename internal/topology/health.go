@@ -67,6 +67,17 @@ func (p *GlobalNodePool) RecordTCPHealthResult(
 
 	transition := entry.RecordTCPHealth(success, p.currentMaxConsecutiveFailures())
 	p.applyTCPHealthTransition(hash, transition)
+	event := ordinaryTCPHealthEvent(transition, success)
+	if event != "" {
+		outcome := "failure"
+		if success {
+			outcome = "success"
+		}
+		writeTCPHealthLog(tcpHealthLog{
+			event: event, source: source, hash: hash, requestID: requestID,
+			outcome: outcome, state: transition.Current,
+		})
+	}
 	if transition.Validation == nil {
 		return nil
 	}
@@ -92,6 +103,10 @@ func (p *GlobalNodePool) BeginTCPValidation(
 	if transition.Validation == nil {
 		return nil
 	}
+	writeTCPHealthLog(tcpHealthLog{
+		event: "validation_requested", source: source, hash: hash,
+		state: transition.Current,
+	})
 	return p.enqueueTCPValidation(entry, TCPValidationRequest{
 		Hash:       hash,
 		Validation: *transition.Validation,
@@ -111,9 +126,22 @@ func (p *GlobalNodePool) CompleteTCPValidation(
 	}
 	transition := entry.CompleteTCPValidation(validation, success, time.Now().UnixNano())
 	if !transition.Changed() {
+		writeTCPHealthLog(tcpHealthLog{
+			event: "validation_stale", source: HealthSource(validation.Kind), hash: hash,
+			outcome: "ignored", state: transition.Current,
+		})
 		return false
 	}
 	p.applyTCPHealthTransition(hash, transition)
+	outcome := "failure"
+	if success {
+		outcome = "success"
+	}
+	writeTCPHealthLog(tcpHealthLog{
+		event:  validationResultEvent(validation, success),
+		source: HealthSource(validation.Kind), hash: hash, outcome: outcome,
+		state: transition.Current,
+	})
 	return true
 }
 
@@ -124,7 +152,14 @@ func (p *GlobalNodePool) CancelTCPValidation(hash node.Hash, validation node.TCP
 	if !ok {
 		return false
 	}
-	return entry.CancelTCPValidation(validation).Changed()
+	transition := entry.CancelTCPValidation(validation)
+	if transition.Changed() {
+		writeTCPHealthLog(tcpHealthLog{
+			event: "validation_canceled", source: HealthSource(validation.Kind), hash: hash,
+			outcome: "neutral", state: transition.Current,
+		})
+	}
+	return transition.Changed()
 }
 
 func (p *GlobalNodePool) enqueueTCPValidation(
@@ -132,13 +167,26 @@ func (p *GlobalNodePool) enqueueTCPValidation(
 	request TCPValidationRequest,
 ) error {
 	if p.tcpValidationRequester == nil {
-		entry.CancelTCPValidation(request.Validation)
+		state := entry.CancelTCPValidation(request.Validation).Current
+		writeTCPHealthLog(tcpHealthLog{
+			event: "validation_enqueue_failed", source: request.Source, hash: request.Hash,
+			requestID: request.RequestID, outcome: "error", state: state,
+			reason: ErrTCPValidationRequesterUnavailable.Error(),
+		})
 		return ErrTCPValidationRequesterUnavailable
 	}
 	if err := p.tcpValidationRequester(request); err != nil {
-		entry.CancelTCPValidation(request.Validation)
+		state := entry.CancelTCPValidation(request.Validation).Current
+		writeTCPHealthLog(tcpHealthLog{
+			event: "validation_enqueue_failed", source: request.Source, hash: request.Hash,
+			requestID: request.RequestID, outcome: "error", state: state, reason: err.Error(),
+		})
 		return fmt.Errorf("enqueue %s validation: %w", request.Validation.Kind, err)
 	}
+	writeTCPHealthLog(tcpHealthLog{
+		event: "validation_enqueued", source: request.Source, hash: request.Hash,
+		requestID: request.RequestID, outcome: "pending", state: entry.TCPHealth(),
+	})
 	return nil
 }
 

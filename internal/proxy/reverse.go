@@ -321,6 +321,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		transport = p.outboundHTTPTransport(routed)
 	}
 	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
+	lifecycle.setHealthFeedback(feedback)
 	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
 	transferObserver := &responseTransferObserver{}
 	responseWriter := &observedResponseWriter{
@@ -352,6 +353,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			*req = *req.WithContext(reqCtx)
 		},
 		Transport: transport,
+		ErrorLog:  newLifecycleDiagnosticLogger(lifecycle),
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
 			proxyErr := classifyUpstreamError(err)
 			if proxyErr == nil || errors.Is(req.Context().Err(), context.Canceled) {
