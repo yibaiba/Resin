@@ -276,6 +276,13 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
+		if failure := requestBodyObserver.firstFailure(); failure != nil {
+			recordClientRequestBodyFailure(lifecycle, feedback, failure)
+			if !errors.Is(r.Context().Err(), context.Canceled) {
+				writeProxyError(w, ErrUpstreamRequestFailed)
+			}
+			return
+		}
 		proxyErr := classifyUpstreamError(err)
 		if proxyErr == nil || errors.Is(r.Context().Err(), context.Canceled) {
 			// context.Canceled — skip health recording, close silently.
@@ -285,18 +292,10 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			feedback.record(passiveHealthNeutral)
 			return
 		}
-		stage := "forward_roundtrip"
-		stageErr := err
-		if failure := requestBodyObserver.firstFailure(); failure != nil {
-			stage = failure.stage
-			stageErr = failure.err
-		}
 		lifecycle.setProxyError(proxyErr)
-		lifecycle.setUpstreamError(stage, stageErr)
+		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-		if requestBodyObserver.firstFailure() != nil {
-			feedback.record(passiveHealthNeutral)
-		} else if hasRoute {
+		if hasRoute {
 			feedback.record(passiveHealthFailure)
 		}
 		writeProxyError(w, proxyErr)

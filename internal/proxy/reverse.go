@@ -364,6 +364,14 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport: transport,
 		ErrorLog:  newLifecycleDiagnosticLogger(lifecycle),
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			if failure := transferObserver.firstFailure(); failure != nil &&
+				failure.stage == "reverse_client_body_read" {
+				recordClientRequestBodyFailure(lifecycle, feedback, failure)
+				if !errors.Is(req.Context().Err(), context.Canceled) {
+					writeProxyError(rw, ErrUpstreamRequestFailed)
+				}
+				return
+			}
 			proxyErr := classifyUpstreamError(err)
 			if proxyErr == nil || errors.Is(req.Context().Err(), context.Canceled) {
 				// context.Canceled — no health recording, silently close.
