@@ -4,7 +4,9 @@ import "context"
 
 // InboundPolicy carries endpoint-specific behavior into shared proxy handlers.
 type InboundPolicy struct {
-	RequireProxyAuthInfo bool
+	RequireProxyAuthInfo      bool
+	Socks5UDPAssociationScope string
+	Socks5UDPPort             uint16
 }
 
 type inboundPolicyContextKey struct{}
