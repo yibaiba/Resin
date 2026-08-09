@@ -1,5 +1,9 @@
 package node
 
+import "sync/atomic"
+
+var tcpValidationSequence atomic.Uint64
+
 // TCPValidationKind identifies an independent TCP health validation.
 type TCPValidationKind string
 
@@ -135,7 +139,7 @@ func (e *NodeEntry) RecordTCPHealth(success bool, threshold int) TCPHealthTransi
 		}
 
 		validation := TCPValidation{
-			Generation: nextValidationGeneration(current.ValidationGeneration),
+			Generation: nextValidationGeneration(),
 			Kind:       TCPValidationConfirmation,
 		}
 		next.ValidationGeneration = validation.Generation
@@ -153,7 +157,7 @@ func (e *NodeEntry) BeginTCPValidation(kind TCPValidationKind, threshold int) TC
 			return current, nil
 		}
 		validation := TCPValidation{
-			Generation: nextValidationGeneration(current.ValidationGeneration),
+			Generation: nextValidationGeneration(),
 			Kind:       kind,
 		}
 		next := current
@@ -308,12 +312,13 @@ func healthyTCPState(generation uint64) TCPHealthState {
 	}
 }
 
-func nextValidationGeneration(current uint64) uint64 {
-	next := current + 1
-	if next == 0 {
-		return 1
+func nextValidationGeneration() uint64 {
+	for {
+		next := tcpValidationSequence.Add(1)
+		if next != 0 {
+			return next
+		}
 	}
-	return next
 }
 
 func incrementFailureCount(current int32) int32 {

@@ -61,6 +61,31 @@ func TestTunnelRelayResult_PreservesDirectionalTerminationDetails(t *testing.T) 
 	}
 }
 
+func TestTunnelRelayResult_CloseWriteFailureIsRequestFailureOnly(t *testing.T) {
+	ingress := finalizeTunnelDirectionResult(tunnelDirectionResult{
+		direction: tunnelDirectionIngress, bytes: 7, endOrder: 1,
+		operation: tunnelIORead, err: io.EOF, closeWriteErr: syscall.EPIPE,
+	})
+	egress := finalizeTunnelDirectionResult(tunnelDirectionResult{
+		direction: tunnelDirectionEgress, bytes: 11, endOrder: 2,
+		operation: tunnelIORead, err: io.EOF,
+	})
+	result := buildTunnelRelayResult(ingress, egress, tunnelPumpOptions{})
+
+	if result.netOK || result.upstreamStage != "connect_client_close_write" {
+		t.Fatalf("request result: net_ok=%v stage=%q", result.netOK, result.upstreamStage)
+	}
+	if !errors.Is(result.upstreamErr, syscall.EPIPE) {
+		t.Fatalf("upstream error = %v, want EPIPE", result.upstreamErr)
+	}
+	if result.healthOutcome != passiveHealthSuccess {
+		t.Fatalf("health outcome = %d, want success", result.healthOutcome)
+	}
+	if ingress.closeWriteErrorKind != "broken_pipe" || ingress.closeWriteErrno != "EPIPE" {
+		t.Fatalf("close-write detail: %+v", ingress)
+	}
+}
+
 func TestPumpPreparedTunnelReader_FallsBackToFullCloseWhenHalfCloseUnavailable(t *testing.T) {
 	clientBase, clientPeer := net.Pipe()
 	upstreamBase, upstreamPeer := net.Pipe()

@@ -308,7 +308,13 @@ func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
 	pool.RegisterPlatform(plat)
 
 	pool.RecordPassiveResult(plat.ID, h, false)
-	pool.RecordPassiveResult(plat.ID, h, false)
+	accepted, err := pool.RecordPassiveResultWithRequestStatus(plat.ID, h, false, "request-disabled")
+	if err != nil {
+		t.Fatalf("disabled passive result: %v", err)
+	}
+	if accepted {
+		t.Fatal("disabled passive failure should report suppressed feedback")
+	}
 	if got := entry.TCPHealth().FailureCount; got != 0 {
 		t.Fatalf("passive failures should be ignored, failure count=%d", got)
 	}
@@ -320,6 +326,41 @@ func TestRecordPassiveResult_DisabledPlatformSkipsFailures(t *testing.T) {
 	pool.RecordResult(h, false)
 	if !entry.IsCircuitOpen() {
 		t.Fatal("active health feedback should still open circuit")
+	}
+}
+
+func TestCompleteTCPValidation_NodeReplacementRejectsStaleMetadata(t *testing.T) {
+	pool, subMgr := newHealthTestPool(1)
+	sub := subMgr.Lookup("s1")
+	raw := `{"type":"ss","n":"replaced"}`
+	hash := addTestNode(pool, sub, raw)
+	oldEntry, _ := pool.GetEntry(hash)
+	oldEntry.RestoreTCPHealth(1, 0)
+	transition := oldEntry.BeginTCPValidation(node.TCPValidationConfirmation, 1)
+	if transition.Validation == nil {
+		t.Fatal("confirmation was not created")
+	}
+
+	staleIP := netip.MustParseAddr("198.51.100.10")
+	applied := pool.CompleteTCPValidationWithEffect(hash, TCPValidationCompletion{
+		Validation:    *transition.Validation,
+		Success:       true,
+		ExpectedEntry: oldEntry,
+		ApplyIfCurrent: func(entry *node.NodeEntry) {
+			pool.RemoveNodeFromSub(hash, "s1")
+			pool.AddNodeFromSub(hash, []byte(raw), "s1")
+			pool.UpdateNodeEgressIPForEntry(hash, entry, &staleIP, nil)
+		},
+	})
+	if applied {
+		t.Fatal("completion should be stale after node replacement")
+	}
+	newEntry, ok := pool.GetEntry(hash)
+	if !ok || newEntry == oldEntry {
+		t.Fatal("node was not replaced")
+	}
+	if got := newEntry.GetEgressIP(); got.IsValid() {
+		t.Fatalf("replacement received stale egress IP %s", got)
 	}
 }
 

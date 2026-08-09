@@ -286,8 +286,11 @@ func TestForwardProxy_E2EHTTPClientCanceledBeforeResponse(t *testing.T) {
 
 	select {
 	case logEv := <-emitter.logCh:
-		if !logEv.NetOK {
-			t.Fatal("client-canceled forward HTTP should log net_ok=true")
+		if logEv.NetOK {
+			t.Fatal("client-canceled forward HTTP should log net_ok=false")
+		}
+		if logEv.UpstreamStage != "forward_client_canceled" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "forward_client_canceled")
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected forward log event")
@@ -468,8 +471,11 @@ func TestReverseProxy_E2EClientCanceledBeforeResponse(t *testing.T) {
 
 	select {
 	case logEv := <-emitter.logCh:
-		if !logEv.NetOK {
-			t.Fatal("client-canceled reverse request should log net_ok=true")
+		if logEv.NetOK {
+			t.Fatal("client-canceled reverse request should log net_ok=false")
+		}
+		if logEv.UpstreamStage != "reverse_client_canceled" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "reverse_client_canceled")
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected reverse log event")
@@ -938,8 +944,11 @@ func TestForwardProxy_CONNECTClientCanceledBeforeResponse(t *testing.T) {
 
 	select {
 	case logEv := <-emitter.logCh:
-		if !logEv.NetOK {
-			t.Fatal("client-canceled CONNECT should log net_ok=true")
+		if logEv.NetOK {
+			t.Fatal("client-canceled CONNECT should log net_ok=false")
+		}
+		if logEv.UpstreamStage != "connect_dial" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "connect_dial")
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected CONNECT log event")

@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -25,14 +26,18 @@ const (
 )
 
 type tunnelDirectionResult struct {
-	direction    tunnelDirection
-	bytes        int64
-	endOrder     uint32
-	operation    tunnelIOOperation
-	err          error
-	errorKind    string
-	errno        string
-	errorMessage string
+	direction              tunnelDirection
+	bytes                  int64
+	endOrder               uint32
+	operation              tunnelIOOperation
+	err                    error
+	errorKind              string
+	errno                  string
+	errorMessage           string
+	closeWriteErr          error
+	closeWriteErrorKind    string
+	closeWriteErrno        string
+	closeWriteErrorMessage string
 }
 
 type tunnelRelayResult struct {
@@ -59,7 +64,7 @@ type tunnelDirectionPump struct {
 	direction   tunnelDirection
 	onFirstByte func()
 	endOrder    *atomic.Uint32
-	closeBoth   func()
+	closeBoth   func() bool
 	results     chan<- tunnelDirectionResult
 }
 
@@ -95,8 +100,13 @@ func pumpPreparedTunnelReader(
 	}
 
 	var closeOnce sync.Once
-	closeBoth := func() {
-		closeOnce.Do(func() { closeTunnel(clientConn, session) })
+	closeBoth := func() bool {
+		closedByCaller := false
+		closeOnce.Do(func() {
+			closedByCaller = true
+			closeTunnel(clientConn, session)
+		})
+		return closedByCaller
 	}
 	results := make(chan tunnelDirectionResult, 2)
 	var endOrder atomic.Uint32
@@ -117,7 +127,7 @@ func pumpPreparedTunnelReader(
 
 	first := <-results
 	second := <-results
-	closeBoth()
+	_ = closeBoth()
 	result := buildTunnelRelayResult(first, second, opts)
 	session.health.record(result.healthOutcome)
 	return result
@@ -126,15 +136,19 @@ func pumpPreparedTunnelReader(
 func (p tunnelDirectionPump) run() {
 	n, operation, err := copyTunnelStream(p.dst, p.src, p.onFirstByte)
 	order := p.endOrder.Add(1)
-	if !isBenignTunnelCopyError(err) || closeWriteErr(p.dst) != nil {
-		p.closeBoth()
+	closeErr := closeWriteErr(p.dst)
+	if !isBenignTunnelCopyError(err) || closeErr != nil {
+		if !p.closeBoth() {
+			closeErr = nil
+		}
 	}
 	p.results <- finalizeTunnelDirectionResult(tunnelDirectionResult{
-		direction: p.direction,
-		bytes:     n,
-		endOrder:  order,
-		operation: operation,
-		err:       err,
+		direction:     p.direction,
+		bytes:         n,
+		endOrder:      order,
+		operation:     operation,
+		err:           err,
+		closeWriteErr: closeErr,
 	})
 }
 
@@ -143,6 +157,10 @@ func finalizeTunnelDirectionResult(result tunnelDirectionResult) tunnelDirection
 	result.errorKind = detail.Kind
 	result.errno = detail.Errno
 	result.errorMessage = detail.Message
+	closeWriteDetail := summarizeUpstreamError(result.closeWriteErr)
+	result.closeWriteErrorKind = closeWriteDetail.Kind
+	result.closeWriteErrno = closeWriteDetail.Errno
+	result.closeWriteErrorMessage = closeWriteDetail.Message
 	return result
 }
 
@@ -220,9 +238,17 @@ func setTunnelRequestError(result *tunnelRelayResult, opts tunnelPumpOptions) {
 		setTunnelCopyError(result, "connect_upstream_to_client_copy", result.ingress.err)
 	case !egressBenign:
 		setTunnelCopyError(result, "connect_client_to_upstream_copy", result.egress.err)
+	case isTunnelCloseWriteFailure(result.ingress.closeWriteErr):
+		setTunnelCopyError(result, "connect_client_close_write", result.ingress.closeWriteErr)
+	case isTunnelCloseWriteFailure(result.egress.closeWriteErr):
+		setTunnelCopyError(result, "connect_upstream_close_write", result.egress.closeWriteErr)
 	case opts.requireBidirectionalTraffic && (result.ingress.bytes == 0 || result.egress.bytes == 0):
 		setTunnelZeroTrafficError(result)
 	}
+}
+
+func isTunnelCloseWriteFailure(err error) bool {
+	return err != nil && !errors.Is(err, errHalfCloseUnsupported)
 }
 
 func classifyTunnelHealth(

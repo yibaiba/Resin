@@ -46,10 +46,17 @@ func recordClientRequestBodyFailure(
 	feedback.record(passiveHealthNeutral)
 }
 
+func recordCanceledRequest(lifecycle *requestLifecycle, stage string, err error) {
+	if err == nil {
+		err = context.Canceled
+	}
+	lifecycle.setUpstreamError(stage, err)
+	lifecycle.setNetOK(false)
+}
+
 func isResponseTransferFailure(err error) bool {
 	return err != nil &&
 		!errors.Is(err, io.EOF) &&
-		!errors.Is(err, context.Canceled) &&
 		!errors.Is(err, net.ErrClosed)
 }
 

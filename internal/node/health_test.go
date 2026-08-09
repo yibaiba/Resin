@@ -26,6 +26,23 @@ func TestTCPHealth_StaleValidationCannotOverrideSuccess(t *testing.T) {
 	}
 }
 
+func TestTCPHealth_ValidationGenerationIsUniqueAcrossEntries(t *testing.T) {
+	first := NewNodeEntry(Hash{}, nil, time.Now(), 0)
+	second := NewNodeEntry(Hash{}, nil, time.Now(), 0)
+	firstValidation := first.RecordTCPHealth(false, 1).Validation
+	secondValidation := second.RecordTCPHealth(false, 1).Validation
+
+	if firstValidation == nil || secondValidation == nil {
+		t.Fatal("threshold failures did not create confirmations")
+	}
+	if firstValidation.Generation == 0 || secondValidation.Generation == 0 {
+		t.Fatal("validation generation must be non-zero")
+	}
+	if firstValidation.Generation == secondValidation.Generation {
+		t.Fatalf("validation generations collided: %d", firstValidation.Generation)
+	}
+}
+
 func TestTCPHealth_ConcurrentSnapshotsStayConsistent(t *testing.T) {
 	entry := NewNodeEntry(Hash{}, nil, time.Now(), 0)
 	const iterations = 10_000

@@ -33,7 +33,8 @@ type TCPValidationRequest struct {
 type TCPValidationCompletion struct {
 	Validation     node.TCPValidation
 	Success        bool
-	ApplyIfCurrent func()
+	ExpectedEntry  *node.NodeEntry
+	ApplyIfCurrent func(entry *node.NodeEntry)
 }
 
 type TCPValidationRequester func(request TCPValidationRequest) error
@@ -144,16 +145,30 @@ func (p *GlobalNodePool) CompleteTCPValidationWithEffect(
 	if !ok {
 		return false
 	}
+	if completion.ExpectedEntry != nil && completion.ExpectedEntry != entry {
+		return false
+	}
+	applyIfCurrent := func() {}
+	if completion.ApplyIfCurrent != nil {
+		applyIfCurrent = func() { completion.ApplyIfCurrent(entry) }
+	}
 	transition := entry.CompleteTCPValidationWithEffect(node.TCPValidationCompletion{
 		Validation:      completion.Validation,
 		Success:         completion.Success,
 		CircuitOpenedAt: time.Now().UnixNano(),
-		ApplyIfCurrent:  completion.ApplyIfCurrent,
+		ApplyIfCurrent:  applyIfCurrent,
 	})
 	if !transition.Changed() {
 		writeTCPHealthLog(tcpHealthLog{
 			event: "validation_stale", source: HealthSource(completion.Validation.Kind), hash: hash,
 			outcome: "ignored", state: transition.Current,
+		})
+		return false
+	}
+	if current, exists := p.nodes.Load(hash); !exists || current != entry {
+		writeTCPHealthLog(tcpHealthLog{
+			event: "validation_stale", source: HealthSource(completion.Validation.Kind), hash: hash,
+			outcome: "ignored", state: transition.Current, reason: "node replaced during completion",
 		})
 		return false
 	}
@@ -273,10 +288,22 @@ func (p *GlobalNodePool) RecordPassiveResultWithRequest(
 	success bool,
 	requestID string,
 ) error {
+	_, err := p.RecordPassiveResultWithRequestStatus(platformID, hash, success, requestID)
+	return err
+}
+
+// RecordPassiveResultWithRequestStatus reports whether platform policy accepted
+// the feedback in addition to returning any health-state error.
+func (p *GlobalNodePool) RecordPassiveResultWithRequestStatus(
+	platformID string,
+	hash node.Hash,
+	success bool,
+	requestID string,
+) (bool, error) {
 	if !success && p.passiveCircuitBreakerDisabled(platformID) {
-		return nil
+		return false, nil
 	}
-	return p.RecordTCPHealthResult(hash, HealthSourcePassive, success, requestID)
+	return true, p.RecordTCPHealthResult(hash, HealthSourcePassive, success, requestID)
 }
 
 // RecordPassiveNetworkResult records proxy-traffic feedback for one transport.
