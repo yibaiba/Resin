@@ -257,6 +257,9 @@ func TestForwardProxy_E2EHTTPDialTimeout_ZeroEgress(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected forward log event")
 	}
+	if calls := health.resultCalls.Load(); calls != 1 || health.lastSuccess.Load() != 0 {
+		t.Fatalf("forward dial failure health: calls=%d success=%d, want one failure", calls, health.lastSuccess.Load())
+	}
 }
 
 func TestForwardProxy_E2EHTTPClientCanceledBeforeResponse(t *testing.T) {
@@ -435,6 +438,9 @@ func TestReverseProxy_E2EDialTimeout_ZeroEgress(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected reverse log event")
+	}
+	if calls := health.resultCalls.Load(); calls != 1 || health.lastSuccess.Load() != 0 {
+		t.Fatalf("reverse dial failure health: calls=%d success=%d, want one failure", calls, health.lastSuccess.Load())
 	}
 }
 

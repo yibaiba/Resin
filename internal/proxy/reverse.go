@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptrace"
@@ -250,7 +252,6 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	lifecycle := newRequestLifecycle(p.events, r, ProxyTypeReverse, false)
 	lifecycle.setTarget(parsed.Host, "")
-	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
 	var pendingEgressHeaderBytes int64
 	var egressBodyCounter *countingReadCloser
 	var ingressBodyCounter *countingReadCloser
@@ -315,9 +316,21 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		nodeHashRaw = route.NodeHash
 		lifecycle.setRouteResult(route)
 		if p.health != nil {
-			go p.health.RecordLatency(nodeHashRaw, domain, nil)
+			p.health.RecordLatency(nodeHashRaw, domain, nil)
 		}
 		transport = p.outboundHTTPTransport(routed)
+	}
+	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
+	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
+	transferObserver := &responseTransferObserver{}
+	responseWriter := &observedResponseWriter{
+		ResponseWriter: w,
+		observer:       transferObserver,
+		onHijack: func() {
+			if hasRoute {
+				feedback.record(passiveHealthSuccess)
+			}
+		},
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -341,19 +354,26 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport: transport,
 		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
 			proxyErr := classifyUpstreamError(err)
-			if proxyErr == nil {
+			if proxyErr == nil || errors.Is(req.Context().Err(), context.Canceled) {
 				// context.Canceled — no health recording, silently close.
 				// Treat as net-ok for request-log semantics when canceled
 				// before upstream response.
 				lifecycle.setNetOK(true)
+				feedback.record(passiveHealthNeutral)
 				return
 			}
+			stage := "reverse_roundtrip"
+			if failure := transferObserver.firstFailure(); failure != nil {
+				stage = failure.stage
+			}
 			lifecycle.setProxyError(proxyErr)
-			lifecycle.setUpstreamError("reverse_roundtrip", err)
+			lifecycle.setUpstreamError(stage, err)
 			lifecycle.setNetOK(false)
 			lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-			if hasRoute {
-				recordPassiveResult(p.health, route, false, lifecycle.log.ID)
+			if hasRoute && !isLocalReverseProxyFailure(transferObserver.firstFailure()) {
+				feedback.record(passiveHealthFailure)
+			} else {
+				feedback.record(passiveHealthNeutral)
 			}
 			writeProxyError(rw, proxyErr)
 		},
@@ -369,17 +389,21 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				// We can still account upgrade-session traffic by wrapping with a
 				// read-write counter that preserves io.ReadWriteCloser semantics.
 				if rwc, ok := resp.Body.(io.ReadWriteCloser); ok {
-					upgradedStreamCounter = newCountingReadWriteCloser(rwc)
-					resp.Body = upgradedStreamCounter
+					upgradedStreamCounter = newObservedCountingReadWriteCloser(rwc, streamErrorCallbacks{
+						read: func(err error) {
+							transferObserver.record("reverse_upstream_stream_read", err)
+						},
+						write: func(err error) {
+							transferObserver.record("reverse_upstream_stream_write", err)
+						},
+					})
+					resp.Body = upgradedStreamCounter.preserveCloseWriter()
 				}
 				if detailCfg.Enabled {
 					respHeaders, respHeadersLen, respHeadersTruncated := captureHeadersWithLimit(resp.Header, detailCfg.RespHeadersMaxBytes)
 					lifecycle.setRespHeadersCaptured(respHeaders, respHeadersLen, respHeadersTruncated)
 				}
 				lifecycle.setNetOK(true)
-				if hasRoute {
-					recordPassiveResult(p.health, route, true, lifecycle.log.ID)
-				}
 				return nil
 			}
 			if resp.Body != nil && resp.Body != http.NoBody {
@@ -391,39 +415,48 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					body = respBodyCapture
 					lifecycle.setRespBodyCapture(respBodyCapture)
 				}
-				ingressBodyCounter = newCountingReadCloser(body)
+				ingressBodyCounter = newObservedCountingReadCloser(body, func(err error) {
+					transferObserver.record("reverse_upstream_body_read", err)
+				})
 				resp.Body = ingressBodyCounter
 			} else if detailCfg.Enabled {
 				respHeaders, respHeadersLen, respHeadersTruncated := captureHeadersWithLimit(resp.Header, detailCfg.RespHeadersMaxBytes)
 				lifecycle.setRespHeadersCaptured(respHeaders, respHeadersLen, respHeadersTruncated)
 			}
-			// Intentional coarse-grained policy:
-			// mark node success once upstream response headers arrive.
-			// Further attribution for mid-body stream failures is expensive and noisy
-			// (client abort vs upstream reset vs network blip), and the added
-			// complexity is not worth it for the current phase.
 			lifecycle.setNetOK(true)
 			if hasRoute {
-				recordPassiveResult(p.health, route, true, lifecycle.log.ID)
+				feedback.record(passiveHealthSuccess)
 			}
 			return nil
 		},
 	}
 
-	proxy.ServeHTTP(w, r)
-	if upstreamTrace.shouldCommitEgress() {
-		lifecycle.addEgressBytes(pendingEgressHeaderBytes)
-		if egressBodyCounter != nil {
-			lifecycle.addEgressBytes(egressBodyCounter.Total())
+	defer func() {
+		if upstreamTrace.shouldCommitEgress() {
+			lifecycle.addEgressBytes(pendingEgressHeaderBytes)
+			if egressBodyCounter != nil {
+				lifecycle.addEgressBytes(egressBodyCounter.Total())
+			}
 		}
-	}
-	if ingressBodyCounter != nil {
-		lifecycle.addIngressBytes(ingressBodyCounter.Total())
-	}
-	if upgradedStreamCounter != nil {
-		lifecycle.addIngressBytes(upgradedStreamCounter.TotalRead())
-		lifecycle.addEgressBytes(upgradedStreamCounter.TotalWrite())
-	}
+		if ingressBodyCounter != nil {
+			lifecycle.addIngressBytes(ingressBodyCounter.Total())
+		}
+		if upgradedStreamCounter != nil {
+			lifecycle.addIngressBytes(upgradedStreamCounter.TotalRead())
+			lifecycle.addEgressBytes(upgradedStreamCounter.TotalWrite())
+		}
+		if failure := transferObserver.firstFailure(); failure != nil {
+			lifecycle.setProxyError(ErrUpstreamRequestFailed)
+			lifecycle.setUpstreamError(failure.stage, failure.err)
+			lifecycle.setNetOK(false)
+		}
+	}()
+
+	proxy.ServeHTTP(responseWriter, r)
+}
+
+func isLocalReverseProxyFailure(failure *responseTransferFailure) bool {
+	return failure != nil && failure.stage == "reverse_hijack"
 }
 
 // resolveDefaultPlatform looks up the default platform for reverse-proxy
