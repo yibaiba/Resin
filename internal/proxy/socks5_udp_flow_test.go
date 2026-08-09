@@ -46,6 +46,7 @@ type controlledPacketConn struct {
 	closed         chan struct{}
 	writeOnce      sync.Once
 	closeOnce      sync.Once
+	closes         atomic.Int32
 }
 
 type blockingWritePacketConn struct {
@@ -54,6 +55,27 @@ type blockingWritePacketConn struct {
 	writeOnce    sync.Once
 	closeOnce    sync.Once
 	closes       atomic.Int32
+}
+
+type idleFlowWaitOptions struct {
+	inbound      *Socks5Inbound
+	association  *socks5UDPAssociation
+	scope        string
+	client       *socks5UDPClientWriter
+	clientSource net.Addr
+	target       string
+	activePacket []byte
+}
+
+type idleFlowTestEnv struct {
+	inbound     *Socks5Inbound
+	association *socks5UDPAssociation
+	clientConn  *net.UDPConn
+	client      *socks5UDPClientWriter
+	outbound    *scriptedUDPOutbound
+	health      *mockPassiveHealthRecorder
+	metrics     *countingConnTestSink
+	connections [3]*controlledPacketConn
 }
 
 func newBlockingWritePacketConn() *blockingWritePacketConn {
@@ -121,7 +143,10 @@ func (c *controlledPacketConn) WriteTo(payload []byte, _ net.Addr) (int, error) 
 }
 
 func (c *controlledPacketConn) Close() error {
-	c.closeOnce.Do(func() { close(c.closed) })
+	c.closeOnce.Do(func() {
+		c.closes.Add(1)
+		close(c.closed)
+	})
 	return nil
 }
 
@@ -132,6 +157,185 @@ func (c *controlledPacketConn) LocalAddr() net.Addr {
 func (c *controlledPacketConn) SetDeadline(time.Time) error      { return nil }
 func (c *controlledPacketConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *controlledPacketConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestSocks5UDPFlowIdleTimeoutRetiresAndRecreatesTarget(t *testing.T) {
+	const idleTimeout = 120 * time.Millisecond
+	env := newIdleFlowTestEnv(t, idleTimeout)
+	const scope = "flow-idle-scope"
+	firstTarget := "127.0.0.1:5301"
+	activeTarget := "127.0.0.1:5302"
+	firstPacket := mustEncodeUDPFlowTestPacket(t, firstTarget)
+	activePacket := mustEncodeUDPFlowTestPacket(t, activeTarget)
+
+	env.relay(scope, firstPacket)
+	env.relay(scope, activePacket)
+	waitForIdleFlowRemoval(t, idleFlowWaitOptions{
+		inbound: env.inbound, association: env.association, scope: scope, client: env.client,
+		clientSource: env.clientConn.LocalAddr(), target: firstTarget, activePacket: activePacket,
+	})
+	env.assertOnlyInactiveFlowRetired(t, activeTarget)
+
+	env.relay(scope, firstPacket)
+	if got := env.outbound.calls.Load(); got != 3 {
+		t.Fatalf("flow creation calls after recreation: got %d, want 3", got)
+	}
+	if _, exists := env.association.flow(firstTarget); !exists {
+		t.Fatal("next datagram did not recreate retired target flow")
+	}
+	env.closeAndAssertLifecycles(t)
+}
+
+func newIdleFlowTestEnv(t *testing.T, idleTimeout time.Duration) *idleFlowTestEnv {
+	t.Helper()
+	connections := [3]*controlledPacketConn{
+		newControlledPacketConn(nil, nil),
+		newControlledPacketConn(nil, nil),
+		newControlledPacketConn(nil, nil),
+	}
+	outbound := &scriptedUDPOutbound{packetConns: []net.PacketConn{
+		connections[0], connections[1], connections[2],
+	}}
+	routeEnv := newProxyE2EEnv(t)
+	replaceProxyE2EOutbound(t, routeEnv, outbound)
+	health := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+	metrics := newCountingConnTestSink()
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		Router: routeEnv.router, Pool: routeEnv.pool, Health: health,
+		MetricsSink: metrics, UDPIdleTimeout: idleTimeout,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	clientConn := listenLocalUDP(t)
+	t.Cleanup(func() { _ = clientConn.Close() })
+	association := registerRelayTestAssociation(
+		t, inbound, "flow-idle-scope", clientConn, "plat", nil,
+	)
+	return &idleFlowTestEnv{
+		inbound: inbound, association: association, clientConn: clientConn,
+		client: &socks5UDPClientWriter{packetConn: clientConn}, outbound: outbound,
+		health: health, metrics: metrics, connections: connections,
+	}
+}
+
+func (e *idleFlowTestEnv) relay(scope string, packet []byte) {
+	e.inbound.handleUDPDatagram(socks5UDPInboundPacket{
+		ctx: context.Background(), associationScope: scope,
+		client: e.client, source: e.clientConn.LocalAddr(), packet: packet,
+	})
+}
+
+func (e *idleFlowTestEnv) assertOnlyInactiveFlowRetired(t *testing.T, activeTarget string) {
+	t.Helper()
+	if e.association.closed.Load() {
+		t.Fatal("active target did not keep UDP association alive")
+	}
+	if _, exists := e.association.flow(activeTarget); !exists {
+		t.Fatal("active target flow expired with inactive target")
+	}
+	if got := e.connections[0].closes.Load(); got != 1 {
+		t.Fatalf("inactive target close count: got %d, want 1", got)
+	}
+	if got := e.health.passiveCalls.Load(); got != 0 {
+		t.Fatalf("idle retirement passive failures: got %d, want 0", got)
+	}
+}
+
+func (e *idleFlowTestEnv) closeAndAssertLifecycles(t *testing.T) {
+	t.Helper()
+	if err := e.association.Close(); err != nil {
+		t.Fatalf("close association: %v", err)
+	}
+	for index, connection := range e.connections {
+		if got := connection.closes.Load(); got != 1 {
+			t.Fatalf("flow %d close count: got %d, want 1", index, got)
+		}
+	}
+	assertThreeUDPFlowLifecycles(t, e.metrics.connOps)
+}
+
+func TestSocks5UDPFlowResponseRefreshesIdleTimeout(t *testing.T) {
+	const idleTimeout = 250 * time.Millisecond
+	inbound := NewSocks5Inbound(Socks5InboundConfig{UDPIdleTimeout: idleTimeout})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	clientConn := listenLocalUDP(t)
+	defer clientConn.Close()
+	association := registerRelayTestAssociation(
+		t, inbound, "response-refresh-scope", clientConn, "", nil,
+	)
+	packetConn := newControlledPacketConn(nil, nil)
+	clientWriter := newControlledPacketConn(nil, nil)
+	flow := &socks5UDPRelayFlow{
+		association: association,
+		target:      "127.0.0.1:5303",
+		packetConn:  packetConn,
+		upstream:    &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5303},
+		client:      &socks5UDPClientWriter{packetConn: clientWriter},
+		idleTimeout: idleTimeout,
+	}
+	if _, installed, err := association.installFlow(flow.target, flow); err != nil || !installed {
+		t.Fatalf("install response flow: installed=%v err=%v", installed, err)
+	}
+	flow.start()
+	time.Sleep(140 * time.Millisecond)
+	if err := flow.relayResponse(
+		[]byte("response"),
+		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5303},
+	); err != nil {
+		t.Fatalf("relay response: %v", err)
+	}
+	time.Sleep(140 * time.Millisecond)
+	if _, exists := association.flow(flow.target); !exists {
+		t.Fatal("response activity did not refresh flow idle timeout")
+	}
+}
+
+func mustEncodeUDPFlowTestPacket(t *testing.T, target string) []byte {
+	t.Helper()
+	packet, err := encodeSocks5UDPDatagram(target, []byte("request"))
+	if err != nil {
+		t.Fatalf("encode UDP datagram: %v", err)
+	}
+	return packet
+}
+
+func waitForIdleFlowRemoval(
+	t *testing.T,
+	options idleFlowWaitOptions,
+) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, exists := options.association.flow(options.target); !exists {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+		options.inbound.handleUDPDatagram(socks5UDPInboundPacket{
+			ctx: context.Background(), associationScope: options.scope,
+			client: options.client, source: options.clientSource, packet: options.activePacket,
+		})
+	}
+	t.Fatal("inactive UDP flow did not expire")
+}
+
+func assertThreeUDPFlowLifecycles(t *testing.T, operations <-chan ConnectionOp) {
+	t.Helper()
+	openCount := 0
+	closeCount := 0
+	for index := 0; index < 6; index++ {
+		select {
+		case operation := <-operations:
+			if operation == ConnectionOpen {
+				openCount++
+			} else if operation == ConnectionClose {
+				closeCount++
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing UDP flow lifecycle metric")
+		}
+	}
+	if openCount != 3 || closeCount != 3 {
+		t.Fatalf("UDP flow lifecycle metrics: open=%d close=%d, want 3 each", openCount, closeCount)
+	}
+}
 
 func TestSocks5UDPFlowTransportFailureStageAndRebuild(t *testing.T) {
 	for _, testCase := range []struct {

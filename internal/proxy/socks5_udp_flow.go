@@ -3,11 +3,10 @@ package proxy
 import (
 	"context"
 	"errors"
-	"io"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/Resinat/Resin/internal/routing"
 	M "github.com/sagernet/sing/common/metadata"
@@ -62,8 +61,13 @@ type socks5UDPRelayFlow struct {
 	route       routing.RouteResult
 	health      HealthRecorder
 	metricsSink MetricsEventSink
+	idleTimeout time.Duration
 
 	writeMu      sync.Mutex
+	idleMu       sync.Mutex
+	lastActivity time.Time
+	idleTimer    *time.Timer
+	retiring     bool
 	closeOnce    sync.Once
 	failureOnce  sync.Once
 	healthOKOnce sync.Once
@@ -148,113 +152,10 @@ func (s *Socks5Inbound) finishUDPFlowCreate(
 		route:       options.route,
 		health:      s.tunnel.health,
 		metricsSink: s.tunnel.metricsSink,
+		idleTimeout: options.association.manager.idleTimeout,
 	}
 	if flow.metricsSink != nil {
 		flow.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionOpen)
 	}
 	return socks5UDPFlowCreateResult{flow: flow, route: options.route}
-}
-
-func (f *socks5UDPRelayFlow) start() {
-	go f.readResponses()
-}
-
-func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
-	if !f.association.touch() {
-		return errSocks5UDPAssociationNotFound
-	}
-	f.writeMu.Lock()
-	n, err := f.packetConn.WriteTo(payload, f.upstream)
-	f.writeMu.Unlock()
-	if n > 0 {
-		f.association.recordTraffic(0, int64(n))
-		if f.metricsSink != nil {
-			f.metricsSink.OnTrafficDelta(0, int64(n))
-		}
-	}
-	if err == nil && n != len(payload) {
-		err = io.ErrShortWrite
-	}
-	if err != nil {
-		if !f.closed.Load() {
-			f.fail("udp_upstream_write", err, true)
-		}
-		return err
-	}
-	f.association.recordSuccess()
-	return nil
-}
-
-func (f *socks5UDPRelayFlow) readResponses() {
-	buffer := make([]byte, socks5UDPMaxDatagramSize)
-	for {
-		n, source, err := f.packetConn.ReadFrom(buffer)
-		if err != nil {
-			if !f.closed.Load() {
-				f.fail("udp_upstream_read", err, true)
-			}
-			return
-		}
-		if err := f.relayResponse(buffer[:n], source); err != nil {
-			f.fail("udp_client_write", err, false)
-			return
-		}
-	}
-}
-
-func (f *socks5UDPRelayFlow) relayResponse(payload []byte, source net.Addr) error {
-	if !f.association.touch() {
-		return errSocks5UDPAssociationNotFound
-	}
-	target := f.target
-	if sourceAddress := M.SocksaddrFromNet(source); sourceAddress.IsValid() {
-		target = sourceAddress.String()
-	}
-	packet, err := encodeSocks5UDPDatagram(target, payload)
-	if err != nil {
-		return err
-	}
-	clientSource := f.association.sourceAddr()
-	if !clientSource.IsValid() {
-		return errSocks5UDPInvalidAssociationSource
-	}
-	if _, err := f.client.writeTo(packet, net.UDPAddrFromAddrPort(clientSource)); err != nil {
-		return err
-	}
-	f.association.recordTraffic(int64(len(payload)), 0)
-	if f.metricsSink != nil {
-		f.metricsSink.OnTrafficDelta(int64(len(payload)), 0)
-	}
-	f.healthOKOnce.Do(func() {
-		if f.health != nil && f.route.PlatformID != "" {
-			recordPassiveResultAsync(f.health, f.route, true)
-		}
-	})
-	return nil
-}
-
-func (f *socks5UDPRelayFlow) fail(stage string, err error, nodeFailure bool) {
-	f.failureOnce.Do(func() {
-		log.Printf("SOCKS5 UDP flow failed stage=%s target=%q error=%v", stage, f.target, err)
-		proxyErr := classifyUpstreamError(err)
-		if proxyErr != nil {
-			f.association.recordFailure(stage, err, proxyErr)
-		}
-		if nodeFailure && proxyErr != nil && f.health != nil && f.route.PlatformID != "" {
-			recordPassiveResultAsync(f.health, f.route, false)
-		}
-		_ = f.association.removeFlow(f.target, f)
-	})
-}
-
-func (f *socks5UDPRelayFlow) Close() error {
-	var closeErr error
-	f.closeOnce.Do(func() {
-		f.closed.Store(true)
-		closeErr = f.packetConn.Close()
-		if f.metricsSink != nil {
-			f.metricsSink.OnConnectionLifecycle(ConnectionOutbound, ConnectionClose)
-		}
-	})
-	return closeErr
 }
