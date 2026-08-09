@@ -502,13 +502,15 @@ func TestEndpointRuntimeScopeOpenFailureReleasesTCPAndUDP(t *testing.T) {
 func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 	handler := newEndpointRuntimeSocksHandler()
 	gate := &endpointSocksGate{
-		current: func() model.Endpoint {
-			return model.Endpoint{
-				Port: 2260, AllowProxy: true, AllowSOCKS5: true, RequireProxyAuthInfo: true,
+		current: func() endpointRuntimeSnapshot {
+			return endpointRuntimeSnapshot{
+				endpoint: model.Endpoint{
+					Port: 2260, AllowProxy: true, AllowSOCKS5: true, RequireProxyAuthInfo: true,
+				},
+				associationScope: "endpoint#42",
 			}
 		},
-		next:             handler,
-		associationScope: func() string { return "endpoint#42" },
+		next: handler,
 	}
 	client, server := net.Pipe()
 	defer client.Close()
@@ -517,6 +519,48 @@ func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 	case policy := <-handler.policies:
 		if !policy.RequireProxyAuthInfo || policy.Socks5UDPPort != 2260 || policy.Socks5UDPAssociationScope != "endpoint#42" {
 			t.Fatalf("SOCKS5 endpoint policy: %+v", policy)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SOCKS5 gate did not invoke handler")
+	}
+}
+
+func TestEndpointSocksGateUsesOneRuntimeSnapshotAcrossRestart(t *testing.T) {
+	runtime := &managedEndpointRuntime{}
+	oldEndpoint := model.Endpoint{
+		Port: 2260, AllowProxy: true, AllowSOCKS5: true, RequireProxyAuthInfo: true,
+	}
+	storeEndpointState(runtime, oldEndpoint, "endpoint#1")
+
+	loaded := make(chan struct{})
+	release := make(chan struct{})
+	handler := newEndpointRuntimeSocksHandler()
+	gate := &endpointSocksGate{
+		current: func() endpointRuntimeSnapshot {
+			snapshot := runtime.currentSnapshot()
+			close(loaded)
+			<-release
+			return snapshot
+		},
+		next: handler,
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	go gate.ServeConnContext(context.Background(), server)
+
+	<-loaded
+	disabled := oldEndpoint
+	disabled.AllowSOCKS5 = false
+	storeEndpointState(runtime, disabled, "endpoint#1")
+	newEndpoint := oldEndpoint
+	newEndpoint.RequireProxyAuthInfo = false
+	storeEndpointState(runtime, newEndpoint, "endpoint#2")
+	close(release)
+
+	select {
+	case policy := <-handler.policies:
+		if !policy.RequireProxyAuthInfo || policy.Socks5UDPAssociationScope != "endpoint#1" {
+			t.Fatalf("SOCKS5 gate mixed runtime generations: %+v", policy)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SOCKS5 gate did not invoke handler")

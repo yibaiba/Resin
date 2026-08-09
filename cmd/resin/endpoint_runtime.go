@@ -17,12 +17,11 @@ import (
 )
 
 type managedEndpointRuntime struct {
-	config           atomic.Pointer[model.Endpoint]
-	server           *inboundDemuxServer
-	listener         net.Listener
-	associationScope string
-	packetHandler    endpointPacketHandler
-	started          bool
+	state         atomic.Pointer[endpointRuntimeSnapshot]
+	server        *inboundDemuxServer
+	listener      net.Listener
+	packetHandler endpointPacketHandler
+	started       bool
 
 	udpMu      sync.Mutex
 	packetConn net.PacketConn
@@ -31,15 +30,24 @@ type managedEndpointRuntime struct {
 	udpStarted bool
 }
 
-func (r *managedEndpointRuntime) current() model.Endpoint {
+type endpointRuntimeSnapshot struct {
+	endpoint         model.Endpoint
+	associationScope string
+}
+
+func (r *managedEndpointRuntime) currentSnapshot() endpointRuntimeSnapshot {
 	if r == nil {
-		return model.Endpoint{}
+		return endpointRuntimeSnapshot{}
 	}
-	endpoint := r.config.Load()
-	if endpoint == nil {
-		return model.Endpoint{}
+	snapshot := r.state.Load()
+	if snapshot == nil {
+		return endpointRuntimeSnapshot{}
 	}
-	return *endpoint
+	return *snapshot
+}
+
+func (r *managedEndpointRuntime) current() model.Endpoint {
+	return r.currentSnapshot().endpoint
 }
 
 type endpointRuntimeManager struct {
@@ -277,20 +285,17 @@ func ignoreClosedNetworkError(err error) error {
 }
 
 type endpointSocksGate struct {
-	current          func() model.Endpoint
-	next             inboundConnHandler
-	associationScope func() string
+	current func() endpointRuntimeSnapshot
+	next    inboundConnHandler
 }
 
 func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn) {
-	endpoint := model.Endpoint{}
+	snapshot := endpointRuntimeSnapshot{}
 	if g != nil && g.current != nil {
-		endpoint = g.current()
+		snapshot = g.current()
 	}
-	associationScope := ""
-	if g != nil && g.associationScope != nil {
-		associationScope = g.associationScope()
-	}
+	endpoint := snapshot.endpoint
+	associationScope := snapshot.associationScope
 	if !endpoint.AllowProxy || !endpoint.AllowSOCKS5 || g == nil || g.next == nil || associationScope == "" {
 		if conn != nil {
 			_, _ = conn.Write([]byte{0x05, 0xFF})

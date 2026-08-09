@@ -31,8 +31,8 @@ func (m *endpointRuntimeManager) applySamePortEndpointLocked(
 			_ = packetConn.Close()
 			return err
 		}
-		runtime.attachUDP(packetConn, handler, associationScope)
-		storeEndpointConfig(runtime, endpoint)
+		runtime.attachUDP(packetConn, handler)
+		storeEndpointState(runtime, endpoint, associationScope)
 		if runtime.started {
 			m.startUDPLocked(runtime)
 		}
@@ -71,12 +71,11 @@ func (m *endpointRuntimeManager) createRuntimeLocked(
 		}
 	}
 	runtime := &managedEndpointRuntime{
-		listener:         proxy.NewCountingListener(listener, m.metricsSink),
-		associationScope: associationScope,
-		packetHandler:    packetHandler,
-		packetConn:       packetConn,
+		listener:      proxy.NewCountingListener(listener, m.metricsSink),
+		packetHandler: packetHandler,
+		packetConn:    packetConn,
 	}
-	storeEndpointConfig(runtime, endpoint)
+	storeEndpointState(runtime, endpoint, associationScope)
 	m.configureRuntimeServers(runtime)
 	return runtime, nil
 }
@@ -94,9 +93,8 @@ func (m *endpointRuntimeManager) configureRuntimeServers(runtime *managedEndpoin
 	runtime.server = newInboundDemuxServer(
 		&http.Server{Handler: httpHandler},
 		&endpointSocksGate{
-			current:          currentConfig,
-			next:             m.socks5,
-			associationScope: runtime.currentAssociationScope,
+			current: runtime.currentSnapshot,
+			next:    m.socks5,
 		},
 	)
 }
@@ -107,8 +105,18 @@ func (m *endpointRuntimeManager) nextAssociationScopeLocked(endpointID string) s
 }
 
 func storeEndpointConfig(runtime *managedEndpointRuntime, endpoint model.Endpoint) {
-	copy := endpoint
-	runtime.config.Store(&copy)
+	storeEndpointState(runtime, endpoint, runtime.currentSnapshot().associationScope)
+}
+
+func storeEndpointState(
+	runtime *managedEndpointRuntime,
+	endpoint model.Endpoint,
+	associationScope string,
+) {
+	runtime.state.Store(&endpointRuntimeSnapshot{
+		endpoint:         endpoint,
+		associationScope: associationScope,
+	})
 }
 
 func (m *endpointRuntimeManager) setRuntimeStatusLocked(

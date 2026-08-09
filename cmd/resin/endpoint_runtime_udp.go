@@ -16,22 +16,11 @@ type endpointPacketHandler interface {
 func (r *managedEndpointRuntime) attachUDP(
 	packetConn net.PacketConn,
 	packetHandler endpointPacketHandler,
-	associationScope string,
 ) {
 	r.udpMu.Lock()
 	r.packetConn = packetConn
 	r.packetHandler = packetHandler
-	r.associationScope = associationScope
 	r.udpMu.Unlock()
-}
-
-func (r *managedEndpointRuntime) currentAssociationScope() string {
-	if r == nil {
-		return ""
-	}
-	r.udpMu.Lock()
-	defer r.udpMu.Unlock()
-	return r.associationScope
 }
 
 func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
@@ -45,7 +34,7 @@ func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
 	cancel := r.udpCancel
 	packetConn := r.packetConn
 	done := r.udpDone
-	associationScope := r.associationScope
+	associationScope := r.currentSnapshot().associationScope
 	packetHandler := r.packetHandler
 	r.udpCancel = nil
 	r.udpDone = nil
@@ -105,7 +94,7 @@ func (m *endpointRuntimeManager) startUDPLocked(runtime *managedEndpointRuntime)
 	runtime.udpStarted = true
 	packetConn := runtime.packetConn
 	handler := runtime.packetHandler
-	scope := runtime.associationScope
+	scope := runtime.currentSnapshot().associationScope
 	runtime.udpMu.Unlock()
 
 	go func() {
