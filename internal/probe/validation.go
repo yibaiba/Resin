@@ -108,24 +108,26 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	}
 	body, latency, fetchErr := m.fetcher(task.key.hash, egressTraceURL)
 	if fetchErr != nil {
-		m.completeFailedTCPValidation(task.key.hash, validation, fetchErr)
+		m.completeFailedTCPValidation(task.key.hash, entry, validation, fetchErr)
 		return
 	}
-	m.completeSuccessfulTCPValidation(task.key.hash, validation, tcpValidationFetchResult{
+	m.completeSuccessfulTCPValidation(task.key.hash, entry, validation, tcpValidationFetchResult{
 		body: body, latency: latency,
 	})
 }
 
 func (m *ProbeManager) completeFailedTCPValidation(
 	hash node.Hash,
+	entry *node.NodeEntry,
 	validation node.TCPValidation,
 	fetchErr error,
 ) {
 	applied := m.pool.CompleteTCPValidationWithEffect(hash, topology.TCPValidationCompletion{
-		Validation: validation,
-		Success:    false,
-		ApplyIfCurrent: func() {
-			m.pool.UpdateNodeEgressIP(hash, nil, nil)
+		Validation:    validation,
+		Success:       false,
+		ExpectedEntry: entry,
+		ApplyIfCurrent: func(current *node.NodeEntry) {
+			m.pool.UpdateNodeEgressIPForEntry(hash, current, nil, nil)
 		},
 	})
 	if !applied {
@@ -137,22 +139,24 @@ func (m *ProbeManager) completeFailedTCPValidation(
 
 func (m *ProbeManager) completeSuccessfulTCPValidation(
 	hash node.Hash,
+	entry *node.NodeEntry,
 	validation node.TCPValidation,
 	result tcpValidationFetchResult,
 ) {
 	ip, loc, traceErr := ParseCloudflareTrace(result.body)
 	applied := m.pool.CompleteTCPValidationWithEffect(hash, topology.TCPValidationCompletion{
-		Validation: validation,
-		Success:    true,
-		ApplyIfCurrent: func() {
+		Validation:    validation,
+		Success:       true,
+		ExpectedEntry: entry,
+		ApplyIfCurrent: func(current *node.NodeEntry) {
 			if result.latency > 0 {
-				m.pool.RecordLatency(hash, egressTraceDomain, &result.latency)
+				m.pool.RecordLatencyForEntry(hash, current, egressTraceDomain, &result.latency)
 			}
 			if traceErr != nil {
-				m.pool.UpdateNodeEgressIP(hash, nil, nil)
+				m.pool.UpdateNodeEgressIPForEntry(hash, current, nil, nil)
 				return
 			}
-			m.pool.UpdateNodeEgressIP(hash, &ip, loc)
+			m.pool.UpdateNodeEgressIPForEntry(hash, current, &ip, loc)
 		},
 	})
 	if !applied {

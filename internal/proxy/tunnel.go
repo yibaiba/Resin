@@ -72,9 +72,11 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 		if proxyErr == nil {
 			health.record(passiveHealthNeutral)
 			return tunnelPrepareResult{
-				route:    routed.Route,
-				health:   health,
-				canceled: true,
+				route:         routed.Route,
+				health:        health,
+				upstreamStage: "connect_dial",
+				upstreamErr:   err,
+				canceled:      true,
 			}
 		}
 		health.record(passiveHealthFailure)
@@ -115,7 +117,11 @@ func prepareDirectConnectTunnel(ctx context.Context, deps tunnelDeps, target str
 	if err != nil {
 		proxyErr := classifyConnectError(err)
 		if proxyErr == nil {
-			return tunnelPrepareResult{canceled: true}
+			return tunnelPrepareResult{
+				upstreamStage: "connect_direct_dial",
+				upstreamErr:   err,
+				canceled:      true,
+			}
 		}
 		return tunnelPrepareResult{
 			proxyErr:      proxyErr,

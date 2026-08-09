@@ -526,7 +526,32 @@ func (p *GlobalNodePool) RecordLatency(hash node.Hash, rawTarget string, latency
 	if !ok {
 		return
 	}
+	p.recordLatencyOnEntry(hash, entry, rawTarget, latency)
+}
 
+// RecordLatencyForEntry writes validation metadata only to the expected node
+// incarnation. A concurrent replacement may receive dirty notifications, but
+// never the stale latency sample itself.
+func (p *GlobalNodePool) RecordLatencyForEntry(
+	hash node.Hash,
+	expected *node.NodeEntry,
+	rawTarget string,
+	latency *time.Duration,
+) bool {
+	entry, ok := p.nodes.Load(hash)
+	if !ok || entry != expected {
+		return false
+	}
+	p.recordLatencyOnEntry(hash, expected, rawTarget, latency)
+	return true
+}
+
+func (p *GlobalNodePool) recordLatencyOnEntry(
+	hash node.Hash,
+	entry *node.NodeEntry,
+	rawTarget string,
+	latency *time.Duration,
+) {
 	domain := netutil.ExtractDomain(rawTarget)
 	isAuthority := p.isAuthorityDomain(domain)
 	nowNs := time.Now().UnixNano()
@@ -577,7 +602,31 @@ func (p *GlobalNodePool) UpdateNodeEgressIP(hash node.Hash, ip *netip.Addr, loc 
 	if !ok {
 		return
 	}
+	p.updateNodeEgressIPOnEntry(hash, entry, ip, loc)
+}
 
+// UpdateNodeEgressIPForEntry writes validation metadata only to the expected
+// node incarnation.
+func (p *GlobalNodePool) UpdateNodeEgressIPForEntry(
+	hash node.Hash,
+	expected *node.NodeEntry,
+	ip *netip.Addr,
+	loc *string,
+) bool {
+	entry, ok := p.nodes.Load(hash)
+	if !ok || entry != expected {
+		return false
+	}
+	p.updateNodeEgressIPOnEntry(hash, expected, ip, loc)
+	return true
+}
+
+func (p *GlobalNodePool) updateNodeEgressIPOnEntry(
+	hash node.Hash,
+	entry *node.NodeEntry,
+	ip *netip.Addr,
+	loc *string,
+) {
 	nowNs := time.Now().UnixNano()
 	entry.LastEgressUpdateAttempt.Store(nowNs)
 

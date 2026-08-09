@@ -26,6 +26,15 @@ type passiveRequestHealthRecorder interface {
 	RecordPassiveResultWithRequest(platformID string, hash node.Hash, success bool, requestID string) error
 }
 
+type passiveRequestHealthStatusRecorder interface {
+	RecordPassiveResultWithRequestStatus(
+		platformID string,
+		hash node.Hash,
+		success bool,
+		requestID string,
+	) (bool, error)
+}
+
 type passiveNetworkHealthRecorder interface {
 	RecordPassiveNetworkResult(platformID string, hash node.Hash, network string, success bool)
 }
@@ -59,13 +68,18 @@ func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
 		return
 	}
 	f.once.Do(func() {
-		f.recorded.Store(uint32(outcome) + 1)
+		actual := outcome
 		switch outcome {
 		case passiveHealthSuccess:
-			recordPassiveResult(f.health, f.route, true, f.requestID)
+			if !recordPassiveResult(f.health, f.route, true, f.requestID) {
+				actual = passiveHealthNeutral
+			}
 		case passiveHealthFailure:
-			recordPassiveResult(f.health, f.route, false, f.requestID)
+			if !recordPassiveResult(f.health, f.route, false, f.requestID) {
+				actual = passiveHealthNeutral
+			}
 		}
+		f.recorded.Store(uint32(actual) + 1)
 	})
 }
 
@@ -80,27 +94,41 @@ func (f *requestHealthFeedback) outcome() passiveHealthOutcome {
 	return passiveHealthOutcome(recorded - 1)
 }
 
-func recordPassiveResult(health HealthRecorder, route routing.RouteResult, success bool, requestID string) {
+func recordPassiveResult(health HealthRecorder, route routing.RouteResult, success bool, requestID string) bool {
 	if health == nil {
-		return
+		return false
+	}
+	if recorder, ok := health.(passiveRequestHealthStatusRecorder); ok {
+		accepted, err := recorder.RecordPassiveResultWithRequestStatus(
+			route.PlatformID, route.NodeHash, success, requestID,
+		)
+		if err != nil {
+			logPassiveFeedbackError(route.NodeHash, requestID, err)
+		}
+		return accepted
 	}
 	if recorder, ok := health.(passiveRequestHealthRecorder); ok {
 		if err := recorder.RecordPassiveResultWithRequest(route.PlatformID, route.NodeHash, success, requestID); err != nil {
-			diagnosticlog.Print("[node-health]",
-				diagnosticlog.F("event", "passive_feedback_error"),
-				diagnosticlog.F("source", "passive"),
-				diagnosticlog.F("request_id", requestID),
-				diagnosticlog.F("node_hash", route.NodeHash.Hex()),
-				diagnosticlog.F("error", err.Error()),
-			)
+			logPassiveFeedbackError(route.NodeHash, requestID, err)
 		}
-		return
+		return true
 	}
 	if recorder, ok := health.(passiveHealthRecorder); ok {
 		recorder.RecordPassiveResult(route.PlatformID, route.NodeHash, success)
-		return
+		return true
 	}
 	health.RecordResult(route.NodeHash, success)
+	return true
+}
+
+func logPassiveFeedbackError(hash node.Hash, requestID string, err error) {
+	diagnosticlog.Print("[node-health]",
+		diagnosticlog.F("event", "passive_feedback_error"),
+		diagnosticlog.F("source", "passive"),
+		diagnosticlog.F("request_id", requestID),
+		diagnosticlog.F("node_hash", hash.Hex()),
+		diagnosticlog.F("error", err.Error()),
+	)
 }
 
 func recordPassiveUDPResultAsync(health HealthRecorder, route routing.RouteResult, success bool) {

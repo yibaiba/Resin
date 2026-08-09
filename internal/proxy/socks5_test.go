@@ -886,8 +886,11 @@ func TestSocks5Inbound_BaseContextCancelCancelsPrepareDial(t *testing.T) {
 
 	select {
 	case logEv := <-emitter.logCh:
-		if !logEv.NetOK {
-			t.Fatal("base-context-canceled SOCKS5 CONNECT should log net_ok=true")
+		if logEv.NetOK {
+			t.Fatal("base-context-canceled SOCKS5 CONNECT should log net_ok=false")
+		}
+		if logEv.UpstreamStage != "connect_dial" {
+			t.Fatalf("UpstreamStage: got %q, want %q", logEv.UpstreamStage, "connect_dial")
 		}
 		if logEv.ProxyType != ProxyTypeSocks5Forward {
 			t.Fatalf("ProxyType: got %d, want %d", logEv.ProxyType, ProxyTypeSocks5Forward)

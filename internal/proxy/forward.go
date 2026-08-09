@@ -285,10 +285,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		proxyErr := classifyUpstreamError(err)
 		if proxyErr == nil || errors.Is(r.Context().Err(), context.Canceled) {
-			// context.Canceled — skip health recording, close silently.
-			// Request ended due to client-side cancellation before upstream
-			// response; treat as net-ok in request log semantics.
-			lifecycle.setNetOK(true)
+			recordCanceledRequest(lifecycle, "forward_client_canceled", err)
 			feedback.record(passiveHealthNeutral)
 			return
 		}
@@ -315,7 +312,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	copiedBytes, copyErr := io.Copy(w, resp.Body)
 	lifecycle.addIngressBytes(copiedBytes)
 	if copyErr != nil {
-		if shouldRecordForwardCopyFailure(r, copyErr) {
+		if shouldRecordForwardCopyFailure(copyErr) {
 			lifecycle.setProxyError(ErrUpstreamRequestFailed)
 			lifecycle.setUpstreamError("forward_upstream_to_client_copy", copyErr)
 			lifecycle.setNetOK(false)
@@ -370,7 +367,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 			lifecycle.setHTTPStatus(prepare.proxyErr.HTTPCode)
 			writeProxyError(w, prepare.proxyErr)
 		} else if prepare.canceled {
-			lifecycle.setNetOK(true)
+			recordCanceledRequest(lifecycle, prepare.upstreamStage, prepare.upstreamErr)
 		}
 		return
 	}
@@ -432,13 +429,6 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 // shouldRecordForwardCopyFailure decides whether a response copy error should
 // make the request log reflect a transport failure.
-func shouldRecordForwardCopyFailure(r *http.Request, copyErr error) bool {
-	if copyErr == nil {
-		return false
-	}
-	// Client-side cancellation while streaming should not penalise node health.
-	if r != nil && errors.Is(r.Context().Err(), context.Canceled) {
-		return false
-	}
-	return classifyUpstreamError(copyErr) != nil
+func shouldRecordForwardCopyFailure(copyErr error) bool {
+	return copyErr != nil
 }

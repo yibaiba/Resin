@@ -374,10 +374,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			proxyErr := classifyUpstreamError(err)
 			if proxyErr == nil || errors.Is(req.Context().Err(), context.Canceled) {
-				// context.Canceled — no health recording, silently close.
-				// Treat as net-ok for request-log semantics when canceled
-				// before upstream response.
-				lifecycle.setNetOK(true)
+				recordCanceledRequest(lifecycle, "reverse_client_canceled", err)
 				feedback.record(passiveHealthNeutral)
 				return
 			}

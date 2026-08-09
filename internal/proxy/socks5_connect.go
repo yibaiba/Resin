@@ -68,6 +68,6 @@ func (s *Socks5Inbound) finishFailedConnect(
 		return
 	}
 	if prepare.canceled {
-		lifecycle.setNetOK(true)
+		recordCanceledRequest(lifecycle, prepare.upstreamStage, prepare.upstreamErr)
 	}
 }

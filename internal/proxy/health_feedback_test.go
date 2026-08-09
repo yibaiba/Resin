@@ -49,4 +49,29 @@ func TestRequestHealthFeedback_SubmitsAtMostOnce(t *testing.T) {
 			t.Fatalf("outcome = %d, want neutral", feedback.outcome())
 		}
 	})
+
+	t.Run("suppressed failure is neutral", func(t *testing.T) {
+		recorder := &suppressedPassiveHealthRecorder{}
+		feedback := newRequestHealthFeedback(recorder, route, "request-suppressed")
+		feedback.record(passiveHealthFailure)
+		if recorder.resultCalls.Load() != 0 {
+			t.Fatalf("suppressed feedback recorded %d results", recorder.resultCalls.Load())
+		}
+		if feedback.outcome() != passiveHealthNeutral {
+			t.Fatalf("outcome = %d, want neutral", feedback.outcome())
+		}
+	})
+}
+
+type suppressedPassiveHealthRecorder struct {
+	mockHealthRecorder
+}
+
+func (*suppressedPassiveHealthRecorder) RecordPassiveResultWithRequestStatus(
+	string,
+	node.Hash,
+	bool,
+	string,
+) (bool, error) {
+	return false, nil
 }

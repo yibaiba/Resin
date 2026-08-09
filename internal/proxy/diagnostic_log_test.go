@@ -9,7 +9,7 @@ import (
 )
 
 func TestProxyFailureLineIncludesCorrelationAndTunnelDetails(t *testing.T) {
-	feedback := newRequestHealthFeedback(nil, testRoute(), "request-123")
+	feedback := newRequestHealthFeedback(&mockHealthRecorder{}, testRoute(), "request-123")
 	feedback.record(passiveHealthSuccess)
 	lifecycle := &requestLifecycle{
 		finished: RequestFinishedEvent{IsConnect: true},

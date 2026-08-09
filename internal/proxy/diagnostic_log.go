@@ -104,6 +104,9 @@ func appendDirectionDiagnosticFields(
 		diagnosticlog.F(prefix+"_error_kind", result.errorKind),
 		diagnosticlog.F(prefix+"_errno", result.errno),
 		diagnosticlog.F(prefix+"_error", result.errorMessage),
+		diagnosticlog.F(prefix+"_close_write_error_kind", result.closeWriteErrorKind),
+		diagnosticlog.F(prefix+"_close_write_errno", result.closeWriteErrno),
+		diagnosticlog.F(prefix+"_close_write_error", result.closeWriteErrorMessage),
 	)
 }
 
