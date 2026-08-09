@@ -28,6 +28,14 @@ type TCPValidationRequest struct {
 	RequestID  string
 }
 
+// TCPValidationCompletion binds validation-owned metadata to one exact
+// generation so stale fetches cannot overwrite newer probe results.
+type TCPValidationCompletion struct {
+	Validation     node.TCPValidation
+	Success        bool
+	ApplyIfCurrent func()
+}
+
 type TCPValidationRequester func(request TCPValidationRequest) error
 
 var ErrTCPValidationRequesterUnavailable = errors.New("tcp validation requester unavailable")
@@ -120,26 +128,43 @@ func (p *GlobalNodePool) CompleteTCPValidation(
 	validation node.TCPValidation,
 	success bool,
 ) bool {
+	return p.CompleteTCPValidationWithEffect(hash, TCPValidationCompletion{
+		Validation: validation,
+		Success:    success,
+	})
+}
+
+// CompleteTCPValidationWithEffect applies state and validation-owned metadata
+// as one generation-scoped operation.
+func (p *GlobalNodePool) CompleteTCPValidationWithEffect(
+	hash node.Hash,
+	completion TCPValidationCompletion,
+) bool {
 	entry, ok := p.nodes.Load(hash)
 	if !ok {
 		return false
 	}
-	transition := entry.CompleteTCPValidation(validation, success, time.Now().UnixNano())
+	transition := entry.CompleteTCPValidationWithEffect(node.TCPValidationCompletion{
+		Validation:      completion.Validation,
+		Success:         completion.Success,
+		CircuitOpenedAt: time.Now().UnixNano(),
+		ApplyIfCurrent:  completion.ApplyIfCurrent,
+	})
 	if !transition.Changed() {
 		writeTCPHealthLog(tcpHealthLog{
-			event: "validation_stale", source: HealthSource(validation.Kind), hash: hash,
+			event: "validation_stale", source: HealthSource(completion.Validation.Kind), hash: hash,
 			outcome: "ignored", state: transition.Current,
 		})
 		return false
 	}
 	p.applyTCPHealthTransition(hash, transition)
 	outcome := "failure"
-	if success {
+	if completion.Success {
 		outcome = "success"
 	}
 	writeTCPHealthLog(tcpHealthLog{
-		event:  validationResultEvent(validation, success),
-		source: HealthSource(validation.Kind), hash: hash, outcome: outcome,
+		event:  validationResultEvent(completion.Validation, completion.Success),
+		source: HealthSource(completion.Validation.Kind), hash: hash, outcome: outcome,
 		state: transition.Current,
 	})
 	return true

@@ -15,6 +15,7 @@ import (
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/routing"
+	"golang.org/x/net/http/httpguts"
 )
 
 // PlatformLookup provides read-only access to platforms.
@@ -256,6 +257,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var egressBodyCounter *countingReadCloser
 	var ingressBodyCounter *countingReadCloser
 	var upgradedStreamCounter *countingReadWriteCloser
+	transferObserver := &responseTransferObserver{}
 	if detailCfg.Enabled {
 		reqHeaders, reqHeadersLen, reqHeadersTruncated := captureHeadersWithLimit(r.Header, detailCfg.ReqHeadersMaxBytes)
 		lifecycle.setReqHeadersCaptured(reqHeaders, reqHeadersLen, reqHeadersTruncated)
@@ -267,7 +269,9 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = reqBodyCapture
 			lifecycle.setReqBodyCapture(reqBodyCapture)
 		}
-		egressBodyCounter = newCountingReadCloser(body)
+		egressBodyCounter = newObservedCountingReadCloser(body, func(err error) {
+			transferObserver.record("reverse_client_body_read", err)
+		})
 		r.Body = egressBodyCounter
 	}
 	defer lifecycle.finish()
@@ -322,8 +326,13 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
 	lifecycle.setHealthFeedback(feedback)
-	upstreamTrace := newUpstreamRequestTrace(lifecycle.markFirstByteReceived)
-	transferObserver := &responseTransferObserver{}
+	upgradeRequest := isHTTPUpgradeRequest(r.Header)
+	upstreamTrace := newUpstreamRequestTrace(func() {
+		lifecycle.markFirstByteReceived()
+		if hasRoute && !upgradeRequest {
+			feedback.record(passiveHealthSuccess)
+		}
+	})
 	responseWriter := &observedResponseWriter{
 		ResponseWriter: w,
 		observer:       transferObserver,
@@ -365,14 +374,19 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			stage := "reverse_roundtrip"
+			stageErr := err
 			if failure := transferObserver.firstFailure(); failure != nil {
 				stage = failure.stage
+				stageErr = failure.err
 			}
 			lifecycle.setProxyError(proxyErr)
-			lifecycle.setUpstreamError(stage, err)
+			lifecycle.setUpstreamError(stage, stageErr)
 			lifecycle.setNetOK(false)
 			lifecycle.setHTTPStatus(proxyErr.HTTPCode)
-			if hasRoute && !isLocalReverseProxyFailure(transferObserver.firstFailure()) {
+			failure := transferObserver.firstFailure()
+			if hasRoute && upstreamTrace.sawFirstResponseByte() && !isClientOwnedReverseProxyFailure(failure) {
+				feedback.record(passiveHealthSuccess)
+			} else if hasRoute && !isClientOwnedReverseProxyFailure(failure) {
 				feedback.record(passiveHealthFailure)
 			} else {
 				feedback.record(passiveHealthNeutral)
@@ -457,8 +471,23 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(responseWriter, r)
 }
 
-func isLocalReverseProxyFailure(failure *responseTransferFailure) bool {
-	return failure != nil && failure.stage == "reverse_hijack"
+func isHTTPUpgradeRequest(header http.Header) bool {
+	return header.Get("Upgrade") != "" &&
+		httpguts.HeaderValuesContainsToken(header.Values("Connection"), "upgrade")
+}
+
+func isClientOwnedReverseProxyFailure(failure *responseTransferFailure) bool {
+	if failure == nil {
+		return false
+	}
+	switch failure.stage {
+	case "reverse_client_body_read", "reverse_hijack", "reverse_response_write",
+		"reverse_response_flush", "reverse_client_read", "reverse_client_write",
+		"reverse_client_close_write":
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveDefaultPlatform looks up the default platform for reverse-proxy

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/Resinat/Resin/internal/diagnosticlog"
 	"github.com/Resinat/Resin/internal/node"
@@ -16,6 +17,11 @@ var (
 	ErrValidationQueue  = errors.New("validation queue rejected task")
 	ErrValidationTarget = errors.New("validation target unavailable")
 )
+
+type tcpValidationFetchResult struct {
+	body    []byte
+	latency time.Duration
+}
 
 // EnqueueTCPValidation adds one generation-scoped high-priority validation.
 func (m *ProbeManager) EnqueueTCPValidation(request topology.TCPValidationRequest) error {
@@ -102,34 +108,66 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	}
 	body, latency, fetchErr := m.fetcher(task.key.hash, egressTraceURL)
 	if fetchErr != nil {
-		logValidationTransportError(task.key.hash, validation, fetchErr)
-		m.pool.UpdateNodeEgressIP(task.key.hash, nil, nil)
-		m.pool.CompleteTCPValidation(task.key.hash, validation, false)
+		m.completeFailedTCPValidation(task.key.hash, validation, fetchErr)
 		return
 	}
-	if latency > 0 {
-		m.pool.RecordLatency(task.key.hash, egressTraceDomain, &latency)
+	m.completeSuccessfulTCPValidation(task.key.hash, validation, tcpValidationFetchResult{
+		body: body, latency: latency,
+	})
+}
+
+func (m *ProbeManager) completeFailedTCPValidation(
+	hash node.Hash,
+	validation node.TCPValidation,
+	fetchErr error,
+) {
+	applied := m.pool.CompleteTCPValidationWithEffect(hash, topology.TCPValidationCompletion{
+		Validation: validation,
+		Success:    false,
+		ApplyIfCurrent: func() {
+			m.pool.UpdateNodeEgressIP(hash, nil, nil)
+		},
+	})
+	if !applied {
+		logValidationDrop(hash, validation, "stale after fetch")
+		return
 	}
-	if err := updateEgressFromValidation(m.pool, task.key.hash, body); err != nil {
+	logValidationTransportError(hash, validation, fetchErr)
+}
+
+func (m *ProbeManager) completeSuccessfulTCPValidation(
+	hash node.Hash,
+	validation node.TCPValidation,
+	result tcpValidationFetchResult,
+) {
+	ip, loc, traceErr := ParseCloudflareTrace(result.body)
+	applied := m.pool.CompleteTCPValidationWithEffect(hash, topology.TCPValidationCompletion{
+		Validation: validation,
+		Success:    true,
+		ApplyIfCurrent: func() {
+			if result.latency > 0 {
+				m.pool.RecordLatency(hash, egressTraceDomain, &result.latency)
+			}
+			if traceErr != nil {
+				m.pool.UpdateNodeEgressIP(hash, nil, nil)
+				return
+			}
+			m.pool.UpdateNodeEgressIP(hash, &ip, loc)
+		},
+	})
+	if !applied {
+		logValidationDrop(hash, validation, "stale after fetch")
+		return
+	}
+	if traceErr != nil {
 		diagnosticlog.Print("[node-health]",
 			diagnosticlog.F("event", "validation_trace_parse_failed"),
 			diagnosticlog.F("source", string(validation.Kind)),
-			diagnosticlog.F("node_hash", task.key.hash.Hex()),
+			diagnosticlog.F("node_hash", hash.Hex()),
 			diagnosticlog.F("generation", strconv.FormatUint(validation.Generation, 10)),
-			diagnosticlog.F("error", err.Error()),
+			diagnosticlog.F("error", traceErr.Error()),
 		)
 	}
-	m.pool.CompleteTCPValidation(task.key.hash, validation, true)
-}
-
-func updateEgressFromValidation(pool *topology.GlobalNodePool, hash node.Hash, body []byte) error {
-	ip, loc, err := ParseCloudflareTrace(body)
-	if err != nil {
-		pool.UpdateNodeEgressIP(hash, nil, nil)
-		return err
-	}
-	pool.UpdateNodeEgressIP(hash, &ip, loc)
-	return nil
 }
 
 func (m *ProbeManager) cancelDroppedValidation(task probeTask, reason string) {

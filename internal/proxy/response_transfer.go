@@ -54,7 +54,11 @@ func (w *observedResponseWriter) Write(payload []byte) (int, error) {
 }
 
 func (w *observedResponseWriter) Flush() {
-	_ = http.NewResponseController(w.ResponseWriter).Flush()
+	err := http.NewResponseController(w.ResponseWriter).Flush()
+	if errors.Is(err, http.ErrNotSupported) {
+		return
+	}
+	w.observer.record("reverse_response_flush", err)
 }
 
 func (w *observedResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
