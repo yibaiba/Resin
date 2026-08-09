@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ type routedHTTPExercise struct {
 	upstreamURL    string
 	requestMethod  string
 	requestBody    io.Reader
+	cancelOnRead   bool
 	requestHeaders http.Header
 	responseWriter http.ResponseWriter
 }
@@ -63,6 +66,11 @@ func exerciseRoutedHTTP(t *testing.T, exercise routedHTTPExercise) routedHTTPRes
 		method = http.MethodGet
 	}
 	req := httptest.NewRequest(method, requestURL, exercise.requestBody)
+	if exercise.cancelOnRead {
+		ctx, cancel := context.WithCancel(req.Context())
+		req = req.WithContext(ctx)
+		req.Body = cancelingResetRequestBody{cancel: cancel}
+	}
 	for name, values := range exercise.requestHeaders {
 		for _, value := range values {
 			req.Header.Add(name, value)
@@ -246,6 +254,32 @@ func TestHTTPProxies_ClientRequestBodyReadFailureIsHealthNeutral(t *testing.T) {
 	}
 }
 
+func TestHTTPProxies_ClientBodyResetWithCanceledContextRemainsRequestFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	for _, reverse := range []bool{false, true} {
+		name := "forward"
+		wantStage := "forward_client_body_read"
+		if reverse {
+			name = "reverse"
+			wantStage = "reverse_client_body_read"
+		}
+		t.Run(name, func(t *testing.T) {
+			result := exerciseRoutedHTTP(t, routedHTTPExercise{
+				reverse:       reverse,
+				upstreamURL:   upstream.URL + "/upload-reset",
+				requestMethod: http.MethodPost,
+				requestBody:   strings.NewReader("payload"),
+				cancelOnRead:  true,
+			})
+			assertClientBodyFailureIsNeutral(t, result, wantStage)
+		})
+	}
+}
+
 func TestReverseProxy_FlushFailureIsLoggedWithoutPenalizingNode(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -299,6 +333,19 @@ func assertOneHealthSuccess(t *testing.T, health *mockHealthRecorder) {
 	}
 }
 
+func assertClientBodyFailureIsNeutral(t *testing.T, result routedHTTPResult, wantStage string) {
+	t.Helper()
+	if calls := result.health.resultCalls.Load(); calls != 0 {
+		t.Fatalf("client body failure health calls = %d, want 0", calls)
+	}
+	if result.log.NetOK {
+		t.Fatal("client body read error must remain a request failure")
+	}
+	if result.log.UpstreamStage != wantStage {
+		t.Fatalf("upstream stage = %q, want %q", result.log.UpstreamStage, wantStage)
+	}
+}
+
 type failingBodyResponseWriter struct {
 	*httptest.ResponseRecorder
 }
@@ -310,6 +357,19 @@ func (resetRequestBody) Read([]byte) (int, error) {
 }
 
 func (resetRequestBody) Close() error {
+	return nil
+}
+
+type cancelingResetRequestBody struct {
+	cancel context.CancelFunc
+}
+
+func (body cancelingResetRequestBody) Read([]byte) (int, error) {
+	body.cancel()
+	return 0, syscall.ECONNRESET
+}
+
+func (cancelingResetRequestBody) Close() error {
 	return nil
 }
 

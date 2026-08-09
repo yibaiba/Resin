@@ -34,6 +34,18 @@ func (o *responseTransferObserver) firstFailure() *responseTransferFailure {
 	return o.failure.Load()
 }
 
+func recordClientRequestBodyFailure(
+	lifecycle *requestLifecycle,
+	feedback *requestHealthFeedback,
+	failure *responseTransferFailure,
+) {
+	lifecycle.setProxyError(ErrUpstreamRequestFailed)
+	lifecycle.setUpstreamError(failure.stage, failure.err)
+	lifecycle.setHTTPStatus(ErrUpstreamRequestFailed.HTTPCode)
+	lifecycle.setNetOK(false)
+	feedback.record(passiveHealthNeutral)
+}
+
 func isResponseTransferFailure(err error) bool {
 	return err != nil &&
 		!errors.Is(err, io.EOF) &&
