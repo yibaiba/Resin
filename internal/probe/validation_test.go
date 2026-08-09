@@ -216,8 +216,13 @@ func TestTCPValidation_RecoveryScanQueuesPersistedStates(t *testing.T) {
 	pool.AddNodeFromSub(confirmationHash, []byte(`{"type":"validation-confirmation"}`), "sub1")
 	confirmationEntry, _ := pool.GetEntry(confirmationHash)
 	storeOutbound(confirmationEntry)
+	belowThresholdHash := node.HashFromRawOptions([]byte(`{"type":"validation-below-threshold"}`))
+	pool.AddNodeFromSub(belowThresholdHash, []byte(`{"type":"validation-below-threshold"}`), "sub1")
+	belowThresholdEntry, _ := pool.GetEntry(belowThresholdHash)
+	storeOutbound(belowThresholdEntry)
 	circuitEntry.RestoreTCPHealth(2, time.Now().Add(-time.Minute).UnixNano())
 	confirmationEntry.RestoreTCPHealth(2, 0)
+	belowThresholdEntry.RestoreTCPHealth(1, 0)
 	manager := NewProbeManager(ProbeConfig{Pool: pool, Fetcher: successfulValidationFetcher})
 
 	if err := manager.EnqueueTCPRecoveryValidations(); err != nil {
@@ -228,6 +233,9 @@ func TestTCPValidation_RecoveryScanQueuesPersistedStates(t *testing.T) {
 	}
 	if confirmationEntry.TCPHealth().ValidationPending != node.TCPValidationConfirmation {
 		t.Fatalf("confirmation node state: %+v", confirmationEntry.TCPHealth())
+	}
+	if belowThresholdEntry.TCPHealth().ValidationPending != node.TCPValidationNone {
+		t.Fatalf("below-threshold node state: %+v", belowThresholdEntry.TCPHealth())
 	}
 	runNextQueuedTask(t, manager)
 	runNextQueuedTask(t, manager)

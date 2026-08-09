@@ -140,6 +140,10 @@ func (c *EphemeralCleaner) shouldEvictEntry(entry *node.NodeEntry, now int64, ev
 	if entry == nil {
 		return false
 	}
+	tcpHealth := entry.TCPHealth()
+	if tcpHealth.ValidationPending != node.TCPValidationNone {
+		return false
+	}
 
 	// Outbound build failed and node is still without outbound.
 	// For ephemeral subscriptions, this node should be dropped quickly.
@@ -148,6 +152,6 @@ func (c *EphemeralCleaner) shouldEvictEntry(entry *node.NodeEntry, now int64, ev
 	}
 
 	// Circuit remains open beyond configured eviction delay.
-	circuitSince := entry.TCPHealth().CircuitOpenSince
+	circuitSince := tcpHealth.CircuitOpenSince
 	return circuitSince > 0 && (now-circuitSince) > evictDelayNs
 }

@@ -154,6 +154,10 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	if firstLease == nil || firstLease.CreatedAtNs <= 0 {
 		t.Fatalf("first lease created_at_ns should be > 0, got %+v", firstLease)
 	}
+	validation := entry1.BeginTCPValidation(node.TCPValidationConfirmation, 2)
+	if validation.Validation == nil {
+		t.Fatal("expected process-local confirmation before first shutdown")
+	}
 
 	engine1.MarkNodeStatic(hash.Hex())
 	engine1.MarkSubscriptionNode(subID, hash.Hex())
@@ -233,6 +237,9 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	}
 	if got := entry2.TCPHealth().FailureCount; got != 2 {
 		t.Fatalf("failure_count: got %d, want %d", got, 2)
+	}
+	if health := entry2.TCPHealth(); health.ValidationPending != node.TCPValidationNone || health.ValidationGeneration != 0 {
+		t.Fatalf("process-local validation should not persist: %+v", health)
 	}
 	if got := entry2.UDPHealthState().FailureCount; got != 3 {
 		t.Fatalf("udp_failure_count: got %d, want %d", got, 3)
