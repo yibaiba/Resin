@@ -466,6 +466,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		OutboundTransport: outboundTransportCfg,
 		TransportPool:     a.transportPool,
 		ProxyBypassRules:  a.envCfg.ProxyBypassRules,
+		Decisioner:        cpService.RoutingDecisions,
 	})
 
 	reverseProxy := proxy.NewReverseProxy(proxy.ReverseProxyConfig{
@@ -480,6 +481,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		OutboundTransport: outboundTransportCfg,
 		TransportPool:     a.transportPool,
 		ProxyBypassRules:  a.envCfg.ProxyBypassRules,
+		Decisioner:        cpService.RoutingDecisions,
 	})
 	socks5Inbound := proxy.NewSocks5Inbound(proxy.Socks5InboundConfig{
 		ProxyToken:       a.envCfg.ProxyToken,
@@ -489,6 +491,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		Events:           proxyEvents,
 		MetricsSink:      a.metricsManager,
 		ProxyBypassRules: a.envCfg.ProxyBypassRules,
+		Decisioner:       cpService.RoutingDecisions,
 		UDPIdleTimeout:   a.envCfg.Socks5UDPIdleTimeout,
 	})
 

@@ -37,6 +37,7 @@ type ReverseProxyConfig struct {
 	OutboundTransport OutboundTransportConfig
 	TransportPool     *OutboundTransportPool
 	ProxyBypassRules  []string
+	Decisioner        RouteDecisioner
 }
 
 // ReverseProxy implements an HTTP reverse proxy.
@@ -54,7 +55,7 @@ type ReverseProxy struct {
 	transportPoolOnce sync.Once
 	directTransport   *http.Transport
 	directOnce        sync.Once
-	bypass            *TargetBypassMatcher
+	decisioner        RouteDecisioner
 }
 
 // NewReverseProxy creates a new reverse proxy handler.
@@ -68,6 +69,10 @@ func NewReverseProxy(cfg ReverseProxyConfig) *ReverseProxy {
 	if transportPool == nil {
 		transportPool = NewOutboundTransportPool(transportCfg)
 	}
+	decisioner := cfg.Decisioner
+	if decisioner == nil {
+		decisioner = newCompatibilityDecisioner(cfg.ProxyBypassRules)
+	}
 	return &ReverseProxy{
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
@@ -79,7 +84,7 @@ func NewReverseProxy(cfg ReverseProxyConfig) *ReverseProxy {
 		metricsSink:     cfg.MetricsSink,
 		transportConfig: transportCfg,
 		transportPool:   transportPool,
-		bypass:          NewTargetBypassMatcher(cfg.ProxyBypassRules),
+		decisioner:      decisioner,
 	}
 }
 
@@ -305,16 +310,19 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var transport *http.Transport
 	var nodeHashRaw = route.NodeHash
 	domain := netutil.ExtractDomain(parsed.Host)
-	if p.bypass != nil && p.bypass.ShouldBypass(parsed.Host) {
+	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
+		PlatformName: parsed.PlatformName, Account: account, Target: parsed.Host,
+	})
+	if routeErr != nil {
+		lifecycle.setProxyError(routeErr)
+		lifecycle.setHTTPStatus(routeErr.HTTPCode)
+		writeProxyError(w, routeErr)
+		return
+	}
+	if plan.IsDirect() {
 		transport = p.directHTTPTransport()
 	} else {
-		routed, routeErr := resolveRoutedOutbound(p.router, p.pool, parsed.PlatformName, account, parsed.Host)
-		if routeErr != nil {
-			lifecycle.setProxyError(routeErr)
-			lifecycle.setHTTPStatus(routeErr.HTTPCode)
-			writeProxyError(w, routeErr)
-			return
-		}
+		routed := plan.Routed
 		route = routed.Route
 		hasRoute = true
 		nodeHashRaw = route.NodeHash

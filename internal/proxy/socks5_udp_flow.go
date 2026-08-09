@@ -76,7 +76,18 @@ type socks5UDPRelayFlow struct {
 
 func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPFlowCreateResult {
 	destination := M.ParseSocksaddr(request.target)
-	if s.tunnel.bypass != nil && s.tunnel.bypass.ShouldBypass(request.target) {
+	plan, routeErr := resolveOutboundPlan(s.tunnel.decisioner, s.tunnel.router, s.tunnel.pool, routing.RouteOptions{
+		PlatformName:    request.association.platformName,
+		Account:         request.association.account,
+		Target:          request.target,
+		RequiredNetwork: N.NetworkUDP,
+	})
+	if routeErr != nil {
+		return socks5UDPFlowCreateResult{
+			stage: "udp_route", proxyErr: routeErr, err: errors.New(routeErr.Message),
+		}
+	}
+	if plan.IsDirect() {
 		packetConn, upstream, err := s.udpDirectDialer.ListenPacket(request.ctx, request.target)
 		return s.finishUDPFlowCreate(socks5UDPFlowOptions{
 			association: request.association,
@@ -88,17 +99,7 @@ func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPF
 			err:         err,
 		})
 	}
-	routed, routeErr := resolveRoutedOutboundWithOptions(s.tunnel.router, s.tunnel.pool, routing.RouteOptions{
-		PlatformName:    request.association.platformName,
-		Account:         request.association.account,
-		Target:          request.target,
-		RequiredNetwork: N.NetworkUDP,
-	})
-	if routeErr != nil {
-		return socks5UDPFlowCreateResult{
-			stage: "udp_route", proxyErr: routeErr, err: errors.New(routeErr.Message),
-		}
-	}
+	routed := plan.Routed
 	packetConn, err := routed.Outbound.ListenPacket(request.ctx, destination)
 	var upstream net.Addr = destination
 	if destination.IsIP() {

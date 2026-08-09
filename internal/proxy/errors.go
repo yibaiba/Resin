@@ -54,6 +54,11 @@ var (
 		ResinError: "ACCOUNT_REJECTED",
 		Message:    "Account extraction failed and platform rejects unmatched requests",
 	}
+	ErrRouteRejected = &ProxyError{
+		HTTPCode:   http.StatusForbidden,
+		ResinError: "ROUTE_REJECTED",
+		Message:    "Target rejected by routing policy",
+	}
 	ErrNoAvailableNodes = &ProxyError{
 		HTTPCode:   http.StatusServiceUnavailable,
 		ResinError: "NO_AVAILABLE_NODES",

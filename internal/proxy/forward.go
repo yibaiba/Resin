@@ -26,6 +26,7 @@ type ForwardProxyConfig struct {
 	OutboundTransport OutboundTransportConfig
 	TransportPool     *OutboundTransportPool
 	ProxyBypassRules  []string
+	Decisioner        RouteDecisioner
 }
 
 // ForwardProxy implements an HTTP forward proxy with Proxy-Authorization
@@ -42,7 +43,7 @@ type ForwardProxy struct {
 	transportPoolOnce sync.Once
 	directTransport   *http.Transport
 	directOnce        sync.Once
-	bypass            *TargetBypassMatcher
+	decisioner        RouteDecisioner
 }
 
 // NewForwardProxy creates a new forward proxy handler.
@@ -56,6 +57,10 @@ func NewForwardProxy(cfg ForwardProxyConfig) *ForwardProxy {
 	if transportPool == nil {
 		transportPool = NewOutboundTransportPool(transportCfg)
 	}
+	decisioner := cfg.Decisioner
+	if decisioner == nil {
+		decisioner = newCompatibilityDecisioner(cfg.ProxyBypassRules)
+	}
 	return &ForwardProxy{
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
@@ -65,7 +70,7 @@ func NewForwardProxy(cfg ForwardProxyConfig) *ForwardProxy {
 		metricsSink:     cfg.MetricsSink,
 		transportConfig: transportCfg,
 		transportPool:   transportPool,
-		bypass:          NewTargetBypassMatcher(cfg.ProxyBypassRules),
+		decisioner:      decisioner,
 	}
 }
 
@@ -229,16 +234,19 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var route routing.RouteResult
 	var hasRoute bool
 	var transport *http.Transport
-	if p.bypass != nil && p.bypass.ShouldBypass(r.Host) {
+	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
+		PlatformName: platName, Account: account, Target: r.Host,
+	})
+	if routeErr != nil {
+		lifecycle.setProxyError(routeErr)
+		lifecycle.setHTTPStatus(routeErr.HTTPCode)
+		writeProxyError(w, routeErr)
+		return
+	}
+	if plan.IsDirect() {
 		transport = p.directHTTPTransport()
 	} else {
-		routed, routeErr := resolveRoutedOutbound(p.router, p.pool, platName, account, r.Host)
-		if routeErr != nil {
-			lifecycle.setProxyError(routeErr)
-			lifecycle.setHTTPStatus(routeErr.HTTPCode)
-			writeProxyError(w, routeErr)
-			return
-		}
+		routed := plan.Routed
 		route = routed.Route
 		hasRoute = true
 		lifecycle.setRouteResult(route)
@@ -345,9 +353,9 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		deps: tunnelDeps{
 			router:      p.router,
 			pool:        p.pool,
+			decisioner:  p.decisioner,
 			health:      p.health,
 			metricsSink: p.metricsSink,
-			bypass:      p.bypass,
 		},
 		platformName: platName,
 		account:      account,

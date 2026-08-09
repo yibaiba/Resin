@@ -20,6 +20,7 @@ const (
 	socks5AddressTypeIPv6         = 0x04
 	socks5ReplySucceeded          = 0x00
 	socks5ReplyGeneralFailure     = 0x01
+	socks5ReplyConnectionDenied   = 0x02
 	socks5ReplyCommandUnsupported = 0x07
 	socks5ReplyAddressUnsupported = 0x08
 )

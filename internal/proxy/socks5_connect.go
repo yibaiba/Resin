@@ -64,7 +64,11 @@ func (s *Socks5Inbound) finishFailedConnect(
 			lifecycle.setUpstreamError(prepare.upstreamStage, prepare.upstreamErr)
 		}
 		lifecycle.setNetOK(false)
-		_ = writeSocks5Reply(conn, socks5ReplyGeneralFailure, nil)
+		reply := byte(socks5ReplyGeneralFailure)
+		if prepare.proxyErr == ErrRouteRejected {
+			reply = socks5ReplyConnectionDenied
+		}
+		_ = writeSocks5Reply(conn, reply, nil)
 		return
 	}
 	if prepare.canceled {

@@ -23,6 +23,7 @@ type Socks5InboundConfig struct {
 	Events           EventEmitter
 	MetricsSink      MetricsEventSink
 	ProxyBypassRules []string
+	Decisioner       RouteDecisioner
 	UDPIdleTimeout   time.Duration
 	UDPDirectDialer  UDPDirectPacketDialer
 }
@@ -53,14 +54,18 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 	if udpIdleTimeout <= 0 {
 		udpIdleTimeout = defaultSocks5UDPIdleTimeout
 	}
+	decisioner := cfg.Decisioner
+	if decisioner == nil {
+		decisioner = newCompatibilityDecisioner(cfg.ProxyBypassRules)
+	}
 	return &Socks5Inbound{
 		token: cfg.ProxyToken,
 		tunnel: tunnelDeps{
 			router:      cfg.Router,
 			pool:        cfg.Pool,
+			decisioner:  decisioner,
 			health:      cfg.Health,
 			metricsSink: cfg.MetricsSink,
-			bypass:      NewTargetBypassMatcher(cfg.ProxyBypassRules),
 		},
 		events:          ev,
 		udpAssociations: newSocks5UDPAssociationManager(udpIdleTimeout),

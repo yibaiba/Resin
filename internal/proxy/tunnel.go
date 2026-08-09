@@ -14,9 +14,9 @@ import (
 type tunnelDeps struct {
 	router      *routing.Router
 	pool        outbound.PoolAccessor
+	decisioner  RouteDecisioner
 	health      HealthRecorder
 	metricsSink MetricsEventSink
-	bypass      *TargetBypassMatcher
 }
 
 type preparedTunnel struct {
@@ -44,20 +44,23 @@ type tunnelPrepareResult struct {
 }
 
 func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
-	if request.deps.bypass != nil && request.deps.bypass.ShouldBypass(request.target) {
-		return prepareDirectConnectTunnel(request.ctx, request.deps, request.target)
-	}
-
-	routed, routeErr := resolveRoutedOutbound(
+	plan, routeErr := resolveOutboundPlan(
+		request.deps.decisioner,
 		request.deps.router,
 		request.deps.pool,
-		request.platformName,
-		request.account,
-		request.target,
+		routing.RouteOptions{
+			PlatformName: request.platformName,
+			Account:      request.account,
+			Target:       request.target,
+		},
 	)
 	if routeErr != nil {
 		return tunnelPrepareResult{proxyErr: routeErr}
 	}
+	if plan.IsDirect() {
+		return prepareDirectConnectTunnel(request.ctx, request.deps, request.target)
+	}
+	routed := plan.Routed
 	health := newRequestHealthFeedback(request.deps.health, routed.Route, request.requestID)
 
 	domain := netutil.ExtractDomain(request.target)
