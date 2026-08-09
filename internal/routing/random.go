@@ -18,21 +18,23 @@ var randomRouteRNGPool = sync.Pool{
 	},
 }
 
+type randomRouteOptions struct {
+	platform     *platform.Platform
+	view         platform.ReadOnlyView
+	stats        *IPLoadStats
+	pool         PoolAccessor
+	targetDomain string
+	authorities  []string
+	p2cWindow    time.Duration
+}
+
 // randomRoute selects a routable node using P2C with latency/load scoring.
 // It intentionally trusts Platform.View as the routable source of truth and
 // does not do extra pool scans/availability validation on the hot path.
 // Post-pick race handling (node removed right after selection) is handled by
-// the caller in RouteRequest.
-func randomRoute(
-	plat *platform.Platform,
-	stats *IPLoadStats,
-	pool PoolAccessor,
-	targetDomain string,
-	authorities []string,
-	p2cWindow time.Duration,
-) (node.Hash, error) {
-	view := plat.View()
-	size := view.Size()
+// the caller in RouteWithOptions.
+func randomRoute(options randomRouteOptions) (node.Hash, error) {
+	size := options.view.Size()
 	if size == 0 {
 		return node.Zero, ErrNoAvailableNodes
 	}
@@ -41,7 +43,7 @@ func randomRoute(
 	defer randomRouteRNGPool.Put(rng)
 
 	pick := func() (node.Hash, bool) {
-		return view.RandomPick(rng)
+		return options.view.RandomPick(rng)
 	}
 
 	// Pick 1st candidate.
@@ -77,11 +79,18 @@ func randomRoute(
 	}
 
 	// Determine effective latency for comparison.
-	lat1, lat2 := compareLatencies(h1, h2, pool, targetDomain, authorities, p2cWindow)
+	lat1, lat2 := compareLatencies(
+		h1,
+		h2,
+		options.pool,
+		options.targetDomain,
+		options.authorities,
+		options.p2cWindow,
+	)
 
 	// Calculate scores.
-	s1 := calculateScore(h1, lat1, plat, stats, pool)
-	s2 := calculateScore(h2, lat2, plat, stats, pool)
+	s1 := calculateScore(h1, lat1, options.platform, options.stats, options.pool)
+	s2 := calculateScore(h2, lat2, options.platform, options.stats, options.pool)
 
 	// Lower score is better.
 	selected := h2 // favor h2 on tie

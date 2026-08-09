@@ -13,10 +13,12 @@ import (
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/puzpuzpuz/xsync/v4"
+	N "github.com/sagernet/sing/common/network"
 )
 
 var (
-	ErrPlatformNotFound = errors.New("platform not found")
+	ErrPlatformNotFound   = errors.New("platform not found")
+	ErrUnsupportedNetwork = errors.New("unsupported required network")
 )
 
 type PoolAccessor interface {
@@ -67,6 +69,35 @@ type RouteResult struct {
 	LeaseCreated bool
 }
 
+// RouteOptions describes one routing request. RequiredNetwork defaults to TCP.
+type RouteOptions struct {
+	PlatformName    string
+	Account         string
+	Target          string
+	RequiredNetwork string
+}
+
+type routeAttempt struct {
+	platform     *platform.Platform
+	state        *PlatformRoutingState
+	view         platform.ReadOnlyView
+	account      string
+	targetDomain string
+	now          time.Time
+}
+
+type previousLeaseState struct {
+	lease        Lease
+	loaded       bool
+	invalidation leaseInvalidationReason
+}
+
+type networkLeaseReplacement struct {
+	previous Lease
+	next     Lease
+	result   RouteResult
+}
+
 const livePickAttempts = 2 // first pick + one retry
 
 type leaseInvalidationReason int
@@ -75,21 +106,42 @@ const (
 	leaseInvalidationNone leaseInvalidationReason = iota
 	leaseInvalidationExpire
 	leaseInvalidationRemove
+	leaseInvalidationNetwork
 )
 
 func (r *Router) RouteRequest(platName, account, target string) (RouteResult, error) {
-	plat, err := r.resolvePlatform(platName)
+	return r.RouteWithOptions(RouteOptions{
+		PlatformName:    platName,
+		Account:         account,
+		Target:          target,
+		RequiredNetwork: N.NetworkTCP,
+	})
+}
+
+// RouteWithOptions routes a request through a network-compatible platform view.
+func (r *Router) RouteWithOptions(options RouteOptions) (RouteResult, error) {
+	requiredNetwork, err := normalizeRequiredNetwork(options.RequiredNetwork)
+	if err != nil {
+		return RouteResult{}, err
+	}
+	plat, err := r.resolvePlatform(options.PlatformName)
 	if err != nil {
 		return RouteResult{}, err
 	}
 
-	targetDomain := netutil.ExtractDomain(target)
-	state := r.ensurePlatformState(plat.ID)
+	attempt := routeAttempt{
+		platform:     plat,
+		state:        r.ensurePlatformState(plat.ID),
+		view:         plat.NetworkView(requiredNetwork),
+		account:      options.Account,
+		targetDomain: netutil.ExtractDomain(options.Target),
+		now:          time.Now(),
+	}
 	var result RouteResult
-	if account == "" {
-		result, err = r.routeRandom(plat, state, targetDomain)
+	if options.Account == "" {
+		result, err = r.routeRandom(attempt)
 	} else {
-		result, err = r.routeSticky(plat, state, account, targetDomain, time.Now())
+		result, err = r.routeSticky(attempt)
 	}
 	if err != nil {
 		return RouteResult{}, err
@@ -99,6 +151,17 @@ func (r *Router) RouteRequest(platName, account, target string) (RouteResult, er
 		result.NodeTag = r.nodeTagResolver(result.NodeHash)
 	}
 	return result, nil
+}
+
+func normalizeRequiredNetwork(required string) (string, error) {
+	if required == "" {
+		return N.NetworkTCP, nil
+	}
+	network := N.NetworkName(required)
+	if network != N.NetworkTCP && network != N.NetworkUDP {
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedNetwork, required)
+	}
+	return network, nil
 }
 
 func withPlatformContext(plat *platform.Platform, res RouteResult) RouteResult {
@@ -128,12 +191,8 @@ func (r *Router) ensurePlatformState(platformID string) *PlatformRoutingState {
 	return state
 }
 
-func (r *Router) routeRandom(
-	plat *platform.Platform,
-	state *PlatformRoutingState,
-	targetDomain string,
-) (RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, targetDomain)
+func (r *Router) routeRandom(attempt routeAttempt) (RouteResult, error) {
+	h, entry, err := r.selectLiveRandomRoute(attempt)
 	if err != nil {
 		return RouteResult{}, err
 	}
@@ -144,28 +203,12 @@ func (r *Router) routeRandom(
 	}, nil
 }
 
-func (r *Router) routeSticky(
-	plat *platform.Platform,
-	state *PlatformRoutingState,
-	account string,
-	targetDomain string,
-	now time.Time,
-) (RouteResult, error) {
-	nowNs := now.UnixNano()
+func (r *Router) routeSticky(attempt routeAttempt) (RouteResult, error) {
 	var result RouteResult
 	var routeErr error
 
-	_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
-		newLease, op, routeResult, err := r.decideStickyLease(
-			plat,
-			state,
-			account,
-			targetDomain,
-			now,
-			nowNs,
-			current,
-			loaded,
-		)
+	_, _ = attempt.state.Leases.leases.Compute(attempt.account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+		newLease, op, routeResult, err := r.decideStickyLease(attempt, current, loaded)
 		if err != nil {
 			routeErr = err
 			return newLease, op
@@ -178,70 +221,76 @@ func (r *Router) routeSticky(
 }
 
 func (r *Router) decideStickyLease(
-	plat *platform.Platform,
-	state *PlatformRoutingState,
-	account string,
-	targetDomain string,
-	now time.Time,
-	nowNs int64,
+	attempt routeAttempt,
 	current Lease,
 	loaded bool,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
 	hadPreviousLease := loaded
 	invalidation := leaseInvalidationNone
 
-	if loaded && current.IsExpired(now) {
+	if loaded && current.IsExpired(attempt.now) {
 		invalidation = leaseInvalidationExpire
 		loaded = false
 	}
 
 	if loaded {
-		if newLease, hitResult, ok := r.tryLeaseHit(plat, account, current, nowNs); ok {
+		if newLease, hitResult, ok := r.tryLeaseHit(attempt, current); ok {
 			return newLease, xsync.UpdateOp, hitResult, nil
 		}
-		if newLease, rotatedResult, ok := r.tryLeaseSameIPRotation(plat, account, current, targetDomain, nowNs); ok {
+		if newLease, rotatedResult, ok := r.tryLeaseSameIPRotation(attempt, current); ok {
 			return newLease, xsync.UpdateOp, rotatedResult, nil
 		}
-		invalidation = leaseInvalidationRemove
+		invalidation = r.leaseInvalidation(attempt, current)
 	}
 
-	return r.createOrAbortStickyLease(
-		plat,
-		state,
-		account,
-		targetDomain,
-		now,
-		nowNs,
-		current,
-		hadPreviousLease,
-		invalidation,
-	)
+	return r.createOrAbortStickyLease(attempt, previousLeaseState{
+		lease:        current,
+		loaded:       hadPreviousLease,
+		invalidation: invalidation,
+	})
 }
 
 func (r *Router) createOrAbortStickyLease(
-	plat *platform.Platform,
-	state *PlatformRoutingState,
-	account string,
-	targetDomain string,
-	now time.Time,
-	nowNs int64,
-	previous Lease,
-	hadPreviousLease bool,
-	invalidation leaseInvalidationReason,
+	attempt routeAttempt,
+	previous previousLeaseState,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
-	newLease, createdResult, err := r.createLease(plat, state, targetDomain, now, nowNs)
+	newLease, createdResult, err := r.createLease(attempt)
 	if err != nil {
-		r.cleanupPreviousLease(state, previous, hadPreviousLease, invalidation, plat.ID, account)
-		lease, op := abortLeaseCreate(previous, hadPreviousLease)
+		if previous.invalidation == leaseInvalidationNetwork {
+			return previous.lease, xsync.CancelOp, RouteResult{}, err
+		}
+		r.cleanupPreviousLease(
+			attempt.state,
+			previous.lease,
+			previous.loaded,
+			previous.invalidation,
+			attempt.platform.ID,
+			attempt.account,
+		)
+		lease, op := abortLeaseCreate(previous.lease, previous.loaded)
 		return lease, op, RouteResult{}, err
 	}
 
-	r.cleanupPreviousLease(state, previous, hadPreviousLease, invalidation, plat.ID, account)
-	state.IPLoadStats.Inc(newLease.EgressIP)
+	if previous.invalidation == leaseInvalidationNetwork {
+		return r.replaceNetworkLease(attempt, networkLeaseReplacement{
+			previous: previous.lease,
+			next:     newLease,
+			result:   createdResult,
+		})
+	}
+	r.cleanupPreviousLease(
+		attempt.state,
+		previous.lease,
+		previous.loaded,
+		previous.invalidation,
+		attempt.platform.ID,
+		attempt.account,
+	)
+	attempt.state.IPLoadStats.Inc(newLease.EgressIP)
 	r.emitLeaseEvent(LeaseEvent{
 		Type:       LeaseCreate,
-		PlatformID: plat.ID,
-		Account:    account,
+		PlatformID: attempt.platform.ID,
+		Account:    attempt.account,
 		NodeHash:   newLease.NodeHash,
 		EgressIP:   newLease.EgressIP,
 	})
@@ -249,22 +298,20 @@ func (r *Router) createOrAbortStickyLease(
 }
 
 func (r *Router) tryLeaseHit(
-	plat *platform.Platform,
-	account string,
+	attempt routeAttempt,
 	current Lease,
-	nowNs int64,
 ) (Lease, RouteResult, bool) {
 	entry, ok := r.pool.GetEntry(current.NodeHash)
-	if !ok || !plat.View().Contains(current.NodeHash) || entry.GetEgressIP() != current.EgressIP {
+	if !ok || !attempt.view.Contains(current.NodeHash) || entry.GetEgressIP() != current.EgressIP {
 		return Lease{}, RouteResult{}, false
 	}
 
 	newLease := current
-	newLease.LastAccessedNs = nowNs
+	newLease.LastAccessedNs = attempt.now.UnixNano()
 	r.emitLeaseEvent(LeaseEvent{
 		Type:       LeaseTouch,
-		PlatformID: plat.ID,
-		Account:    account,
+		PlatformID: attempt.platform.ID,
+		Account:    attempt.account,
 		NodeHash:   current.NodeHash,
 		EgressIP:   current.EgressIP,
 	})
@@ -276,31 +323,28 @@ func (r *Router) tryLeaseHit(
 }
 
 func (r *Router) tryLeaseSameIPRotation(
-	plat *platform.Platform,
-	account string,
+	attempt routeAttempt,
 	current Lease,
-	targetDomain string,
-	nowNs int64,
 ) (Lease, RouteResult, bool) {
-	bestHash, ok := chooseSameIPRotationCandidate(
-		plat,
-		r.pool,
-		current.EgressIP,
-		targetDomain,
-		r.authorities(),
-		r.p2cWindow(),
-	)
+	bestHash, ok := chooseSameIPRotationCandidate(sameIPRotationOptions{
+		view:         attempt.view,
+		pool:         r.pool,
+		targetIP:     current.EgressIP,
+		targetDomain: attempt.targetDomain,
+		authorities:  r.authorities(),
+		window:       r.p2cWindow(),
+	})
 	if !ok {
 		return Lease{}, RouteResult{}, false
 	}
 
 	newLease := current
 	newLease.NodeHash = bestHash
-	newLease.LastAccessedNs = nowNs
+	newLease.LastAccessedNs = attempt.now.UnixNano()
 	r.emitLeaseEvent(LeaseEvent{
 		Type:       LeaseReplace,
-		PlatformID: plat.ID,
-		Account:    account,
+		PlatformID: attempt.platform.ID,
+		Account:    attempt.account,
 		NodeHash:   bestHash,
 		EgressIP:   current.EgressIP,
 	})
@@ -311,27 +355,22 @@ func (r *Router) tryLeaseSameIPRotation(
 	}, true
 }
 
-func (r *Router) createLease(
-	plat *platform.Platform,
-	state *PlatformRoutingState,
-	targetDomain string,
-	now time.Time,
-	nowNs int64,
-) (Lease, RouteResult, error) {
-	h, entry, err := r.selectLiveRandomRoute(plat, state.IPLoadStats, targetDomain)
+func (r *Router) createLease(attempt routeAttempt) (Lease, RouteResult, error) {
+	h, entry, err := r.selectLiveRandomRoute(attempt)
 	if err != nil {
 		return Lease{}, RouteResult{}, err
 	}
-	ttl := plat.StickyTTLNs
+	ttl := attempt.platform.StickyTTLNs
 	if ttl <= 0 {
 		ttl = int64(24 * time.Hour) // Default safeguard
 	}
+	nowNs := attempt.now.UnixNano()
 
 	lease := Lease{
 		NodeHash:       h,
 		EgressIP:       entry.GetEgressIP(),
 		CreatedAtNs:    nowNs,
-		ExpiryNs:       now.Add(time.Duration(ttl)).UnixNano(),
+		ExpiryNs:       attempt.now.Add(time.Duration(ttl)).UnixNano(),
 		LastAccessedNs: nowNs,
 	}
 	return lease, RouteResult{
@@ -339,6 +378,32 @@ func (r *Router) createLease(
 		EgressIP:     lease.EgressIP,
 		LeaseCreated: true,
 	}, nil
+}
+
+func (r *Router) leaseInvalidation(attempt routeAttempt, current Lease) leaseInvalidationReason {
+	entry, ok := r.pool.GetEntry(current.NodeHash)
+	if ok && attempt.platform.View().Contains(current.NodeHash) && entry.GetEgressIP() == current.EgressIP {
+		return leaseInvalidationNetwork
+	}
+	return leaseInvalidationRemove
+}
+
+func (r *Router) replaceNetworkLease(
+	attempt routeAttempt,
+	replacement networkLeaseReplacement,
+) (Lease, xsync.ComputeOp, RouteResult, error) {
+	attempt.state.IPLoadStats.Dec(replacement.previous.EgressIP)
+	attempt.state.IPLoadStats.Inc(replacement.next.EgressIP)
+	r.emitLeaseEvent(LeaseEvent{
+		Type:        LeaseReplace,
+		PlatformID:  attempt.platform.ID,
+		Account:     attempt.account,
+		NodeHash:    replacement.next.NodeHash,
+		EgressIP:    replacement.next.EgressIP,
+		CreatedAtNs: replacement.previous.CreatedAtNs,
+	})
+	replacement.result.LeaseCreated = false
+	return replacement.next, xsync.UpdateOp, replacement.result, nil
 }
 
 func (r *Router) cleanupPreviousLease(
@@ -389,13 +454,19 @@ func (r *Router) emitLeaseEvent(event LeaseEvent) {
 }
 
 func (r *Router) selectLiveRandomRoute(
-	plat *platform.Platform,
-	stats *IPLoadStats,
-	targetDomain string,
+	attempt routeAttempt,
 ) (node.Hash, *node.NodeEntry, error) {
 	var lastMissing node.Hash
 	for i := 0; i < livePickAttempts; i++ {
-		h, err := randomRoute(plat, stats, r.pool, targetDomain, r.authorities(), r.p2cWindow())
+		h, err := randomRoute(randomRouteOptions{
+			platform:     attempt.platform,
+			view:         attempt.view,
+			stats:        attempt.state.IPLoadStats,
+			pool:         r.pool,
+			targetDomain: attempt.targetDomain,
+			authorities:  r.authorities(),
+			p2cWindow:    r.p2cWindow(),
+		})
 		if err != nil {
 			return node.Zero, nil, err
 		}
@@ -411,28 +482,35 @@ func (r *Router) selectLiveRandomRoute(
 	return node.Zero, nil, ErrNoAvailableNodes
 }
 
-func chooseSameIPRotationCandidate(
-	plat *platform.Platform,
-	pool PoolAccessor,
-	targetIP netip.Addr,
-	targetDomain string,
-	authorities []string,
-	window time.Duration,
-) (node.Hash, bool) {
+type sameIPRotationOptions struct {
+	view         platform.ReadOnlyView
+	pool         PoolAccessor
+	targetIP     netip.Addr
+	targetDomain string
+	authorities  []string
+	window       time.Duration
+}
+
+func chooseSameIPRotationCandidate(options sameIPRotationOptions) (node.Hash, bool) {
 	bestKnownHash := node.Zero
 	bestKnownLatency := time.Duration(math.MaxInt64)
 	fallbackHash := node.Zero
 
-	plat.View().Range(func(h node.Hash) bool {
-		entry, ok := pool.GetEntry(h)
-		if !ok || entry.GetEgressIP() != targetIP {
+	options.view.Range(func(h node.Hash) bool {
+		entry, ok := options.pool.GetEntry(h)
+		if !ok || entry.GetEgressIP() != options.targetIP {
 			return true
 		}
 		if fallbackHash == node.Zero {
 			fallbackHash = h
 		}
 
-		latency, hasLatency := sameIPCandidateLatency(entry, targetDomain, authorities, window)
+		latency, hasLatency := sameIPCandidateLatency(
+			entry,
+			options.targetDomain,
+			options.authorities,
+			options.window,
+		)
 		if hasLatency && latency < bestKnownLatency {
 			bestKnownLatency = latency
 			bestKnownHash = h

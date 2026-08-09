@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	N "github.com/sagernet/sing/common/network"
 )
 
 // SubLookupFunc resolves a subscription ID + node hash to the subscription's
@@ -242,6 +243,25 @@ func (e *NodeEntry) HasLatency() bool {
 // HasOutbound returns true if the node has a valid outbound instance.
 func (e *NodeEntry) HasOutbound() bool {
 	return e.Outbound.Load() != nil
+}
+
+// SupportsNetwork reports the immutable network capability declared by the
+// node's initialized sing-box outbound.
+func (e *NodeEntry) SupportsNetwork(required string) bool {
+	if e == nil {
+		return false
+	}
+	outbound := e.Outbound.Load()
+	if outbound == nil {
+		return false
+	}
+	want := N.NetworkName(required)
+	for _, candidate := range (*outbound).Network() {
+		if N.NetworkName(candidate) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // IsHealthy returns true when the node can be treated as healthy for

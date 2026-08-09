@@ -323,6 +323,12 @@ func TestNodeEntry_Outbound(t *testing.T) {
 	if !e.HasOutbound() {
 		t.Fatal("should have outbound after store")
 	}
+	if !e.SupportsNetwork("tcp4") || !e.SupportsNetwork("udp6") {
+		t.Fatal("noop outbound should declare TCP and UDP support")
+	}
+	if e.SupportsNetwork("icmp") {
+		t.Fatal("noop outbound should not declare ICMP support")
+	}
 }
 
 func TestNodeEntry_IsHealthy(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Resinat/Resin/internal/node"
+	N "github.com/sagernet/sing/common/network"
 )
 
 // DefaultPlatformID is the well-known UUID of the built-in Default platform.
@@ -43,8 +44,9 @@ type Platform struct {
 
 	// Routable view & its lock.
 	// viewMu serializes both FullRebuild and NotifyDirty.
-	view   *RoutableView
-	viewMu sync.Mutex
+	tcpView *RoutableView
+	udpView *RoutableView
+	viewMu  sync.Mutex
 }
 
 // NewPlatform creates a Platform with an empty routable view.
@@ -60,14 +62,25 @@ func NewPlatformWithTagFilter(id, name string, regexFilters node.TagFilter, regi
 		Name:          name,
 		RegexFilters:  regexFilters,
 		RegionFilters: regionFilters,
-		view:          NewRoutableView(),
+		tcpView:       NewRoutableView(),
+		udpView:       NewRoutableView(),
 	}
 }
 
 // View returns the platform's routable view as a read-only interface.
 // External callers cannot Add/Remove/Clear — only FullRebuild and NotifyDirty can mutate.
 func (p *Platform) View() ReadOnlyView {
-	return p.view
+	return p.tcpView
+}
+
+// NetworkView returns the routable view for a required network. UDP-only
+// nodes are intentionally excluded: the UDP view requires both TCP health
+// probe capability and UDP transport capability.
+func (p *Platform) NetworkView(required string) ReadOnlyView {
+	if N.NetworkName(required) == N.NetworkUDP {
+		return p.udpView
+	}
+	return p.tcpView
 }
 
 // FullRebuild clears the routable view and re-evaluates all nodes from the pool.
@@ -80,10 +93,11 @@ func (p *Platform) FullRebuild(
 	p.viewMu.Lock()
 	defer p.viewMu.Unlock()
 
-	p.view.Clear()
+	p.tcpView.Clear()
+	p.udpView.Clear()
 	poolRange(func(h node.Hash, entry *node.NodeEntry) bool {
 		if p.evaluateNode(entry, subLookup, geoLookup) {
-			p.view.Add(h)
+			p.updateNetworkViews(h, entry)
 		}
 		return true
 	})
@@ -103,15 +117,33 @@ func (p *Platform) NotifyDirty(
 	entry, ok := getEntry(h)
 	if !ok {
 		// Node was deleted from pool.
-		p.view.Remove(h)
+		p.removeFromNetworkViews(h)
 		return
 	}
 
 	if p.evaluateNode(entry, subLookup, geoLookup) {
-		p.view.Add(h)
+		p.updateNetworkViews(h, entry)
 	} else {
-		p.view.Remove(h)
+		p.removeFromNetworkViews(h)
 	}
+}
+
+func (p *Platform) updateNetworkViews(h node.Hash, entry *node.NodeEntry) {
+	if !entry.SupportsNetwork(N.NetworkTCP) {
+		p.removeFromNetworkViews(h)
+		return
+	}
+	p.tcpView.Add(h)
+	if entry.SupportsNetwork(N.NetworkUDP) {
+		p.udpView.Add(h)
+		return
+	}
+	p.udpView.Remove(h)
+}
+
+func (p *Platform) removeFromNetworkViews(h node.Hash) {
+	p.tcpView.Remove(h)
+	p.udpView.Remove(h)
 }
 
 // evaluateNode checks all filter conditions for platform routability.

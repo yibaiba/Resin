@@ -8,7 +8,25 @@ import (
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/testutil"
+	"github.com/sagernet/sing-box/adapter"
 )
+
+type networkLimitedOutbound struct {
+	*testutil.NoopOutbound
+	networks []string
+}
+
+func (o *networkLimitedOutbound) Network() []string {
+	return append([]string(nil), o.networks...)
+}
+
+func setEntryNetworks(entry *node.NodeEntry, networks ...string) {
+	var outbound adapter.Outbound = &networkLimitedOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     networks,
+	}
+	entry.Outbound.Store(&outbound)
+}
 
 // makeFullyRoutableEntry creates a NodeEntry that passes all 5 filter conditions.
 func makeFullyRoutableEntry(hash node.Hash, subIDs ...string) *node.NodeEntry {
@@ -44,6 +62,35 @@ func TestPlatform_EvaluateNode_AllPass(t *testing.T) {
 
 	if p.View().Size() != 1 {
 		t.Fatalf("expected 1 routable node, got %d", p.View().Size())
+	}
+}
+
+func TestPlatform_MaintainsTCPAndUDPNetworkViews(t *testing.T) {
+	p := NewPlatform("p-network", "Network", nil, nil)
+	tcpHash := makeHash(`{"network":"tcp"}`)
+	dualHash := makeHash(`{"network":"dual"}`)
+	udpHash := makeHash(`{"network":"udp"}`)
+	entries := map[node.Hash]*node.NodeEntry{
+		tcpHash:  makeFullyRoutableEntry(tcpHash, "sub1"),
+		dualHash: makeFullyRoutableEntry(dualHash, "sub1"),
+		udpHash:  makeFullyRoutableEntry(udpHash, "sub1"),
+	}
+	setEntryNetworks(entries[tcpHash], "tcp")
+	setEntryNetworks(entries[dualHash], "tcp", "udp")
+	setEntryNetworks(entries[udpHash], "udp")
+
+	p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
+		for hash, entry := range entries {
+			fn(hash, entry)
+		}
+	}, alwaysLookup, usGeoLookup)
+
+	if !p.View().Contains(tcpHash) || !p.View().Contains(dualHash) || p.View().Contains(udpHash) {
+		t.Fatalf("unexpected TCP view contents: size=%d", p.View().Size())
+	}
+	udpView := p.NetworkView("udp")
+	if udpView.Size() != 1 || !udpView.Contains(dualHash) {
+		t.Fatalf("unexpected UDP view contents: size=%d", udpView.Size())
 	}
 }
 

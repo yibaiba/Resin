@@ -137,14 +137,15 @@ func TestRandomRoute_SingleNodeTrustsViewWithoutPoolValidation(t *testing.T) {
 	countingPool := &getEntryCountPool{inner: basePool}
 	stats := NewIPLoadStats()
 
-	got, err := randomRoute(
-		plat,
-		stats,
-		countingPool,
-		"example.com",
-		[]string{"cloudflare.com"},
-		10*time.Minute,
-	)
+	got, err := randomRoute(randomRouteOptions{
+		platform:     plat,
+		view:         plat.View(),
+		stats:        stats,
+		pool:         countingPool,
+		targetDomain: "example.com",
+		authorities:  []string{"cloudflare.com"},
+		p2cWindow:    10 * time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("randomRoute failed: %v", err)
 	}
@@ -230,14 +231,14 @@ func TestChooseSameIPRotationCandidate_PicksLowestLatency(t *testing.T) {
 		func(_ netip.Addr) string { return "" },
 	)
 
-	hash, ok := chooseSameIPRotationCandidate(
-		plat,
-		pool,
-		netip.MustParseAddr("198.51.100.77"),
-		"example.com",
-		[]string{"cloudflare.com"},
-		10*time.Minute,
-	)
+	hash, ok := chooseSameIPRotationCandidate(sameIPRotationOptions{
+		view:         plat.View(),
+		pool:         pool,
+		targetIP:     netip.MustParseAddr("198.51.100.77"),
+		targetDomain: "example.com",
+		authorities:  []string{"cloudflare.com"},
+		window:       10 * time.Minute,
+	})
 	if !ok {
 		t.Fatal("expected same-ip rotation candidate")
 	}

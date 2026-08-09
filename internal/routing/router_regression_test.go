@@ -11,7 +11,17 @@ import (
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/testutil"
+	"github.com/sagernet/sing-box/adapter"
 )
+
+type routeNetworkOutbound struct {
+	*testutil.NoopOutbound
+	networks []string
+}
+
+func (o *routeNetworkOutbound) Network() []string {
+	return append([]string(nil), o.networks...)
+}
 
 type routerTestPool struct {
 	mu          sync.RWMutex
@@ -129,6 +139,14 @@ func newRoutableEntry(t *testing.T, raw, ip string) (node.Hash, *node.NodeEntry)
 	return h, e
 }
 
+func setRouteEntryNetworks(entry *node.NodeEntry, networks ...string) {
+	var outbound adapter.Outbound = &routeNetworkOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     networks,
+	}
+	entry.Outbound.Store(&outbound)
+}
+
 func waitForDomainLatency(t *testing.T, e *node.NodeEntry, domain string) {
 	t.Helper()
 	deadline := time.Now().Add(250 * time.Millisecond)
@@ -157,6 +175,160 @@ func newTestRouter(pool PoolAccessor, onEvent LeaseEventFunc) *Router {
 		P2CWindow:    func() time.Duration { return 10 * time.Minute },
 		OnLeaseEvent: onEvent,
 	})
+}
+
+func TestRouteWithOptions_UDPExcludesTCPOnlyNodes(t *testing.T) {
+	pool := newRouterTestPool()
+	plat := platform.NewPlatform("plat-network", "Plat-Network", nil, nil)
+	pool.addPlatform(plat)
+
+	tcpHash, tcpEntry := newRoutableEntry(t, `{"id":"tcp-only"}`, "198.51.100.10")
+	dualHash, dualEntry := newRoutableEntry(t, `{"id":"dual-stack"}`, "198.51.100.11")
+	setRouteEntryNetworks(tcpEntry, "tcp")
+	setRouteEntryNetworks(dualEntry, "tcp", "udp")
+	pool.addEntry(tcpHash, tcpEntry)
+	pool.addEntry(dualHash, dualEntry)
+	pool.rebuildPlatformView(plat)
+
+	result, err := newTestRouter(pool, nil).RouteWithOptions(RouteOptions{
+		PlatformName:    plat.Name,
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if err != nil {
+		t.Fatalf("route UDP: %v", err)
+	}
+	if result.NodeHash != dualHash {
+		t.Fatalf("UDP selected %s, want dual-stack %s", result.NodeHash.Hex(), dualHash.Hex())
+	}
+}
+
+func TestRouteWithOptions_UDPReplacesTCPOnlyStickyLease(t *testing.T) {
+	pool := newRouterTestPool()
+	plat := platform.NewPlatform("plat-sticky-network", "Plat-Sticky-Network", nil, nil)
+	plat.StickyTTLNs = int64(time.Hour)
+	pool.addPlatform(plat)
+
+	tcpHash, tcpEntry := newRoutableEntry(t, `{"id":"sticky-tcp"}`, "198.51.100.20")
+	setRouteEntryNetworks(tcpEntry, "tcp")
+	pool.addEntry(tcpHash, tcpEntry)
+	pool.rebuildPlatformView(plat)
+
+	var events []LeaseEvent
+	router := newTestRouter(pool, func(event LeaseEvent) { events = append(events, event) })
+	first, err := router.RouteRequest(plat.Name, "account", "example.com:443")
+	if err != nil || first.NodeHash != tcpHash {
+		t.Fatalf("create TCP lease: result=%+v err=%v", first, err)
+	}
+
+	dualHash, dualEntry := newRoutableEntry(t, `{"id":"sticky-dual"}`, "198.51.100.21")
+	setRouteEntryNetworks(dualEntry, "tcp", "udp")
+	pool.addEntry(dualHash, dualEntry)
+	pool.rebuildPlatformView(plat)
+
+	replaced, err := router.RouteWithOptions(RouteOptions{
+		PlatformName:    plat.Name,
+		Account:         "account",
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if err != nil {
+		t.Fatalf("replace lease for UDP: %v", err)
+	}
+	if replaced.NodeHash != dualHash || replaced.LeaseCreated {
+		t.Fatalf("unexpected replacement result: %+v", replaced)
+	}
+	if len(events) < 2 || events[len(events)-1].Type != LeaseReplace {
+		t.Fatalf("expected LeaseReplace event, got %+v", events)
+	}
+	state := router.ensurePlatformState(plat.ID)
+	if got := state.IPLoadStats.Get(tcpEntry.GetEgressIP()); got != 0 {
+		t.Fatalf("old lease IP load: got %d, want 0", got)
+	}
+	if got := state.IPLoadStats.Get(dualEntry.GetEgressIP()); got != 1 {
+		t.Fatalf("new lease IP load: got %d, want 1", got)
+	}
+
+	tcpAfter, err := router.RouteRequest(plat.Name, "account", "example.com:443")
+	if err != nil || tcpAfter.NodeHash != dualHash {
+		t.Fatalf("TCP did not share replaced lease: result=%+v err=%v", tcpAfter, err)
+	}
+}
+
+func TestRouteWithOptions_UDPSameIPRotationUsesUDPView(t *testing.T) {
+	pool := newRouterTestPool()
+	plat := platform.NewPlatform("plat-same-ip-network", "Plat-Same-IP-Network", nil, nil)
+	plat.StickyTTLNs = int64(time.Hour)
+	pool.addPlatform(plat)
+
+	const sharedIP = "198.51.100.25"
+	currentHash, currentEntry := newRoutableEntry(t, `{"id":"same-ip-current"}`, sharedIP)
+	setRouteEntryNetworks(currentEntry, "tcp")
+	pool.addEntry(currentHash, currentEntry)
+	pool.rebuildPlatformView(plat)
+	router := newTestRouter(pool, nil)
+	if _, err := router.RouteRequest(plat.Name, "account", "example.com:443"); err != nil {
+		t.Fatalf("create TCP lease: %v", err)
+	}
+
+	tcpCandidateHash, tcpCandidate := newRoutableEntry(t, `{"id":"same-ip-tcp"}`, sharedIP)
+	dualHash, dualCandidate := newRoutableEntry(t, `{"id":"same-ip-dual"}`, sharedIP)
+	setRouteEntryNetworks(tcpCandidate, "tcp")
+	setRouteEntryNetworks(dualCandidate, "tcp", "udp")
+	pool.addEntry(tcpCandidateHash, tcpCandidate)
+	pool.addEntry(dualHash, dualCandidate)
+	pool.rebuildPlatformView(plat)
+
+	result, err := router.RouteWithOptions(RouteOptions{
+		PlatformName:    plat.Name,
+		Account:         "account",
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if err != nil {
+		t.Fatalf("rotate same-IP lease for UDP: %v", err)
+	}
+	if result.NodeHash != dualHash {
+		t.Fatalf("same-IP rotation selected %s, want UDP node %s", result.NodeHash.Hex(), dualHash.Hex())
+	}
+}
+
+func TestRouteWithOptions_UDPFailurePreservesTCPLease(t *testing.T) {
+	pool := newRouterTestPool()
+	plat := platform.NewPlatform("plat-preserve", "Plat-Preserve", nil, nil)
+	plat.StickyTTLNs = int64(time.Hour)
+	pool.addPlatform(plat)
+
+	tcpHash, tcpEntry := newRoutableEntry(t, `{"id":"preserve-tcp"}`, "198.51.100.30")
+	setRouteEntryNetworks(tcpEntry, "tcp")
+	pool.addEntry(tcpHash, tcpEntry)
+	pool.rebuildPlatformView(plat)
+	router := newTestRouter(pool, nil)
+
+	if _, err := router.RouteRequest(plat.Name, "account", "example.com:443"); err != nil {
+		t.Fatalf("create TCP lease: %v", err)
+	}
+	_, err := router.RouteWithOptions(RouteOptions{
+		PlatformName:    plat.Name,
+		Account:         "account",
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if !errors.Is(err, ErrNoAvailableNodes) {
+		t.Fatalf("UDP route error: got %v, want ErrNoAvailableNodes", err)
+	}
+	preserved, err := router.RouteRequest(plat.Name, "account", "example.com:443")
+	if err != nil || preserved.NodeHash != tcpHash {
+		t.Fatalf("TCP lease was not preserved: result=%+v err=%v", preserved, err)
+	}
+}
+
+func TestRouteWithOptions_RejectsUnsupportedNetwork(t *testing.T) {
+	router := newTestRouter(nil, nil)
+	_, err := router.RouteWithOptions(RouteOptions{RequiredNetwork: "icmp"})
+	if !errors.Is(err, ErrUnsupportedNetwork) {
+		t.Fatalf("route error: got %v, want ErrUnsupportedNetwork", err)
+	}
 }
 
 func TestRouteRequest_SameIPRotationPrefersTargetLatencySample(t *testing.T) {
