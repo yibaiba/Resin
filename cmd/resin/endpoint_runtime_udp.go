@@ -9,13 +9,29 @@ import (
 
 type endpointPacketHandler interface {
 	ServePacketConnContext(context.Context, string, net.PacketConn) error
+	OpenUDPAssociationScope(string) error
 	CloseUDPAssociationScope(string) error
 }
 
-func (r *managedEndpointRuntime) attachPacketConn(packetConn net.PacketConn) {
+func (r *managedEndpointRuntime) attachUDP(
+	packetConn net.PacketConn,
+	packetHandler endpointPacketHandler,
+	associationScope string,
+) {
 	r.udpMu.Lock()
 	r.packetConn = packetConn
+	r.packetHandler = packetHandler
+	r.associationScope = associationScope
 	r.udpMu.Unlock()
+}
+
+func (r *managedEndpointRuntime) currentAssociationScope() string {
+	if r == nil {
+		return ""
+	}
+	r.udpMu.Lock()
+	defer r.udpMu.Unlock()
+	return r.associationScope
 }
 
 func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
@@ -29,6 +45,8 @@ func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
 	cancel := r.udpCancel
 	packetConn := r.packetConn
 	done := r.udpDone
+	associationScope := r.associationScope
+	packetHandler := r.packetHandler
 	r.udpCancel = nil
 	r.udpDone = nil
 	r.packetConn = nil
@@ -42,9 +60,9 @@ func (r *managedEndpointRuntime) stopUDP(ctx context.Context) error {
 		closeErr = packetConn.Close()
 	}
 	var associationErr error
-	if r.packetHandler != nil {
+	if packetHandler != nil {
 		// Closing flows can unblock the relay while it is handling a datagram.
-		associationErr = r.packetHandler.CloseUDPAssociationScope(r.associationScope)
+		associationErr = packetHandler.CloseUDPAssociationScope(associationScope)
 	}
 	var waitErr error
 	if done != nil {

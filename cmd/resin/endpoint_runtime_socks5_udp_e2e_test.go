@@ -16,7 +16,10 @@ import (
 	"github.com/Resinat/Resin/internal/proxy"
 )
 
-const socks5UDPTestReadTimeout = 150 * time.Millisecond
+const (
+	socks5UDPTestReadTimeout         = 150 * time.Millisecond
+	socks5UDPTestReplyGeneralFailure = 0x01
+)
 
 type endpointUDPEventEmitter struct {
 	logs chan proxy.RequestLogEntry
@@ -138,6 +141,58 @@ func TestEndpointRuntimeSOCKS5UDPAuthenticatedEndToEnd(t *testing.T) {
 	}, v4Echo)
 }
 
+func TestEndpointRuntimeSOCKS5UDPRejectsLateAssociationAfterDisable(t *testing.T) {
+	port := reserveDualTransportPort(t)
+	socksInbound := proxy.NewSocks5Inbound(proxy.Socks5InboundConfig{ProxyToken: "token"})
+	manager := newEndpointRuntimeManager(
+		"127.0.0.1", "token", nil, nil, nil, nil, socksInbound, nil,
+	)
+	endpoint := model.Endpoint{
+		ID: "udp-disable-race", Port: port, Enabled: true,
+		AllowProxy: true, AllowSOCKS5: true, RequireProxyAuthInfo: true,
+	}
+	if err := manager.ApplyEndpoint(endpoint); err != nil {
+		t.Fatalf("ApplyEndpoint: %v", err)
+	}
+	manager.Start()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+
+	udpClient := listenEndpointUDPClient(t)
+	staleControl, staleReader := openAuthenticatedSOCKS5Control(t, port)
+	restartStaleControl, restartStaleReader := openAuthenticatedSOCKS5Control(t, port)
+	disabled := endpoint
+	disabled.AllowSOCKS5 = false
+	if err := manager.ApplyEndpoint(disabled); err != nil {
+		t.Fatalf("disable SOCKS5: %v", err)
+	}
+	writeEndpointUDPAssociateRequest(t, staleControl, udpClient.LocalAddr().(*net.UDPAddr).Port)
+	if code, _ := readEndpointSOCKS5Reply(t, staleReader); code != socks5UDPTestReplyGeneralFailure {
+		t.Fatalf("stale UDP ASSOCIATE reply: got %d, want general failure", code)
+	}
+	_ = staleControl.Close()
+
+	if err := manager.ApplyEndpoint(endpoint); err != nil {
+		t.Fatalf("re-enable SOCKS5: %v", err)
+	}
+	writeEndpointUDPAssociateRequest(
+		t, restartStaleControl, udpClient.LocalAddr().(*net.UDPAddr).Port,
+	)
+	if code, _ := readEndpointSOCKS5Reply(t, restartStaleReader); code != socks5UDPTestReplyGeneralFailure {
+		t.Fatalf("restarted stale UDP ASSOCIATE reply: got %d, want general failure", code)
+	}
+	_ = restartStaleControl.Close()
+	activeControl := openAuthenticatedUDPAssociation(
+		t, port, udpClient.LocalAddr().(*net.UDPAddr).Port,
+	)
+	_ = activeControl.Close()
+}
+
 func listenEndpointUDPClient(t *testing.T) *net.UDPConn {
 	t.Helper()
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -149,6 +204,17 @@ func listenEndpointUDPClient(t *testing.T) *net.UDPConn {
 }
 
 func openAuthenticatedUDPAssociation(t *testing.T, proxyPort int, clientPort int) net.Conn {
+	t.Helper()
+	conn, reader := openAuthenticatedSOCKS5Control(t, proxyPort)
+	writeEndpointUDPAssociateRequest(t, conn, clientPort)
+	replyCode, replyTarget := readEndpointSOCKS5Reply(t, reader)
+	if replyCode != 0 || replyTarget != formatListenAddress("0.0.0.0", proxyPort) {
+		t.Fatalf("UDP ASSOCIATE reply: code=%d target=%q", replyCode, replyTarget)
+	}
+	return conn
+}
+
+func openAuthenticatedSOCKS5Control(t *testing.T, proxyPort int) (net.Conn, *bufio.Reader) {
 	t.Helper()
 	conn, err := net.Dial("tcp", formatListenAddress("127.0.0.1", proxyPort))
 	if err != nil {
@@ -167,14 +233,14 @@ func openAuthenticatedUDPAssociation(t *testing.T, proxyPort int, clientPort int
 	if reply := readEndpointTestBytes(t, reader, 2); !bytes.Equal(reply, []byte{1, 0}) {
 		t.Fatalf("SOCKS5 auth reply: %v", reply)
 	}
+	return conn, reader
+}
+
+func writeEndpointUDPAssociateRequest(t *testing.T, conn net.Conn, clientPort int) {
+	t.Helper()
 	request := []byte{5, 3, 0, 1, 0, 0, 0, 0}
 	request = binary.BigEndian.AppendUint16(request, uint16(clientPort))
 	writeEndpointTestBytes(t, conn, request)
-	replyCode, replyTarget := readEndpointSOCKS5Reply(t, reader)
-	if replyCode != 0 || replyTarget != formatListenAddress("0.0.0.0", proxyPort) {
-		t.Fatalf("UDP ASSOCIATE reply: code=%d target=%q", replyCode, replyTarget)
-	}
-	return conn
 }
 
 func readEndpointSOCKS5Reply(t *testing.T, reader io.Reader) (byte, string) {

@@ -19,11 +19,13 @@ type endpointPacketStart struct {
 
 type endpointRuntimeSocksHandler struct {
 	packetStarts chan endpointPacketStart
+	openedScopes chan string
 	closedScopes chan string
 	policies     chan proxy.InboundPolicy
 
 	mu           sync.Mutex
 	activeScopes map[string]struct{}
+	openErr      error
 }
 
 type scopeGatedEndpointHandler struct {
@@ -58,6 +60,8 @@ func (h *scopeGatedEndpointHandler) CloseUDPAssociationScope(string) error {
 	return nil
 }
 
+func (h *scopeGatedEndpointHandler) OpenUDPAssociationScope(string) error { return nil }
+
 func (h *scopeGatedEndpointHandler) forceRelease() {
 	h.releaseOnce.Do(func() { close(h.release) })
 }
@@ -80,14 +84,21 @@ func (h *stubbornEndpointHandler) ServePacketConnContext(
 }
 
 func (h *stubbornEndpointHandler) CloseUDPAssociationScope(string) error { return nil }
+func (h *stubbornEndpointHandler) OpenUDPAssociationScope(string) error  { return nil }
 
 func newEndpointRuntimeSocksHandler() *endpointRuntimeSocksHandler {
 	return &endpointRuntimeSocksHandler{
 		packetStarts: make(chan endpointPacketStart, 8),
+		openedScopes: make(chan string, 8),
 		closedScopes: make(chan string, 8),
 		policies:     make(chan proxy.InboundPolicy, 8),
 		activeScopes: make(map[string]struct{}),
 	}
+}
+
+func (h *endpointRuntimeSocksHandler) OpenUDPAssociationScope(scope string) error {
+	h.openedScopes <- scope
+	return h.openErr
 }
 
 func (h *endpointRuntimeSocksHandler) ServeConnContext(ctx context.Context, conn net.Conn) {
@@ -471,6 +482,23 @@ func TestEndpointRuntimeSOCKS5RequiresPacketHandlerWithoutLeakingTCP(t *testing.
 	assertDualTransportPortReleased(t, port)
 }
 
+func TestEndpointRuntimeScopeOpenFailureReleasesTCPAndUDP(t *testing.T) {
+	port := reserveDualTransportPort(t)
+	handler := newEndpointRuntimeSocksHandler()
+	handler.openErr = errors.New("association scope unavailable")
+	manager := newEndpointRuntimeManager(
+		"127.0.0.1", "", nil, nil, nil, nil, handler, nil,
+	)
+	endpoint := model.Endpoint{
+		ID: "scope-open-failure", Port: port,
+		Enabled: true, AllowProxy: true, AllowSOCKS5: true,
+	}
+	if err := manager.ApplyEndpoint(endpoint); err == nil {
+		t.Fatal("SOCKS5 endpoint started with a closed association manager")
+	}
+	assertDualTransportPortReleased(t, port)
+}
+
 func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 	handler := newEndpointRuntimeSocksHandler()
 	gate := &endpointSocksGate{
@@ -480,7 +508,7 @@ func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 			}
 		},
 		next:             handler,
-		associationScope: "endpoint#42",
+		associationScope: func() string { return "endpoint#42" },
 	}
 	client, server := net.Pipe()
 	defer client.Close()

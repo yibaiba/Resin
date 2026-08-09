@@ -279,7 +279,7 @@ func ignoreClosedNetworkError(err error) error {
 type endpointSocksGate struct {
 	current          func() model.Endpoint
 	next             inboundConnHandler
-	associationScope string
+	associationScope func() string
 }
 
 func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn) {
@@ -287,7 +287,11 @@ func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn)
 	if g != nil && g.current != nil {
 		endpoint = g.current()
 	}
-	if !endpoint.AllowProxy || !endpoint.AllowSOCKS5 || g == nil || g.next == nil {
+	associationScope := ""
+	if g != nil && g.associationScope != nil {
+		associationScope = g.associationScope()
+	}
+	if !endpoint.AllowProxy || !endpoint.AllowSOCKS5 || g == nil || g.next == nil || associationScope == "" {
 		if conn != nil {
 			_, _ = conn.Write([]byte{0x05, 0xFF})
 			_ = conn.Close()
@@ -296,7 +300,7 @@ func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn)
 	}
 	ctx = proxy.ContextWithInboundPolicy(ctx, proxy.InboundPolicy{
 		RequireProxyAuthInfo:      endpoint.RequireProxyAuthInfo,
-		Socks5UDPAssociationScope: g.associationScope,
+		Socks5UDPAssociationScope: associationScope,
 		Socks5UDPPort:             uint16(endpoint.Port),
 	})
 	g.next.ServeConnContext(ctx, conn)

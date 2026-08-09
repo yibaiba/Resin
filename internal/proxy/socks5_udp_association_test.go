@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -273,6 +274,68 @@ func TestSocks5UDPAssociationEndpointAndManagerCleanup(t *testing.T) {
 	})
 	if !errors.Is(err, errSocks5UDPAssociationManagerClosed) {
 		t.Fatalf("register after close: got %v", err)
+	}
+}
+
+func TestSocks5UDPAssociationScopeCloseRejectsLateRegistration(t *testing.T) {
+	const attempts = 50
+	clientIP := netip.MustParseAddr("198.51.100.14")
+	requestedSource := netip.MustParseAddrPort("0.0.0.0:47003")
+	for index := 0; index < attempts; index++ {
+		manager := newSocks5UDPAssociationManager(time.Minute)
+		endpointID := fmt.Sprintf("scope-race-%d", index)
+		start := make(chan struct{})
+		registration := make(chan struct {
+			association *socks5UDPAssociation
+			err         error
+		}, 1)
+		closeDone := make(chan error, 1)
+		go func() {
+			<-start
+			association, err := manager.register(socks5UDPAssociationOptions{
+				endpointID: endpointID, clientIP: clientIP, requestedSource: requestedSource,
+			})
+			registration <- struct {
+				association *socks5UDPAssociation
+				err         error
+			}{association: association, err: err}
+		}()
+		go func() {
+			<-start
+			closeDone <- manager.closeEndpoint(endpointID)
+		}()
+		close(start)
+		result := <-registration
+		if err := <-closeDone; err != nil {
+			t.Fatalf("close endpoint scope: %v", err)
+		}
+		if result.err == nil && !result.association.closed.Load() {
+			t.Fatal("registration linearized before close but survived scope cleanup")
+		}
+		if result.err != nil && !errors.Is(result.err, errSocks5UDPAssociationScopeClosed) {
+			t.Fatalf("concurrent registration error: %v", result.err)
+		}
+		_, err := manager.register(socks5UDPAssociationOptions{
+			endpointID: endpointID, clientIP: clientIP, requestedSource: requestedSource,
+		})
+		if !errors.Is(err, errSocks5UDPAssociationScopeClosed) {
+			t.Fatalf("late registration: got %v, want closed scope", err)
+		}
+		if err := manager.openEndpoint(endpointID); err != nil {
+			t.Fatalf("reopen endpoint scope: %v", err)
+		}
+		reopened, err := manager.register(socks5UDPAssociationOptions{
+			endpointID: endpointID, clientIP: clientIP, requestedSource: requestedSource,
+		})
+		if err != nil {
+			t.Fatalf("register reopened scope: %v", err)
+		}
+		if err := reopened.Close(); err != nil {
+			t.Fatalf("close reopened association: %v", err)
+		}
+		if err := manager.close(); err != nil {
+			t.Fatalf("close manager: %v", err)
+		}
 	}
 }
 

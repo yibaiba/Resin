@@ -13,6 +13,7 @@ var (
 	errSocks5UDPAssociationExists        = errors.New("SOCKS5 UDP association already exists")
 	errSocks5UDPPendingExists            = errors.New("pending SOCKS5 UDP association already exists")
 	errSocks5UDPAssociationNotFound      = errors.New("SOCKS5 UDP association not found")
+	errSocks5UDPAssociationScopeClosed   = errors.New("SOCKS5 UDP association scope is closed")
 	errSocks5UDPInvalidAssociationSource = errors.New("invalid SOCKS5 UDP association source")
 )
 
@@ -38,11 +39,12 @@ type socks5UDPPendingKey struct {
 }
 
 type socks5UDPAssociationManager struct {
-	mu          sync.Mutex
-	idleTimeout time.Duration
-	bySource    map[socks5UDPSourceKey]*socks5UDPAssociation
-	pending     map[socks5UDPPendingKey]*socks5UDPAssociation
-	closed      bool
+	mu           sync.Mutex
+	idleTimeout  time.Duration
+	bySource     map[socks5UDPSourceKey]*socks5UDPAssociation
+	pending      map[socks5UDPPendingKey]*socks5UDPAssociation
+	closedScopes map[string]struct{}
+	closed       bool
 }
 
 func newSocks5UDPAssociationManager(idleTimeout time.Duration) *socks5UDPAssociationManager {
@@ -50,9 +52,10 @@ func newSocks5UDPAssociationManager(idleTimeout time.Duration) *socks5UDPAssocia
 		idleTimeout = defaultSocks5UDPIdleTimeout
 	}
 	return &socks5UDPAssociationManager{
-		idleTimeout: idleTimeout,
-		bySource:    make(map[socks5UDPSourceKey]*socks5UDPAssociation),
-		pending:     make(map[socks5UDPPendingKey]*socks5UDPAssociation),
+		idleTimeout:  idleTimeout,
+		bySource:     make(map[socks5UDPSourceKey]*socks5UDPAssociation),
+		pending:      make(map[socks5UDPPendingKey]*socks5UDPAssociation),
+		closedScopes: make(map[string]struct{}),
 	}
 }
 
@@ -79,6 +82,9 @@ func (m *socks5UDPAssociationManager) register(
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, errSocks5UDPAssociationManagerClosed
+	}
+	if _, closed := m.closedScopes[options.endpointID]; closed {
+		return nil, errSocks5UDPAssociationScopeClosed
 	}
 	if pending {
 		key := socks5UDPPendingKey{endpointID: options.endpointID, clientIP: clientIP}
@@ -132,9 +138,26 @@ func (m *socks5UDPAssociationManager) closeEndpoint(endpointID string) error {
 	if endpointID == "" {
 		return nil
 	}
-	return m.closeMatching(func(association *socks5UDPAssociation) bool {
+	m.mu.Lock()
+	m.closedScopes[endpointID] = struct{}{}
+	associations := m.detachMatchingLocked(func(association *socks5UDPAssociation) bool {
 		return association.endpointID == endpointID
 	})
+	m.mu.Unlock()
+	return closeSocks5UDPAssociations(associations)
+}
+
+func (m *socks5UDPAssociationManager) openEndpoint(endpointID string) error {
+	if endpointID == "" {
+		return errSocks5UDPInvalidAssociationSource
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errSocks5UDPAssociationManagerClosed
+	}
+	delete(m.closedScopes, endpointID)
+	return nil
 }
 
 func (m *socks5UDPAssociationManager) close() error {
@@ -145,15 +168,6 @@ func (m *socks5UDPAssociationManager) close() error {
 	}
 	m.closed = true
 	associations := m.detachMatchingLocked(func(*socks5UDPAssociation) bool { return true })
-	m.mu.Unlock()
-	return closeSocks5UDPAssociations(associations)
-}
-
-func (m *socks5UDPAssociationManager) closeMatching(
-	matches func(*socks5UDPAssociation) bool,
-) error {
-	m.mu.Lock()
-	associations := m.detachMatchingLocked(matches)
 	m.mu.Unlock()
 	return closeSocks5UDPAssociations(associations)
 }

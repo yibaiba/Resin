@@ -26,8 +26,12 @@ func (m *endpointRuntimeManager) applySamePortEndpointLocked(
 		if err != nil {
 			return err
 		}
-		runtime.packetHandler = handler
-		runtime.attachPacketConn(packetConn)
+		associationScope := m.nextAssociationScopeLocked(endpoint.ID)
+		if err := handler.OpenUDPAssociationScope(associationScope); err != nil {
+			_ = packetConn.Close()
+			return err
+		}
+		runtime.attachUDP(packetConn, handler, associationScope)
 		storeEndpointConfig(runtime, endpoint)
 		if runtime.started {
 			m.startUDPLocked(runtime)
@@ -52,17 +56,23 @@ func (m *endpointRuntimeManager) createRuntimeLocked(
 	}
 	var packetConn net.PacketConn
 	var packetHandler endpointPacketHandler
+	associationScope := ""
 	if endpoint.AllowSOCKS5 {
 		packetConn, packetHandler, err = m.bindEndpointUDP(endpoint.Port)
 		if err != nil {
 			_ = listener.Close()
 			return nil, err
 		}
+		associationScope = m.nextAssociationScopeLocked(endpoint.ID)
+		if err := packetHandler.OpenUDPAssociationScope(associationScope); err != nil {
+			_ = packetConn.Close()
+			_ = listener.Close()
+			return nil, err
+		}
 	}
-	m.nextScopeID++
 	runtime := &managedEndpointRuntime{
 		listener:         proxy.NewCountingListener(listener, m.metricsSink),
-		associationScope: fmt.Sprintf("%s#%d", endpoint.ID, m.nextScopeID),
+		associationScope: associationScope,
 		packetHandler:    packetHandler,
 		packetConn:       packetConn,
 	}
@@ -86,9 +96,14 @@ func (m *endpointRuntimeManager) configureRuntimeServers(runtime *managedEndpoin
 		&endpointSocksGate{
 			current:          currentConfig,
 			next:             m.socks5,
-			associationScope: runtime.associationScope,
+			associationScope: runtime.currentAssociationScope,
 		},
 	)
+}
+
+func (m *endpointRuntimeManager) nextAssociationScopeLocked(endpointID string) string {
+	m.nextScopeID++
+	return fmt.Sprintf("%s#%d", endpointID, m.nextScopeID)
 }
 
 func storeEndpointConfig(runtime *managedEndpointRuntime, endpoint model.Endpoint) {

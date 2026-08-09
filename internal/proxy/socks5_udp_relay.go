@@ -138,3 +138,11 @@ func (s *Socks5Inbound) CloseUDPAssociationScope(associationScope string) error 
 	}
 	return s.udpAssociations.closeEndpoint(associationScope)
 }
+
+// OpenUDPAssociationScope allows a new endpoint generation to register sessions.
+func (s *Socks5Inbound) OpenUDPAssociationScope(associationScope string) error {
+	if s == nil || s.udpAssociations == nil {
+		return errors.New("SOCKS5 UDP inbound is not initialized")
+	}
+	return s.udpAssociations.openEndpoint(associationScope)
+}
