@@ -18,7 +18,19 @@ func resolveRoutedOutbound(
 	account string,
 	target string,
 ) (routedOutbound, *ProxyError) {
-	result, err := router.RouteRequest(platformName, account, target)
+	return resolveRoutedOutboundWithOptions(router, pool, routing.RouteOptions{
+		PlatformName: platformName,
+		Account:      account,
+		Target:       target,
+	})
+}
+
+func resolveRoutedOutboundWithOptions(
+	router *routing.Router,
+	pool outbound.PoolAccessor,
+	options routing.RouteOptions,
+) (routedOutbound, *ProxyError) {
+	result, err := router.RouteWithOptions(options)
 	if err != nil {
 		return routedOutbound{}, mapRouteError(err)
 	}

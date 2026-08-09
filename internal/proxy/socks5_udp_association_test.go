@@ -18,6 +18,10 @@ func (c *associationTestCloser) Close() error {
 	return nil
 }
 
+func (c *associationTestCloser) writePayload([]byte) error {
+	return nil
+}
+
 func registerExactAssociation(
 	t *testing.T,
 	manager *socks5UDPAssociationManager,

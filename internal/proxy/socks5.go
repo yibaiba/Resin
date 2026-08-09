@@ -35,6 +35,7 @@ type Socks5InboundConfig struct {
 	MetricsSink      MetricsEventSink
 	ProxyBypassRules []string
 	UDPIdleTimeout   time.Duration
+	UDPDirectDialer  UDPDirectPacketDialer
 }
 
 // Socks5Inbound implements SOCKS5 CONNECT over a raw TCP connection.
@@ -43,6 +44,7 @@ type Socks5Inbound struct {
 	tunnel          tunnelDeps
 	events          EventEmitter
 	udpAssociations *socks5UDPAssociationManager
+	udpDirectDialer UDPDirectPacketDialer
 }
 
 type socks5HandshakeResult struct {
@@ -73,7 +75,15 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 		},
 		events:          ev,
 		udpAssociations: newSocks5UDPAssociationManager(udpIdleTimeout),
+		udpDirectDialer: resolveUDPDirectPacketDialer(cfg.UDPDirectDialer),
 	}
+}
+
+func resolveUDPDirectPacketDialer(configured UDPDirectPacketDialer) UDPDirectPacketDialer {
+	if configured != nil {
+		return configured
+	}
+	return netUDPDirectPacketDialer{}
 }
 
 // ServeConn handles a SOCKS5 session on an already-accepted TCP connection.
