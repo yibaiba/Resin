@@ -102,6 +102,15 @@ Do not replace the two mappings with a bare `"2260"`: Compose would publish only
 
 Custom endpoint ports must also be reachable from outside the container. Docker cannot add published ports to an already-running container, so pre-publish the required TCP range (for example `"2300-2399:2300-2399/tcp"`) or use host networking where appropriate. If SOCKS5 is enabled on those endpoints, publish the same range over UDP as well (for example `"2300-2399:2300-2399/udp"`); HTTP forward/reverse traffic remains TCP-only.
 
+To copy proxy transport and node-health diagnostics from Docker logs, run:
+
+```bash
+docker logs <container> 2>&1 \
+  | grep -E '\[proxy-connect\]|\[proxy-http\]|\[node-health\]'
+```
+
+`[proxy-connect]` and `[proxy-http]` report failed proxy requests, while `[node-health]` reports failure counts, validation generations, circuit transitions, and recovery. Each entry is a single `key=value` line; passive health events and proxy failures share `request_id` with the structured request log.
+
 *(If you don't want Docker, jump to [Other Deployment Options](#other-deployment-options).)*
 
 ### Step 2: Import proxy nodes

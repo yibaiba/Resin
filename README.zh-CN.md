@@ -101,6 +101,15 @@ services:
 
 自定义接入点端口还必须能从容器外访问。Docker 无法为已运行容器动态增加端口映射，因此请在 `ports` 中提前映射所需 TCP 端口范围（例如 `"2300-2399:2300-2399/tcp"`），或在适合的环境中使用 host 网络。若这些接入点启用了 SOCKS5，还必须映射同号 UDP 范围（例如 `"2300-2399:2300-2399/udp"`）；HTTP 正向/反向代理仍只使用 TCP。
 
+需要复制代理传输与节点健康诊断时，可直接筛选 Docker 日志：
+
+```bash
+docker logs <container> 2>&1 \
+  | grep -E '\[proxy-connect\]|\[proxy-http\]|\[node-health\]'
+```
+
+`[proxy-connect]` 与 `[proxy-http]` 记录失败的代理请求，`[node-health]` 记录失败计数、验证 generation、熔断转换与恢复。每条记录都是单行 `key=value`；被动健康事件和代理失败可通过 `request_id` 与结构化请求日志关联。
+
 *(如果你不想使用 Docker，请跳转文末查看 [其他部署方式](#其他部署方式))*
 
 ### 第二步：导入代理节点
