@@ -82,6 +82,7 @@ func (m *endpointRuntimeManager) createRuntimeLocked(
 
 func (m *endpointRuntimeManager) configureRuntimeServers(runtime *managedEndpointRuntime) {
 	currentConfig := func() model.Endpoint { return runtime.current() }
+	scopeHandler, _ := m.socks5.(endpointPacketHandler)
 	httpHandler := newEndpointInboundMux(
 		currentConfig,
 		m.proxyToken,
@@ -93,8 +94,9 @@ func (m *endpointRuntimeManager) configureRuntimeServers(runtime *managedEndpoin
 	runtime.server = newInboundDemuxServer(
 		&http.Server{Handler: httpHandler},
 		&endpointSocksGate{
-			current: runtime.currentSnapshot,
-			next:    m.socks5,
+			current:      runtime.currentSnapshot,
+			next:         m.socks5,
+			scopeHandler: scopeHandler,
 		},
 	)
 }

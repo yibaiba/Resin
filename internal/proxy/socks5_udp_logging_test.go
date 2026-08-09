@@ -58,6 +58,7 @@ func newLoggedUDPAssociation(t *testing.T) (*socks5UDPAssociation, *mockEventEmi
 	t.Helper()
 	manager := newSocks5UDPAssociationManager(time.Minute)
 	t.Cleanup(func() { _ = manager.close() })
+	openUDPAssociationTestScope(t, manager, "logging-scope")
 	emitter := newMockEventEmitter()
 	lifecycle := newRequestLifecycleFromMetadata(
 		emitter, "198.51.100.40:48000", "UDP_ASSOCIATE", ProxyTypeSocks5Forward, true,

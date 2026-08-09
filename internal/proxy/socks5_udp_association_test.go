@@ -32,6 +32,7 @@ func registerExactAssociation(
 	account string,
 ) *socks5UDPAssociation {
 	t.Helper()
+	openUDPAssociationTestScope(t, manager, endpointID)
 	association, err := manager.register(socks5UDPAssociationOptions{
 		endpointID:      endpointID,
 		clientIP:        clientIP,
@@ -53,6 +54,7 @@ func registerPendingAssociation(
 	account string,
 ) (*socks5UDPAssociation, error) {
 	t.Helper()
+	openUDPAssociationTestScope(t, manager, endpointID)
 	return manager.register(socks5UDPAssociationOptions{
 		endpointID:      endpointID,
 		clientIP:        clientIP,
@@ -60,6 +62,17 @@ func registerPendingAssociation(
 		platformName:    "platform",
 		account:         account,
 	})
+}
+
+func openUDPAssociationTestScope(
+	t *testing.T,
+	manager *socks5UDPAssociationManager,
+	endpointID string,
+) {
+	t.Helper()
+	if err := manager.openEndpoint(endpointID); err != nil {
+		t.Fatalf("open UDP association scope %q: %v", endpointID, err)
+	}
 }
 
 func TestSocks5UDPAssociationExactSourceIsolation(t *testing.T) {
@@ -128,6 +141,7 @@ func TestSocks5UDPAssociationRejectsConcurrentPendingRegistration(t *testing.T) 
 	manager := newSocks5UDPAssociationManager(time.Minute)
 	defer manager.close()
 	clientIP := netip.MustParseAddr("198.51.100.5")
+	openUDPAssociationTestScope(t, manager, "endpoint")
 
 	start := make(chan struct{})
 	results := make(chan error, 2)
@@ -170,6 +184,7 @@ func TestSocks5UDPAssociationValidatesRequestedSource(t *testing.T) {
 	manager := newSocks5UDPAssociationManager(time.Minute)
 	defer manager.close()
 	clientIP := netip.MustParseAddr("198.51.100.6")
+	openUDPAssociationTestScope(t, manager, "endpoint")
 	tests := []netip.AddrPort{
 		netip.MustParseAddrPort("198.51.100.7:43000"),
 		netip.MustParseAddrPort("198.51.100.6:0"),
@@ -284,6 +299,7 @@ func TestSocks5UDPAssociationScopeCloseRejectsLateRegistration(t *testing.T) {
 	for index := 0; index < attempts; index++ {
 		manager := newSocks5UDPAssociationManager(time.Minute)
 		endpointID := fmt.Sprintf("scope-race-%d", index)
+		openUDPAssociationTestScope(t, manager, endpointID)
 		start := make(chan struct{})
 		registration := make(chan struct {
 			association *socks5UDPAssociation
@@ -339,8 +355,78 @@ func TestSocks5UDPAssociationScopeCloseRejectsLateRegistration(t *testing.T) {
 	}
 }
 
+func TestSocks5UDPAssociationScopeLeaseDelaysReclamation(t *testing.T) {
+	manager := newSocks5UDPAssociationManager(time.Minute)
+	defer manager.close()
+	const endpointID = "leased-scope"
+	openUDPAssociationTestScope(t, manager, endpointID)
+	release, err := manager.retainEndpoint(endpointID)
+	if err != nil {
+		t.Fatalf("retain endpoint scope: %v", err)
+	}
+
+	if err := manager.closeEndpoint(endpointID); err != nil {
+		t.Fatalf("close retained endpoint scope: %v", err)
+	}
+	present, retains := udpAssociationScopeState(manager, endpointID)
+	if !present || retains != 1 {
+		t.Fatalf("closed scope state: present=%v retains=%d, want true/1", present, retains)
+	}
+	_, err = manager.register(socks5UDPAssociationOptions{
+		endpointID:      endpointID,
+		clientIP:        netip.MustParseAddr("198.51.100.15"),
+		requestedSource: netip.MustParseAddrPort("0.0.0.0:47004"),
+	})
+	if !errors.Is(err, errSocks5UDPAssociationScopeClosed) {
+		t.Fatalf("registration on retained closed scope: got %v", err)
+	}
+
+	release()
+	release()
+	present, retains = udpAssociationScopeState(manager, endpointID)
+	if present || retains != 0 {
+		t.Fatalf("released scope state: present=%v retains=%d, want false/0", present, retains)
+	}
+	if err := manager.openEndpoint(endpointID); err != nil {
+		t.Fatalf("reopen reclaimed endpoint scope: %v", err)
+	}
+}
+
+func TestSocks5UDPAssociationClosedScopesDoNotAccumulate(t *testing.T) {
+	const generations = 100
+	manager := newSocks5UDPAssociationManager(time.Minute)
+	defer manager.close()
+	for generation := 0; generation < generations; generation++ {
+		endpointID := fmt.Sprintf("endpoint#%d", generation)
+		openUDPAssociationTestScope(t, manager, endpointID)
+		if err := manager.closeEndpoint(endpointID); err != nil {
+			t.Fatalf("close endpoint generation %d: %v", generation, err)
+		}
+	}
+	manager.mu.Lock()
+	remaining := len(manager.scopes)
+	manager.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("closed endpoint scope states: got %d, want 0", remaining)
+	}
+}
+
+func udpAssociationScopeState(
+	manager *socks5UDPAssociationManager,
+	endpointID string,
+) (bool, int) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	scope := manager.scopes[endpointID]
+	if scope == nil {
+		return false, 0
+	}
+	return true, scope.retainCount
+}
+
 func TestSocks5UDPAssociationConcurrentCloseFinishesLifecycleOnce(t *testing.T) {
 	manager := newSocks5UDPAssociationManager(time.Minute)
+	openUDPAssociationTestScope(t, manager, "concurrent-close")
 	emitter := newMockEventEmitter()
 	lifecycle := newRequestLifecycleFromMetadata(
 		emitter,
@@ -384,6 +470,7 @@ func TestSocks5UDPAssociationConcurrentCloseFinishesLifecycleOnce(t *testing.T) 
 func TestSocks5UDPAssociationIdleCloseFinishesLifecycleOnce(t *testing.T) {
 	const idleTimeout = time.Millisecond
 	manager := newSocks5UDPAssociationManager(idleTimeout)
+	openUDPAssociationTestScope(t, manager, "idle-close")
 	emitter := newMockEventEmitter()
 	lifecycle := newRequestLifecycleFromMetadata(
 		emitter,

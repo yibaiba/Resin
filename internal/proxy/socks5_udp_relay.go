@@ -146,3 +146,13 @@ func (s *Socks5Inbound) OpenUDPAssociationScope(associationScope string) error {
 	}
 	return s.udpAssociations.openEndpoint(associationScope)
 }
+
+// RetainUDPAssociationScope protects an endpoint generation while a TCP handler may register UDP.
+func (s *Socks5Inbound) RetainUDPAssociationScope(
+	associationScope string,
+) (func(), error) {
+	if s == nil || s.udpAssociations == nil {
+		return nil, errors.New("SOCKS5 UDP inbound is not initialized")
+	}
+	return s.udpAssociations.retainEndpoint(associationScope)
+}

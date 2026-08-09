@@ -19,11 +19,12 @@ func (c *socks5AddressConn) LocalAddr() net.Addr  { return c.localAddr }
 func (c *socks5AddressConn) RemoteAddr() net.Addr { return c.remoteAddr }
 
 type socks5UDPControlTestOptions struct {
-	ctx       context.Context
-	scope     string
-	proxyPort uint16
-	clientIP  netip.Addr
-	tcpPort   uint16
+	ctx           context.Context
+	scope         string
+	proxyPort     uint16
+	clientIP      netip.Addr
+	tcpPort       uint16
+	skipScopeOpen bool
 }
 
 func startSocks5UDPControlSession(
@@ -32,6 +33,11 @@ func startSocks5UDPControlSession(
 	options socks5UDPControlTestOptions,
 ) (net.Conn, *bufio.Reader, <-chan struct{}) {
 	t.Helper()
+	if !options.skipScopeOpen {
+		if err := inbound.OpenUDPAssociationScope(options.scope); err != nil {
+			t.Fatalf("open UDP association scope: %v", err)
+		}
+	}
 	clientConn, serverBase := net.Pipe()
 	serverConn := &socks5AddressConn{
 		Conn:       serverBase,
@@ -229,7 +235,7 @@ func TestSocks5UDPAssociateRegistrationFailureFinishesLifecycle(t *testing.T) {
 		t.Fatalf("close association manager: %v", err)
 	}
 	options := socks5UDPControlTestOptions{
-		scope: "closed-manager", proxyPort: 2260,
+		scope: "closed-manager", proxyPort: 2260, skipScopeOpen: true,
 		clientIP: netip.MustParseAddr("198.51.100.24"), tcpPort: 40104,
 	}
 	client, reader, done := startSocks5UDPControlSession(t, inbound, options)

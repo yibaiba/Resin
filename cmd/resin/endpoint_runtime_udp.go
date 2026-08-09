@@ -11,6 +11,7 @@ type endpointPacketHandler interface {
 	ServePacketConnContext(context.Context, string, net.PacketConn) error
 	OpenUDPAssociationScope(string) error
 	CloseUDPAssociationScope(string) error
+	RetainUDPAssociationScope(string) (func(), error)
 }
 
 func (r *managedEndpointRuntime) attachUDP(

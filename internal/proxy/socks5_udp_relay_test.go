@@ -127,6 +127,9 @@ func registerRelayTestAssociation(
 	emitter EventEmitter,
 ) *socks5UDPAssociation {
 	t.Helper()
+	if err := inbound.OpenUDPAssociationScope(scope); err != nil {
+		t.Fatalf("open UDP association scope: %v", err)
+	}
 	source := normalizeAddrPort(M.AddrPortFromNet(clientConn.LocalAddr()))
 	var lifecycle *requestLifecycle
 	if emitter != nil {

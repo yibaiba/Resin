@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -18,14 +19,17 @@ type endpointPacketStart struct {
 }
 
 type endpointRuntimeSocksHandler struct {
-	packetStarts chan endpointPacketStart
-	openedScopes chan string
-	closedScopes chan string
-	policies     chan proxy.InboundPolicy
+	packetStarts   chan endpointPacketStart
+	openedScopes   chan string
+	closedScopes   chan string
+	retainedScopes chan string
+	releasedScopes chan string
+	policies       chan proxy.InboundPolicy
 
 	mu           sync.Mutex
 	activeScopes map[string]struct{}
 	openErr      error
+	retainErr    error
 }
 
 type scopeGatedEndpointHandler struct {
@@ -62,6 +66,10 @@ func (h *scopeGatedEndpointHandler) CloseUDPAssociationScope(string) error {
 
 func (h *scopeGatedEndpointHandler) OpenUDPAssociationScope(string) error { return nil }
 
+func (h *scopeGatedEndpointHandler) RetainUDPAssociationScope(string) (func(), error) {
+	return func() {}, nil
+}
+
 func (h *scopeGatedEndpointHandler) forceRelease() {
 	h.releaseOnce.Do(func() { close(h.release) })
 }
@@ -85,20 +93,36 @@ func (h *stubbornEndpointHandler) ServePacketConnContext(
 
 func (h *stubbornEndpointHandler) CloseUDPAssociationScope(string) error { return nil }
 func (h *stubbornEndpointHandler) OpenUDPAssociationScope(string) error  { return nil }
+func (h *stubbornEndpointHandler) RetainUDPAssociationScope(string) (func(), error) {
+	return func() {}, nil
+}
 
 func newEndpointRuntimeSocksHandler() *endpointRuntimeSocksHandler {
 	return &endpointRuntimeSocksHandler{
-		packetStarts: make(chan endpointPacketStart, 8),
-		openedScopes: make(chan string, 8),
-		closedScopes: make(chan string, 8),
-		policies:     make(chan proxy.InboundPolicy, 8),
-		activeScopes: make(map[string]struct{}),
+		packetStarts:   make(chan endpointPacketStart, 8),
+		openedScopes:   make(chan string, 8),
+		closedScopes:   make(chan string, 8),
+		retainedScopes: make(chan string, 8),
+		releasedScopes: make(chan string, 8),
+		policies:       make(chan proxy.InboundPolicy, 8),
+		activeScopes:   make(map[string]struct{}),
 	}
 }
 
 func (h *endpointRuntimeSocksHandler) OpenUDPAssociationScope(scope string) error {
 	h.openedScopes <- scope
 	return h.openErr
+}
+
+func (h *endpointRuntimeSocksHandler) RetainUDPAssociationScope(scope string) (func(), error) {
+	if h.retainErr != nil {
+		return nil, h.retainErr
+	}
+	h.retainedScopes <- scope
+	var once sync.Once
+	return func() {
+		once.Do(func() { h.releasedScopes <- scope })
+	}, nil
 }
 
 func (h *endpointRuntimeSocksHandler) ServeConnContext(ctx context.Context, conn net.Conn) {
@@ -510,7 +534,7 @@ func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 				associationScope: "endpoint#42",
 			}
 		},
-		next: handler,
+		next: handler, scopeHandler: handler,
 	}
 	client, server := net.Pipe()
 	defer client.Close()
@@ -522,6 +546,48 @@ func TestEndpointSocksGatePassesUDPPolicy(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SOCKS5 gate did not invoke handler")
+	}
+	select {
+	case scope := <-handler.releasedScopes:
+		if scope != "endpoint#42" {
+			t.Fatalf("released SOCKS5 scope: got %q", scope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SOCKS5 gate did not release scope")
+	}
+}
+
+func TestEndpointSocksGateRejectsUnavailableAssociationScope(t *testing.T) {
+	handler := newEndpointRuntimeSocksHandler()
+	handler.retainErr = errors.New("association scope closed")
+	gate := &endpointSocksGate{
+		current: func() endpointRuntimeSnapshot {
+			return endpointRuntimeSnapshot{
+				endpoint:         model.Endpoint{Port: 2260, AllowProxy: true, AllowSOCKS5: true},
+				associationScope: "endpoint#closed",
+			}
+		},
+		next: handler, scopeHandler: handler,
+	}
+	client, server := net.Pipe()
+	defer client.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		gate.ServeConnContext(context.Background(), server)
+	}()
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(client, reply); err != nil {
+		t.Fatalf("read SOCKS5 rejection: %v", err)
+	}
+	if reply[0] != 0x05 || reply[1] != 0xFF {
+		t.Fatalf("SOCKS5 rejection: got %v", reply)
+	}
+	<-done
+	select {
+	case policy := <-handler.policies:
+		t.Fatalf("closed scope reached SOCKS5 handler: %+v", policy)
+	default:
 	}
 }
 
@@ -542,7 +608,7 @@ func TestEndpointSocksGateUsesOneRuntimeSnapshotAcrossRestart(t *testing.T) {
 			<-release
 			return snapshot
 		},
-		next: handler,
+		next: handler, scopeHandler: handler,
 	}
 	client, server := net.Pipe()
 	defer client.Close()
@@ -564,5 +630,13 @@ func TestEndpointSocksGateUsesOneRuntimeSnapshotAcrossRestart(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("SOCKS5 gate did not invoke handler")
+	}
+	select {
+	case scope := <-handler.retainedScopes:
+		if scope != "endpoint#1" {
+			t.Fatalf("SOCKS5 gate retained mixed runtime generation %q", scope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SOCKS5 gate did not retain snapshot scope")
 	}
 }
