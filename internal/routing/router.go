@@ -32,6 +32,7 @@ type PoolAccessor interface {
 type Router struct {
 	pool            PoolAccessor
 	states          *xsync.Map[string, *PlatformRoutingState]
+	selectedStats   *xsync.Map[string, *IPLoadStats]
 	authorities     func() []string
 	p2cWindow       func() time.Duration
 	onLeaseEvent    LeaseEventFunc
@@ -53,6 +54,7 @@ func NewRouter(cfg RouterConfig) *Router {
 	return &Router{
 		pool:            cfg.Pool,
 		states:          xsync.NewMap[string, *PlatformRoutingState](),
+		selectedStats:   xsync.NewMap[string, *IPLoadStats](),
 		authorities:     cfg.Authorities,
 		p2cWindow:       cfg.P2CWindow,
 		onLeaseEvent:    cfg.OnLeaseEvent,
@@ -61,12 +63,16 @@ func NewRouter(cfg RouterConfig) *Router {
 }
 
 type RouteResult struct {
-	PlatformID   string
-	PlatformName string
-	NodeHash     node.Hash
-	EgressIP     netip.Addr
-	NodeTag      string // display tag: "<Subscription>/<Tag>" (DESIGN.md §601)
-	LeaseCreated bool
+	PlatformID           string
+	PlatformName         string
+	SelectedPlatformID   string
+	SelectedPlatformName string
+	FallbackPath         []string
+	SelectionReason      string
+	NodeHash             node.Hash
+	EgressIP             netip.Addr
+	NodeTag              string // display tag: "<Subscription>/<Tag>" (DESIGN.md §601)
+	LeaseCreated         bool
 }
 
 // RouteOptions describes one routing request. RequiredNetwork defaults to TCP.
@@ -78,24 +84,14 @@ type RouteOptions struct {
 }
 
 type routeAttempt struct {
-	platform     *platform.Platform
-	state        *PlatformRoutingState
-	view         platform.ReadOnlyView
-	account      string
-	targetDomain string
-	now          time.Time
-}
-
-type previousLeaseState struct {
-	lease        Lease
-	loaded       bool
-	invalidation leaseInvalidationReason
-}
-
-type networkLeaseReplacement struct {
-	previous Lease
-	next     Lease
-	result   RouteResult
+	ownerPlatform   *platform.Platform
+	platform        *platform.Platform
+	state           *PlatformRoutingState
+	allocationStats *IPLoadStats
+	view            platform.ReadOnlyView
+	account         string
+	targetDomain    string
+	now             time.Time
 }
 
 const livePickAttempts = 2 // first pick + one retry
@@ -124,31 +120,76 @@ func (r *Router) RouteWithOptions(options RouteOptions) (RouteResult, error) {
 	if err != nil {
 		return RouteResult{}, err
 	}
-	plat, err := r.resolvePlatform(options.PlatformName)
+	root, err := r.resolvePlatform(options.PlatformName)
 	if err != nil {
 		return RouteResult{}, err
 	}
-
-	attempt := routeAttempt{
-		platform:     plat,
-		state:        r.ensurePlatformState(plat.ID),
-		view:         plat.NetworkView(requiredNetwork),
-		account:      options.Account,
-		targetDomain: netutil.ExtractDomain(options.Target),
-		now:          time.Now(),
+	candidates, err := r.fallbackPlatforms(root)
+	if err != nil {
+		return RouteResult{}, err
+	}
+	request := routeRequest{
+		root: root, candidates: candidates, state: r.ensurePlatformState(root.ID),
+		network: requiredNetwork, account: options.Account,
+		targetDomain: netutil.ExtractDomain(options.Target), now: time.Now(),
 	}
 	var result RouteResult
 	if options.Account == "" {
-		result, err = r.routeRandom(attempt)
+		result, err = r.routeRandomAcross(request)
 	} else {
-		result, err = r.routeSticky(attempt)
+		result, err = r.routeStickyAcross(request)
 	}
 	if err != nil {
 		return RouteResult{}, err
 	}
-	result = withPlatformContext(plat, result)
 	if r.nodeTagResolver != nil {
 		result.NodeTag = r.nodeTagResolver(result.NodeHash)
+	}
+	return result, nil
+}
+
+type routeRequest struct {
+	root         *platform.Platform
+	candidates   []*platform.Platform
+	state        *PlatformRoutingState
+	network      string
+	account      string
+	targetDomain string
+	now          time.Time
+}
+
+func (r *Router) attemptFor(request routeRequest, selected *platform.Platform) routeAttempt {
+	return routeAttempt{
+		ownerPlatform: request.root, platform: selected, state: request.state,
+		allocationStats: r.ensureSelectedStats(selected.ID),
+		view:            selected.NetworkView(request.network), account: request.account,
+		targetDomain: request.targetDomain, now: request.now,
+	}
+}
+
+func (r *Router) fallbackPlatforms(root *platform.Platform) ([]*platform.Platform, error) {
+	result := make([]*platform.Platform, 0, 1+len(root.FallbackPlatformIDs))
+	visited := make(map[string]bool)
+	var visit func(*platform.Platform) error
+	visit = func(current *platform.Platform) error {
+		if visited[current.ID] {
+			return nil
+		}
+		visited[current.ID] = true
+		result = append(result, current)
+		for _, fallbackID := range current.FallbackPlatformIDs {
+			fallback, ok := r.pool.GetPlatform(fallbackID)
+			if !ok {
+				return fmt.Errorf("%w: fallback platform %s", ErrPlatformNotFound, fallbackID)
+			}
+			if err := visit(fallback); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := visit(root); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -164,9 +205,17 @@ func normalizeRequiredNetwork(required string) (string, error) {
 	return network, nil
 }
 
-func withPlatformContext(plat *platform.Platform, res RouteResult) RouteResult {
-	res.PlatformID = plat.ID
-	res.PlatformName = plat.Name
+func withPlatformContext(root, selected *platform.Platform, path []string, res RouteResult) RouteResult {
+	res.PlatformID = root.ID
+	res.PlatformName = root.Name
+	res.SelectedPlatformID = selected.ID
+	res.SelectedPlatformName = selected.Name
+	res.FallbackPath = append([]string(nil), path...)
+	if selected.ID == root.ID {
+		res.SelectionReason = "requested_platform"
+	} else {
+		res.SelectionReason = "platform_fallback"
+	}
 	return res
 }
 
@@ -191,6 +240,29 @@ func (r *Router) ensurePlatformState(platformID string) *PlatformRoutingState {
 	return state
 }
 
+func (r *Router) ensureSelectedStats(platformID string) *IPLoadStats {
+	stats, _ := r.selectedStats.LoadOrCompute(platformID, func() (*IPLoadStats, bool) {
+		return NewIPLoadStats(), false
+	})
+	return stats
+}
+
+func (r *Router) routeRandomAcross(request routeRequest) (RouteResult, error) {
+	path := make([]string, 0, len(request.candidates))
+	for _, candidate := range request.candidates {
+		path = append(path, candidate.ID)
+		result, err := r.routeRandom(r.attemptFor(request, candidate))
+		if errors.Is(err, ErrNoAvailableNodes) {
+			continue
+		}
+		if err != nil {
+			return RouteResult{}, err
+		}
+		return withPlatformContext(request.root, candidate, path, result), nil
+	}
+	return RouteResult{}, ErrNoAvailableNodes
+}
+
 func (r *Router) routeRandom(attempt routeAttempt) (RouteResult, error) {
 	h, entry, err := r.selectLiveRandomRoute(attempt)
 	if err != nil {
@@ -203,12 +275,12 @@ func (r *Router) routeRandom(attempt routeAttempt) (RouteResult, error) {
 	}, nil
 }
 
-func (r *Router) routeSticky(attempt routeAttempt) (RouteResult, error) {
+func (r *Router) routeStickyAcross(request routeRequest) (RouteResult, error) {
 	var result RouteResult
 	var routeErr error
 
-	_, _ = attempt.state.Leases.leases.Compute(attempt.account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
-		newLease, op, routeResult, err := r.decideStickyLease(attempt, current, loaded)
+	_, _ = request.state.Leases.leases.Compute(request.account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
+		newLease, op, routeResult, err := r.decideStickyLeaseAcross(request, current, loaded)
 		if err != nil {
 			routeErr = err
 			return newLease, op
@@ -220,81 +292,98 @@ func (r *Router) routeSticky(attempt routeAttempt) (RouteResult, error) {
 	return result, routeErr
 }
 
-func (r *Router) decideStickyLease(
-	attempt routeAttempt,
+func (r *Router) decideStickyLeaseAcross(
+	request routeRequest,
 	current Lease,
 	loaded bool,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
-	hadPreviousLease := loaded
 	invalidation := leaseInvalidationNone
-
-	if loaded && current.IsExpired(attempt.now) {
+	if loaded && current.SelectedPlatformID == "" {
+		current.SelectedPlatformID = request.root.ID
+	}
+	if loaded && current.IsExpired(request.now) {
 		invalidation = leaseInvalidationExpire
-		loaded = false
+	} else if loaded {
+		if selected := findCandidatePlatform(request.candidates, current.SelectedPlatformID); selected != nil {
+			attempt := r.attemptFor(request, selected)
+			if next, hit, ok := r.tryLeaseHit(attempt, current); ok {
+				path := fallbackPathTo(request.candidates, selected.ID)
+				return next, xsync.UpdateOp, withPlatformContext(request.root, selected, path, hit), nil
+			}
+			if next, rotated, ok := r.tryLeaseSameIPRotation(attempt, current); ok {
+				path := fallbackPathTo(request.candidates, selected.ID)
+				return next, xsync.UpdateOp, withPlatformContext(request.root, selected, path, rotated), nil
+			}
+			invalidation = r.leaseInvalidation(attempt, current)
+		} else {
+			invalidation = leaseInvalidationRemove
+		}
 	}
 
-	if loaded {
-		if newLease, hitResult, ok := r.tryLeaseHit(attempt, current); ok {
-			return newLease, xsync.UpdateOp, hitResult, nil
-		}
-		if newLease, rotatedResult, ok := r.tryLeaseSameIPRotation(attempt, current); ok {
-			return newLease, xsync.UpdateOp, rotatedResult, nil
-		}
-		invalidation = r.leaseInvalidation(attempt, current)
-	}
-
-	return r.createOrAbortStickyLease(attempt, previousLeaseState{
-		lease:        current,
-		loaded:       hadPreviousLease,
-		invalidation: invalidation,
-	})
+	return r.createStickyLeaseAcross(request, current, loaded, invalidation)
 }
 
-func (r *Router) createOrAbortStickyLease(
-	attempt routeAttempt,
-	previous previousLeaseState,
+func (r *Router) createStickyLeaseAcross(
+	request routeRequest,
+	previous Lease,
+	hadPrevious bool,
+	invalidation leaseInvalidationReason,
 ) (Lease, xsync.ComputeOp, RouteResult, error) {
-	newLease, createdResult, err := r.createLease(attempt)
-	if err != nil {
-		if previous.invalidation == leaseInvalidationNetwork {
-			return previous.lease, xsync.CancelOp, RouteResult{}, err
+	path := make([]string, 0, len(request.candidates))
+	for _, candidate := range request.candidates {
+		path = append(path, candidate.ID)
+		attempt := r.attemptFor(request, candidate)
+		next, result, err := r.createLease(attempt)
+		if errors.Is(err, ErrNoAvailableNodes) {
+			continue
 		}
-		r.cleanupPreviousLease(
-			attempt.state,
-			previous.lease,
-			previous.loaded,
-			previous.invalidation,
-			attempt.platform.ID,
-			attempt.account,
-		)
-		lease, op := abortLeaseCreate(previous.lease, previous.loaded)
-		return lease, op, RouteResult{}, err
+		if err != nil {
+			return r.abortStickyCreate(request, previous, hadPrevious, invalidation, err)
+		}
+		r.commitLeaseTransition(request, previous, hadPrevious, invalidation, next)
+		if hadPrevious && invalidation == leaseInvalidationNetwork {
+			result.LeaseCreated = false
+		}
+		return next, xsync.UpdateOp, withPlatformContext(request.root, candidate, path, result), nil
 	}
+	return r.abortStickyCreate(request, previous, hadPrevious, invalidation, ErrNoAvailableNodes)
+}
 
-	if previous.invalidation == leaseInvalidationNetwork {
-		return r.replaceNetworkLease(attempt, networkLeaseReplacement{
-			previous: previous.lease,
-			next:     newLease,
-			result:   createdResult,
-		})
+func (r *Router) abortStickyCreate(
+	request routeRequest,
+	previous Lease,
+	hadPrevious bool,
+	invalidation leaseInvalidationReason,
+	err error,
+) (Lease, xsync.ComputeOp, RouteResult, error) {
+	if hadPrevious && invalidation == leaseInvalidationNetwork {
+		return previous, xsync.CancelOp, RouteResult{}, err
 	}
-	r.cleanupPreviousLease(
-		attempt.state,
-		previous.lease,
-		previous.loaded,
-		previous.invalidation,
-		attempt.platform.ID,
-		attempt.account,
-	)
-	attempt.state.IPLoadStats.Inc(newLease.EgressIP)
-	r.emitLeaseEvent(LeaseEvent{
-		Type:       LeaseCreate,
-		PlatformID: attempt.platform.ID,
-		Account:    attempt.account,
-		NodeHash:   newLease.NodeHash,
-		EgressIP:   newLease.EgressIP,
-	})
-	return newLease, xsync.UpdateOp, createdResult, nil
+	if hadPrevious {
+		r.removeLeaseAccounting(request, previous, invalidation)
+		return previous, xsync.DeleteOp, RouteResult{}, err
+	}
+	return previous, xsync.CancelOp, RouteResult{}, err
+}
+
+func findCandidatePlatform(candidates []*platform.Platform, id string) *platform.Platform {
+	for _, candidate := range candidates {
+		if candidate.ID == id {
+			return candidate
+		}
+	}
+	return nil
+}
+
+func fallbackPathTo(candidates []*platform.Platform, selectedID string) []string {
+	path := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		path = append(path, candidate.ID)
+		if candidate.ID == selectedID {
+			break
+		}
+	}
+	return path
 }
 
 func (r *Router) tryLeaseHit(
@@ -309,11 +398,12 @@ func (r *Router) tryLeaseHit(
 	newLease := current
 	newLease.LastAccessedNs = attempt.now.UnixNano()
 	r.emitLeaseEvent(LeaseEvent{
-		Type:       LeaseTouch,
-		PlatformID: attempt.platform.ID,
-		Account:    attempt.account,
-		NodeHash:   current.NodeHash,
-		EgressIP:   current.EgressIP,
+		Type:               LeaseTouch,
+		PlatformID:         attempt.ownerPlatform.ID,
+		SelectedPlatformID: current.SelectedPlatformID,
+		Account:            attempt.account,
+		NodeHash:           current.NodeHash,
+		EgressIP:           current.EgressIP,
 	})
 	return newLease, RouteResult{
 		NodeHash:     current.NodeHash,
@@ -342,11 +432,12 @@ func (r *Router) tryLeaseSameIPRotation(
 	newLease.NodeHash = bestHash
 	newLease.LastAccessedNs = attempt.now.UnixNano()
 	r.emitLeaseEvent(LeaseEvent{
-		Type:       LeaseReplace,
-		PlatformID: attempt.platform.ID,
-		Account:    attempt.account,
-		NodeHash:   bestHash,
-		EgressIP:   current.EgressIP,
+		Type:               LeaseReplace,
+		PlatformID:         attempt.ownerPlatform.ID,
+		SelectedPlatformID: current.SelectedPlatformID,
+		Account:            attempt.account,
+		NodeHash:           bestHash,
+		EgressIP:           current.EgressIP,
 	})
 	return newLease, RouteResult{
 		NodeHash:     bestHash,
@@ -360,18 +451,19 @@ func (r *Router) createLease(attempt routeAttempt) (Lease, RouteResult, error) {
 	if err != nil {
 		return Lease{}, RouteResult{}, err
 	}
-	ttl := attempt.platform.StickyTTLNs
+	ttl := attempt.ownerPlatform.StickyTTLNs
 	if ttl <= 0 {
 		ttl = int64(24 * time.Hour) // Default safeguard
 	}
 	nowNs := attempt.now.UnixNano()
 
 	lease := Lease{
-		NodeHash:       h,
-		EgressIP:       entry.GetEgressIP(),
-		CreatedAtNs:    nowNs,
-		ExpiryNs:       attempt.now.Add(time.Duration(ttl)).UnixNano(),
-		LastAccessedNs: nowNs,
+		NodeHash:           h,
+		EgressIP:           entry.GetEgressIP(),
+		SelectedPlatformID: attempt.platform.ID,
+		CreatedAtNs:        nowNs,
+		ExpiryNs:           attempt.now.Add(time.Duration(ttl)).UnixNano(),
+		LastAccessedNs:     nowNs,
 	}
 	return lease, RouteResult{
 		NodeHash:     lease.NodeHash,
@@ -388,63 +480,72 @@ func (r *Router) leaseInvalidation(attempt routeAttempt, current Lease) leaseInv
 	return leaseInvalidationRemove
 }
 
-func (r *Router) replaceNetworkLease(
-	attempt routeAttempt,
-	replacement networkLeaseReplacement,
-) (Lease, xsync.ComputeOp, RouteResult, error) {
-	attempt.state.IPLoadStats.Dec(replacement.previous.EgressIP)
-	attempt.state.IPLoadStats.Inc(replacement.next.EgressIP)
-	r.emitLeaseEvent(LeaseEvent{
-		Type:        LeaseReplace,
-		PlatformID:  attempt.platform.ID,
-		Account:     attempt.account,
-		NodeHash:    replacement.next.NodeHash,
-		EgressIP:    replacement.next.EgressIP,
-		CreatedAtNs: replacement.previous.CreatedAtNs,
-	})
-	replacement.result.LeaseCreated = false
-	return replacement.next, xsync.UpdateOp, replacement.result, nil
-}
-
-func (r *Router) cleanupPreviousLease(
-	state *PlatformRoutingState,
-	lease Lease,
-	hadPreviousLease bool,
+func (r *Router) commitLeaseTransition(
+	request routeRequest,
+	previous Lease,
+	hadPrevious bool,
 	invalidation leaseInvalidationReason,
-	platformID string,
-	account string,
+	next Lease,
 ) {
-	if !hadPreviousLease {
+	if hadPrevious && invalidation == leaseInvalidationNetwork {
+		r.decrementLeaseLoads(request.root.ID, request.state, previous)
+		r.incrementLeaseLoads(request.state, next)
+		r.emitLeaseTransition(request, previous, next, LeaseReplace)
 		return
 	}
-	state.Leases.stats.Dec(lease.EgressIP)
-	switch invalidation {
-	case leaseInvalidationExpire:
-		r.emitLeaseEvent(LeaseEvent{
-			Type:        LeaseExpire,
-			PlatformID:  platformID,
-			Account:     account,
-			NodeHash:    lease.NodeHash,
-			EgressIP:    lease.EgressIP,
-			CreatedAtNs: lease.CreatedAtNs,
-		})
-	case leaseInvalidationRemove:
-		r.emitLeaseEvent(LeaseEvent{
-			Type:        LeaseRemove,
-			PlatformID:  platformID,
-			Account:     account,
-			NodeHash:    lease.NodeHash,
-			EgressIP:    lease.EgressIP,
-			CreatedAtNs: lease.CreatedAtNs,
-		})
+	if hadPrevious {
+		r.removeLeaseAccounting(request, previous, invalidation)
 	}
+	r.incrementLeaseLoads(request.state, next)
+	r.emitLeaseTransition(request, previous, next, LeaseCreate)
 }
 
-func abortLeaseCreate(current Lease, hadPreviousLease bool) (Lease, xsync.ComputeOp) {
-	if hadPreviousLease {
-		return current, xsync.DeleteOp
+func (r *Router) emitLeaseTransition(
+	request routeRequest,
+	previous Lease,
+	next Lease,
+	eventType LeaseEventType,
+) {
+	r.emitLeaseEvent(LeaseEvent{
+		Type: eventType, PlatformID: request.root.ID, SelectedPlatformID: next.SelectedPlatformID,
+		Account: request.account, NodeHash: next.NodeHash, EgressIP: next.EgressIP,
+		CreatedAtNs: previous.CreatedAtNs,
+	})
+}
+
+func (r *Router) removeLeaseAccounting(
+	request routeRequest,
+	lease Lease,
+	invalidation leaseInvalidationReason,
+) {
+	r.decrementLeaseLoads(request.root.ID, request.state, lease)
+	eventType := LeaseRemove
+	if invalidation == leaseInvalidationExpire {
+		eventType = LeaseExpire
 	}
-	return current, xsync.CancelOp
+	r.emitLeaseEvent(LeaseEvent{
+		Type: eventType, PlatformID: request.root.ID, SelectedPlatformID: lease.SelectedPlatformID,
+		Account: request.account, NodeHash: lease.NodeHash, EgressIP: lease.EgressIP,
+		CreatedAtNs: lease.CreatedAtNs,
+	})
+}
+
+func (r *Router) incrementLeaseLoads(state *PlatformRoutingState, lease Lease) {
+	state.IPLoadStats.Inc(lease.EgressIP)
+	r.ensureSelectedStats(lease.SelectedPlatformID).Inc(lease.EgressIP)
+}
+
+func (r *Router) decrementLeaseLoads(
+	ownerPlatformID string,
+	state *PlatformRoutingState,
+	lease Lease,
+) {
+	selectedPlatformID := lease.SelectedPlatformID
+	if selectedPlatformID == "" {
+		selectedPlatformID = ownerPlatformID
+	}
+	state.IPLoadStats.Dec(lease.EgressIP)
+	r.ensureSelectedStats(selectedPlatformID).Dec(lease.EgressIP)
 }
 
 func (r *Router) emitLeaseEvent(event LeaseEvent) {
@@ -461,7 +562,7 @@ func (r *Router) selectLiveRandomRoute(
 		h, err := randomRoute(randomRouteOptions{
 			platform:     attempt.platform,
 			view:         attempt.view,
-			stats:        attempt.state.IPLoadStats,
+			stats:        attempt.allocationStats,
 			pool:         r.pool,
 			targetDomain: attempt.targetDomain,
 			authorities:  r.authorities(),
@@ -555,13 +656,14 @@ func (r *Router) ReadLease(key model.LeaseKey) *model.Lease {
 		return nil
 	}
 	return &model.Lease{
-		PlatformID:     key.PlatformID,
-		Account:        key.Account,
-		NodeHash:       lease.NodeHash.Hex(),
-		EgressIP:       lease.EgressIP.String(),
-		CreatedAtNs:    lease.CreatedAtNs,
-		ExpiryNs:       lease.ExpiryNs,
-		LastAccessedNs: lease.LastAccessedNs,
+		PlatformID:         key.PlatformID,
+		SelectedPlatformID: lease.SelectedPlatformID,
+		Account:            key.Account,
+		NodeHash:           lease.NodeHash.Hex(),
+		EgressIP:           lease.EgressIP.String(),
+		CreatedAtNs:        lease.CreatedAtNs,
+		ExpiryNs:           lease.ExpiryNs,
+		LastAccessedNs:     lease.LastAccessedNs,
 	}
 }
 
@@ -588,29 +690,34 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 
 	state := r.ensurePlatformState(platformID)
 	lease := Lease{
-		NodeHash:       h,
-		EgressIP:       ip,
-		CreatedAtNs:    ml.CreatedAtNs,
-		ExpiryNs:       ml.ExpiryNs,
-		LastAccessedNs: ml.LastAccessedNs,
+		NodeHash:           h,
+		EgressIP:           ip,
+		SelectedPlatformID: strings.TrimSpace(ml.SelectedPlatformID),
+		CreatedAtNs:        ml.CreatedAtNs,
+		ExpiryNs:           ml.ExpiryNs,
+		LastAccessedNs:     ml.LastAccessedNs,
+	}
+	if lease.SelectedPlatformID == "" {
+		lease.SelectedPlatformID = platformID
 	}
 
 	eventType := LeaseCreate
 	_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
 		if loaded {
-			state.Leases.stats.Dec(current.EgressIP)
+			r.decrementLeaseLoads(platformID, state, current)
 			eventType = LeaseReplace
 		}
-		state.Leases.stats.Inc(lease.EgressIP)
+		r.incrementLeaseLoads(state, lease)
 		return lease, xsync.UpdateOp
 	})
 
 	r.emitLeaseEvent(LeaseEvent{
-		Type:       eventType,
-		PlatformID: platformID,
-		Account:    account,
-		NodeHash:   lease.NodeHash,
-		EgressIP:   lease.EgressIP,
+		Type:               eventType,
+		PlatformID:         platformID,
+		SelectedPlatformID: lease.SelectedPlatformID,
+		Account:            account,
+		NodeHash:           lease.NodeHash,
+		EgressIP:           lease.EgressIP,
 	})
 	return nil
 }
@@ -642,14 +749,19 @@ func (r *Router) RestoreLeases(leases []model.Lease) {
 		})
 
 		l := Lease{
-			NodeHash:       h,
-			EgressIP:       ip,
-			CreatedAtNs:    ml.CreatedAtNs,
-			ExpiryNs:       ml.ExpiryNs,
-			LastAccessedNs: ml.LastAccessedNs,
+			NodeHash:           h,
+			EgressIP:           ip,
+			SelectedPlatformID: strings.TrimSpace(ml.SelectedPlatformID),
+			CreatedAtNs:        ml.CreatedAtNs,
+			ExpiryNs:           ml.ExpiryNs,
+			LastAccessedNs:     ml.LastAccessedNs,
+		}
+		if l.SelectedPlatformID == "" {
+			l.SelectedPlatformID = ml.PlatformID
 		}
 		// Directly insert into table and stats
 		state.Leases.CreateLease(ml.Account, l)
+		r.ensureSelectedStats(l.SelectedPlatformID).Inc(l.EgressIP)
 	}
 }
 
@@ -675,13 +787,19 @@ func (r *Router) DeleteLease(platformID, account string) bool {
 	if !deleted {
 		return false
 	}
+	selectedPlatformID := lease.SelectedPlatformID
+	if selectedPlatformID == "" {
+		selectedPlatformID = platformID
+	}
+	r.ensureSelectedStats(selectedPlatformID).Dec(lease.EgressIP)
 	r.emitLeaseEvent(LeaseEvent{
-		Type:        LeaseRemove,
-		PlatformID:  platformID,
-		Account:     account,
-		NodeHash:    lease.NodeHash,
-		EgressIP:    lease.EgressIP,
-		CreatedAtNs: lease.CreatedAtNs,
+		Type:               LeaseRemove,
+		PlatformID:         platformID,
+		SelectedPlatformID: selectedPlatformID,
+		Account:            account,
+		NodeHash:           lease.NodeHash,
+		EgressIP:           lease.EgressIP,
+		CreatedAtNs:        lease.CreatedAtNs,
 	})
 	return true
 }
@@ -697,13 +815,19 @@ func (r *Router) DeleteAllLeases(platformID string) int {
 	state.Leases.Range(func(account string, _ Lease) bool {
 		removed, deleted := state.Leases.DeleteLease(account)
 		if deleted {
+			selectedPlatformID := removed.SelectedPlatformID
+			if selectedPlatformID == "" {
+				selectedPlatformID = platformID
+			}
+			r.ensureSelectedStats(selectedPlatformID).Dec(removed.EgressIP)
 			r.emitLeaseEvent(LeaseEvent{
-				Type:        LeaseRemove,
-				PlatformID:  platformID,
-				Account:     account,
-				NodeHash:    removed.NodeHash,
-				EgressIP:    removed.EgressIP,
-				CreatedAtNs: removed.CreatedAtNs,
+				Type:               LeaseRemove,
+				PlatformID:         platformID,
+				SelectedPlatformID: selectedPlatformID,
+				Account:            account,
+				NodeHash:           removed.NodeHash,
+				EgressIP:           removed.EgressIP,
+				CreatedAtNs:        removed.CreatedAtNs,
 			})
 			count++
 		}

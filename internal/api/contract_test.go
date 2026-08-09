@@ -927,6 +927,39 @@ func TestAPIContract_PlatformStickyTTLMustBePositive(t *testing.T) {
 	}
 }
 
+func TestAPIContract_PlatformFallbackGraph(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+	fallbackID := mustCreatePlatform(t, srv, "fallback-target")
+
+	rec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/platforms", map[string]any{
+		"name":                  "fallback-owner",
+		"fallback_platform_ids": []string{fallbackID},
+	}, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create fallback owner: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	ownerID, _ := body["id"].(string)
+	gotFallbacks, _ := body["fallback_platform_ids"].([]any)
+	if len(gotFallbacks) != 1 || gotFallbacks[0] != fallbackID {
+		t.Fatalf("fallback_platform_ids = %v, want [%s]", gotFallbacks, fallbackID)
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+fallbackID, map[string]any{
+		"fallback_platform_ids": []string{ownerID},
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cycle patch: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	rec = doJSONRequest(t, srv, http.MethodDelete, "/api/v1/platforms/"+fallbackID, nil, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete referenced fallback: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "CONFLICT")
+}
+
 func TestAPIContract_PlatformEmptyAccountBehavior(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 

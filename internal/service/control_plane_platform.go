@@ -32,6 +32,7 @@ type PlatformResponse struct {
 	ReverseProxyFixedAccountHeader   string   `json:"reverse_proxy_fixed_account_header"`
 	AllocationPolicy                 string   `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
+	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
 	UpdatedAt                        string   `json:"updated_at"`
 }
 
@@ -50,6 +51,7 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		ReverseProxyFixedAccountHeader:   fixedHeader,
 		AllocationPolicy:                 p.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    p.PassiveCircuitBreakerDisabled,
+		FallbackPlatformIDs:              append([]string(nil), p.FallbackPlatformIDs...),
 		UpdatedAt:                        time.Unix(0, p.UpdatedAtNs).UTC().Format(time.RFC3339Nano),
 	}
 }
@@ -76,6 +78,7 @@ type platformConfig struct {
 	ReverseProxyFixedAccountHeader   string
 	AllocationPolicy                 string
 	PassiveCircuitBreakerDisabled    bool
+	FallbackPlatformIDs              []string
 }
 
 func normalizePlatformMissAction(raw string) string {
@@ -121,6 +124,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		ReverseProxyFixedAccountHeader:   normalizeHeaderFieldName(mp.ReverseProxyFixedAccountHeader),
 		AllocationPolicy:                 mp.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    mp.PassiveCircuitBreakerDisabled,
+		FallbackPlatformIDs:              append([]string(nil), mp.FallbackPlatformIDs...),
 	}
 }
 
@@ -136,6 +140,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		ReverseProxyFixedAccountHeader:   cfg.ReverseProxyFixedAccountHeader,
 		AllocationPolicy:                 cfg.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    cfg.PassiveCircuitBreakerDisabled,
+		FallbackPlatformIDs:              append([]string(nil), cfg.FallbackPlatformIDs...),
 		UpdatedAtNs:                      updatedAtNs,
 	}
 }
@@ -145,7 +150,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 	if err != nil {
 		return nil, err
 	}
-	return platform.NewConfiguredPlatform(
+	configured := platform.NewConfiguredPlatform(
 		id,
 		cfg.Name,
 		compiledRegexFilters,
@@ -156,7 +161,9 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		cfg.ReverseProxyFixedAccountHeader,
 		cfg.AllocationPolicy,
 		cfg.PassiveCircuitBreakerDisabled,
-	), nil
+	)
+	configured.FallbackPlatformIDs = append([]string(nil), cfg.FallbackPlatformIDs...)
+	return configured, nil
 }
 
 func validatePlatformMissAction(raw string) *ServiceError {
@@ -272,11 +279,17 @@ func (s *ControlPlaneService) compileAndUpsertPlatform(id string, cfg platformCo
 		return model.Platform{}, nil, invalidArg("name: " + err.Error())
 	}
 
+	for index := range cfg.FallbackPlatformIDs {
+		cfg.FallbackPlatformIDs[index] = strings.TrimSpace(cfg.FallbackPlatformIDs[index])
+	}
 	plat, err := cfg.toRuntime(id)
 	if err != nil {
 		return model.Platform{}, nil, invalidArg(err.Error())
 	}
 	mp := cfg.toModel(id, time.Now().UnixNano())
+	if err := s.validatePlatformFallbackGraph(mp); err != nil {
+		return model.Platform{}, nil, err
+	}
 	if err := s.Engine.UpsertPlatform(mp); err != nil {
 		if errors.Is(err, state.ErrConflict) {
 			return model.Platform{}, nil, conflict("platform name already exists")
@@ -334,6 +347,7 @@ type CreatePlatformRequest struct {
 	ReverseProxyFixedAccountHeader   *string  `json:"reverse_proxy_fixed_account_header"`
 	AllocationPolicy                 *string  `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    *bool    `json:"passive_circuit_breaker_disabled"`
+	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
 }
 
 // CreatePlatform creates a new platform.
@@ -390,6 +404,9 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	}
 	if req.PassiveCircuitBreakerDisabled != nil {
 		cfg.PassiveCircuitBreakerDisabled = *req.PassiveCircuitBreakerDisabled
+	}
+	if req.FallbackPlatformIDs != nil {
+		cfg.FallbackPlatformIDs = append([]string(nil), req.FallbackPlatformIDs...)
 	}
 	if err := validatePlatformConfig(&cfg, true); err != nil {
 		return nil, err
@@ -508,6 +525,11 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	} else if ok {
 		cfg.PassiveCircuitBreakerDisabled = disabled
 	}
+	if fallbackIDs, ok, err := patch.optionalStringSlice("fallback_platform_ids"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.FallbackPlatformIDs = fallbackIDs
+	}
 	if err := validatePlatformConfig(&cfg, regionFiltersPatched); err != nil {
 		return nil, err
 	}
@@ -537,6 +559,13 @@ func (s *ControlPlaneService) DeletePlatform(id string) error {
 	}
 	if referenced {
 		return conflict("platform is referenced by a routing rule")
+	}
+	referenced, err = s.Engine.PlatformFallbackReferences(id)
+	if err != nil {
+		return internal("check platform fallback references", err)
+	}
+	if referenced {
+		return conflict("platform is referenced as a fallback")
 	}
 
 	if err := s.Engine.DeletePlatform(id); err != nil {

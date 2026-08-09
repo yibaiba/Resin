@@ -17,12 +17,13 @@ const (
 )
 
 type LeaseEvent struct {
-	Type        LeaseEventType
-	PlatformID  string
-	Account     string
-	NodeHash    node.Hash
-	EgressIP    netip.Addr
-	CreatedAtNs int64 // set on remove/expire for lifetime calculation
+	Type               LeaseEventType
+	PlatformID         string
+	SelectedPlatformID string
+	Account            string
+	NodeHash           node.Hash
+	EgressIP           netip.Addr
+	CreatedAtNs        int64 // set on remove/expire for lifetime calculation
 }
 
 // LeaseEventFunc is invoked synchronously by routing/lease maintenance code.

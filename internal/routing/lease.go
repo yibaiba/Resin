@@ -5,18 +5,19 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 // Lease represents a sticky routing lease.
 // It is a value type to avoid pointer aliasing races.
 type Lease struct {
-	NodeHash       node.Hash
-	EgressIP       netip.Addr
-	CreatedAtNs    int64
-	ExpiryNs       int64
-	LastAccessedNs int64
+	NodeHash           node.Hash
+	EgressIP           netip.Addr
+	SelectedPlatformID string
+	CreatedAtNs        int64
+	ExpiryNs           int64
+	LastAccessedNs     int64
 }
 
 // LeaseTable manages per-account sticky leases for a single platform.

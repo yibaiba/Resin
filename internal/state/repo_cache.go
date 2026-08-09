@@ -203,7 +203,7 @@ func (r *CacheRepo) BulkUpsertLeases(leases []model.Lease) error {
 		upsertLeasesSQL,
 		leases,
 		func(stmt *sql.Stmt, l model.Lease) error {
-			_, err := stmt.Exec(l.PlatformID, l.Account, l.NodeHash, l.EgressIP, l.CreatedAtNs, l.ExpiryNs, l.LastAccessedNs)
+			_, err := stmt.Exec(l.PlatformID, l.Account, l.NodeHash, l.EgressIP, l.CreatedAtNs, l.ExpiryNs, l.LastAccessedNs, l.SelectedPlatformID)
 			return err
 		},
 	)
@@ -224,7 +224,7 @@ func (r *CacheRepo) BulkDeleteLeases(keys []model.LeaseKey) error {
 
 // LoadAllLeases reads all lease records.
 func (r *CacheRepo) LoadAllLeases() ([]model.Lease, error) {
-	rows, err := r.db.Query("SELECT platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns FROM leases")
+	rows, err := r.db.Query("SELECT platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id FROM leases")
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func (r *CacheRepo) LoadAllLeases() ([]model.Lease, error) {
 	var result []model.Lease
 	for rows.Next() {
 		var l model.Lease
-		if err := rows.Scan(&l.PlatformID, &l.Account, &l.NodeHash, &l.EgressIP, &l.CreatedAtNs, &l.ExpiryNs, &l.LastAccessedNs); err != nil {
+		if err := rows.Scan(&l.PlatformID, &l.Account, &l.NodeHash, &l.EgressIP, &l.CreatedAtNs, &l.ExpiryNs, &l.LastAccessedNs, &l.SelectedPlatformID); err != nil {
 			return nil, err
 		}
 		result = append(result, l)
@@ -422,7 +422,16 @@ func (r *CacheRepo) FlushTx(ops FlushOps) error {
 		}},
 		{"upsert_leases", upsertLeasesSQL, len(ops.UpsertLeases), func(s *sql.Stmt, i int) error {
 			l := ops.UpsertLeases[i]
-			_, err := s.Exec(l.PlatformID, l.Account, l.NodeHash, l.EgressIP, l.CreatedAtNs, l.ExpiryNs, l.LastAccessedNs)
+			_, err := s.Exec(
+				l.PlatformID,
+				l.Account,
+				l.NodeHash,
+				l.EgressIP,
+				l.CreatedAtNs,
+				l.ExpiryNs,
+				l.LastAccessedNs,
+				l.SelectedPlatformID,
+			)
 			return err
 		}},
 		// Deletes in reverse dependency order.
@@ -492,14 +501,15 @@ const (
 			ewma_ns         = excluded.ewma_ns,
 			last_updated_ns = excluded.last_updated_ns`
 
-	upsertLeasesSQL = `INSERT INTO leases (platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+	upsertLeasesSQL = `INSERT INTO leases (platform_id, account, node_hash, egress_ip, created_at_ns, expiry_ns, last_accessed_ns, selected_platform_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(platform_id, account) DO UPDATE SET
 			node_hash       = excluded.node_hash,
 			egress_ip       = excluded.egress_ip,
 			created_at_ns   = excluded.created_at_ns,
 			expiry_ns       = excluded.expiry_ns,
-			last_accessed_ns = excluded.last_accessed_ns`
+			last_accessed_ns = excluded.last_accessed_ns,
+			selected_platform_id = excluded.selected_platform_id`
 
 	upsertSubscriptionNodesSQL = `INSERT INTO subscription_nodes (subscription_id, node_hash, tags_json, evicted)
 		 VALUES (?, ?, ?, ?)

@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/Resinat/Resin/internal/scanloop"
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 // LeaseCleaner periodically sweeps for expired leases.
@@ -121,16 +121,22 @@ func (c *LeaseCleaner) sweepPlatformState(platID string, state *PlatformRoutingS
 				}
 				// Double-check expiry inside lock
 				if current.ExpiryNs < nowNs {
+					selectedPlatformID := current.SelectedPlatformID
+					if selectedPlatformID == "" {
+						selectedPlatformID = platID
+					}
 					state.Leases.stats.Dec(current.EgressIP)
+					c.router.ensureSelectedStats(selectedPlatformID).Dec(current.EgressIP)
 
 					if c.router.onLeaseEvent != nil {
 						c.router.onLeaseEvent(LeaseEvent{
-							Type:        LeaseExpire,
-							PlatformID:  platID,
-							Account:     account,
-							NodeHash:    current.NodeHash,
-							EgressIP:    current.EgressIP,
-							CreatedAtNs: current.CreatedAtNs,
+							Type:               LeaseExpire,
+							PlatformID:         platID,
+							SelectedPlatformID: selectedPlatformID,
+							Account:            account,
+							NodeHash:           current.NodeHash,
+							EgressIP:           current.EgressIP,
+							CreatedAtNs:        current.CreatedAtNs,
 						})
 					}
 

@@ -15,24 +15,26 @@ import (
 
 // LeaseResponse is the API response for a lease.
 type LeaseResponse struct {
-	PlatformID   string `json:"platform_id"`
-	Account      string `json:"account"`
-	NodeHash     string `json:"node_hash"`
-	NodeTag      string `json:"node_tag"`
-	EgressIP     string `json:"egress_ip"`
-	Expiry       string `json:"expiry"`
-	LastAccessed string `json:"last_accessed"`
+	PlatformID         string `json:"platform_id"`
+	SelectedPlatformID string `json:"selected_platform_id"`
+	Account            string `json:"account"`
+	NodeHash           string `json:"node_hash"`
+	NodeTag            string `json:"node_tag"`
+	EgressIP           string `json:"egress_ip"`
+	Expiry             string `json:"expiry"`
+	LastAccessed       string `json:"last_accessed"`
 }
 
 func leaseToResponse(lease model.Lease, nodeTag string) LeaseResponse {
 	return LeaseResponse{
-		PlatformID:   lease.PlatformID,
-		Account:      lease.Account,
-		NodeHash:     lease.NodeHash,
-		NodeTag:      nodeTag,
-		EgressIP:     lease.EgressIP,
-		Expiry:       time.Unix(0, lease.ExpiryNs).UTC().Format(time.RFC3339Nano),
-		LastAccessed: time.Unix(0, lease.LastAccessedNs).UTC().Format(time.RFC3339Nano),
+		PlatformID:         lease.PlatformID,
+		SelectedPlatformID: lease.SelectedPlatformID,
+		Account:            lease.Account,
+		NodeHash:           lease.NodeHash,
+		NodeTag:            nodeTag,
+		EgressIP:           lease.EgressIP,
+		Expiry:             time.Unix(0, lease.ExpiryNs).UTC().Format(time.RFC3339Nano),
+		LastAccessed:       time.Unix(0, lease.LastAccessedNs).UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -59,12 +61,13 @@ func (s *ControlPlaneService) ListLeases(platformID string) ([]LeaseResponse, er
 	var result []LeaseResponse
 	s.Router.RangeLeases(platformID, func(account string, lease routing.Lease) bool {
 		result = append(result, leaseToResponse(model.Lease{
-			PlatformID:     platformID,
-			Account:        account,
-			NodeHash:       lease.NodeHash.Hex(),
-			EgressIP:       lease.EgressIP.String(),
-			ExpiryNs:       lease.ExpiryNs,
-			LastAccessedNs: lease.LastAccessedNs,
+			PlatformID:         platformID,
+			SelectedPlatformID: lease.SelectedPlatformID,
+			Account:            account,
+			NodeHash:           lease.NodeHash.Hex(),
+			EgressIP:           lease.EgressIP.String(),
+			ExpiryNs:           lease.ExpiryNs,
+			LastAccessedNs:     lease.LastAccessedNs,
 		}, s.resolveLeaseNodeTag(lease.NodeHash)))
 		return true
 	})

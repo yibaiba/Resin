@@ -130,7 +130,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		)
 	}
 
-	return NewConfiguredPlatform(
+	configured := NewConfiguredPlatform(
 		mp.ID,
 		mp.Name,
 		regexFilters,
@@ -141,5 +141,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		fixedHeader,
 		mp.AllocationPolicy,
 		mp.PassiveCircuitBreakerDisabled,
-	), nil
+	)
+	configured.FallbackPlatformIDs = append([]string(nil), mp.FallbackPlatformIDs...)
+	return configured, nil
 }

@@ -144,6 +144,10 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 	if err != nil {
 		return fmt.Errorf("encode platform %s region_filters: %w", p.ID, err)
 	}
+	fallbackPlatformIDsJSON, err := encodeStringSliceJSON(p.FallbackPlatformIDs)
+	if err != nil {
+		return fmt.Errorf("encode platform %s fallback_platform_ids: %w", p.ID, err)
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -152,8 +156,8 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 		INSERT INTO platforms (id, name, sticky_ttl_ns, regex_filters_json, region_filters_json,
 		                       reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 		                       reverse_proxy_fixed_account_header, allocation_policy,
-		                       passive_circuit_breaker_disabled, updated_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                       passive_circuit_breaker_disabled, fallback_platform_ids_json, updated_at_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name                     = excluded.name,
 			sticky_ttl_ns            = excluded.sticky_ttl_ns,
@@ -164,10 +168,11 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 			reverse_proxy_fixed_account_header   = excluded.reverse_proxy_fixed_account_header,
 			allocation_policy        = excluded.allocation_policy,
 			passive_circuit_breaker_disabled = excluded.passive_circuit_breaker_disabled,
+			fallback_platform_ids_json = excluded.fallback_platform_ids_json,
 			updated_at_ns            = excluded.updated_at_ns
 	`, p.ID, p.Name, p.StickyTTLNs, regexFiltersJSON, regionFiltersJSON,
 		p.ReverseProxyMissAction, p.ReverseProxyEmptyAccountBehavior, p.ReverseProxyFixedAccountHeader,
-		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, p.UpdatedAtNs)
+		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, fallbackPlatformIDsJSON, p.UpdatedAtNs)
 	if err != nil {
 		if isSQLiteUniqueConstraint(err) {
 			return fmt.Errorf("%w: platform name already exists", ErrConflict)
@@ -218,20 +223,65 @@ func (r *StateRepo) GetPlatformName(id string) (string, error) {
 	return name, nil
 }
 
+// ListPlatformFallbacks reads only the platform graph columns. Callers that
+// validate graph changes should not be coupled to unrelated platform JSON.
+func (r *StateRepo) ListPlatformFallbacks() (map[string][]string, error) {
+	rows, err := r.db.Query(`SELECT id, fallback_platform_ids_json FROM platforms`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]string)
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		fallbackIDs, err := decodeStringSliceJSON(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", id, err)
+		}
+		result[id] = fallbackIDs
+	}
+	return result, rows.Err()
+}
+
+// PlatformFallbackReferences reports whether another platform names the ID as
+// a fallback without decoding unrelated platform configuration.
+func (r *StateRepo) PlatformFallbackReferences(platformID string) (bool, error) {
+	graph, err := r.ListPlatformFallbacks()
+	if err != nil {
+		return false, err
+	}
+	for ownerID, fallbackIDs := range graph {
+		if ownerID == platformID {
+			continue
+		}
+		for _, fallbackID := range fallbackIDs {
+			if fallbackID == platformID {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // GetPlatform returns one platform by ID.
 func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 	row := r.db.QueryRow(`SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json,
 			reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 			reverse_proxy_fixed_account_header, allocation_policy,
-			passive_circuit_breaker_disabled, updated_at_ns
+			passive_circuit_breaker_disabled, fallback_platform_ids_json, updated_at_ns
 			FROM platforms WHERE id = ?`, id)
 
 	var p model.Platform
-	var regexFiltersJSON, regionFiltersJSON string
+	var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON string
 	var passiveCircuitBreakerDisabled int
 	if err := row.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 		&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
-		&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs); err != nil {
+		&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled,
+		&fallbackPlatformIDsJSON, &p.UpdatedAtNs); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
@@ -248,12 +298,17 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 	}
 	p.RegexFilters = regexFilters
 	p.RegionFilters = regionFilters
+	fallbackPlatformIDs, err := decodeStringSliceJSON(fallbackPlatformIDsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", p.ID, err)
+	}
+	p.FallbackPlatformIDs = fallbackPlatformIDs
 	return &p, nil
 }
 
 // ListPlatforms returns all platforms.
 func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
-	rows, err := r.db.Query("SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, updated_at_ns FROM platforms")
+	rows, err := r.db.Query("SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, fallback_platform_ids_json, updated_at_ns FROM platforms")
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +317,12 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 	var result []model.Platform
 	for rows.Next() {
 		var p model.Platform
-		var regexFiltersJSON, regionFiltersJSON string
+		var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON string
 		var passiveCircuitBreakerDisabled int
 		if err := rows.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 			&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
-			&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled, &p.UpdatedAtNs); err != nil {
+			&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled,
+			&fallbackPlatformIDsJSON, &p.UpdatedAtNs); err != nil {
 			return nil, err
 		}
 		p.PassiveCircuitBreakerDisabled = passiveCircuitBreakerDisabled != 0
@@ -280,6 +336,11 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 		}
 		p.RegexFilters = regexFilters
 		p.RegionFilters = regionFilters
+		fallbackPlatformIDs, err := decodeStringSliceJSON(fallbackPlatformIDsJSON)
+		if err != nil {
+			return nil, fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", p.ID, err)
+		}
+		p.FallbackPlatformIDs = fallbackPlatformIDs
 		result = append(result, p)
 	}
 	return result, rows.Err()

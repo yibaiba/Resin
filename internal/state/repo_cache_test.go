@@ -234,7 +234,7 @@ func TestCacheRepo_Leases_BulkUpsertAndLoad(t *testing.T) {
 	repo := newTestCacheRepo(t)
 
 	leases := []model.Lease{
-		{PlatformID: "p1", Account: "user1", NodeHash: "n1", EgressIP: "1.2.3.4", CreatedAtNs: 50, ExpiryNs: 9999, LastAccessedNs: 100},
+		{PlatformID: "p1", SelectedPlatformID: "p2", Account: "user1", NodeHash: "n1", EgressIP: "1.2.3.4", CreatedAtNs: 50, ExpiryNs: 9999, LastAccessedNs: 100},
 	}
 	if err := repo.BulkUpsertLeases(leases); err != nil {
 		t.Fatal(err)
@@ -249,6 +249,9 @@ func TestCacheRepo_Leases_BulkUpsertAndLoad(t *testing.T) {
 	}
 	if loaded[0].CreatedAtNs != 50 {
 		t.Fatalf("created_at_ns: got %d, want %d", loaded[0].CreatedAtNs, 50)
+	}
+	if loaded[0].SelectedPlatformID != "p2" {
+		t.Fatalf("selected_platform_id: got %q, want p2", loaded[0].SelectedPlatformID)
 	}
 }
 

@@ -29,7 +29,8 @@ const (
 	stateVersionAddEndpointEnabled               = 8
 	stateVersionPlatformRegexFilterRules         = 9
 	stateVersionRoutingRules                     = 10
-	stateLatestVersion                           = stateVersionRoutingRules
+	stateVersionPlatformFallback                 = 11
+	stateLatestVersion                           = stateVersionPlatformFallback
 	stateLegacyBaselineVersion                   = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"
