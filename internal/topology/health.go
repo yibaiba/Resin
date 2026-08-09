@@ -117,6 +117,16 @@ func (p *GlobalNodePool) CompleteTCPValidation(
 	return true
 }
 
+// CancelTCPValidation clears an exact pending generation without changing
+// persisted failure or circuit fields.
+func (p *GlobalNodePool) CancelTCPValidation(hash node.Hash, validation node.TCPValidation) bool {
+	entry, ok := p.nodes.Load(hash)
+	if !ok {
+		return false
+	}
+	return entry.CancelTCPValidation(validation).Changed()
+}
+
 func (p *GlobalNodePool) enqueueTCPValidation(
 	entry *node.NodeEntry,
 	request TCPValidationRequest,
