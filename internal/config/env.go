@@ -44,6 +44,7 @@ type EnvConfig struct {
 	ProxyTransportMaxIdleConns                      int
 	ProxyTransportMaxIdleConnsPerHost               int
 	ProxyTransportIdleConnTimeout                   time.Duration
+	Socks5UDPIdleTimeout                            time.Duration
 	ProxyBypassRules                                []string
 
 	// Request log
@@ -125,6 +126,7 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	cfg.ProxyTransportMaxIdleConns = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS", 1024, &errs)
 	cfg.ProxyTransportMaxIdleConnsPerHost = envInt("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", 64, &errs)
 	cfg.ProxyTransportIdleConnTimeout = envDuration("RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT", 90*time.Second, &errs)
+	cfg.Socks5UDPIdleTimeout = envDuration("RESIN_SOCKS5_UDP_IDLE_TIMEOUT", 5*time.Minute, &errs)
 	cfg.ProxyBypassRules = envDelimitedStringSlice("RESIN_PROXY_BYPASS", []string{})
 
 	// --- Request log ---
@@ -277,6 +279,9 @@ func LoadEnvConfig() (*EnvConfig, error) {
 	validatePositive("RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST", cfg.ProxyTransportMaxIdleConnsPerHost, &errs)
 	if cfg.ProxyTransportIdleConnTimeout <= 0 {
 		errs = append(errs, "RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT must be positive")
+	}
+	if cfg.Socks5UDPIdleTimeout <= 0 {
+		errs = append(errs, "RESIN_SOCKS5_UDP_IDLE_TIMEOUT must be positive")
 	}
 	if cfg.ProxyTransportMaxIdleConnsPerHost > cfg.ProxyTransportMaxIdleConns {
 		errs = append(

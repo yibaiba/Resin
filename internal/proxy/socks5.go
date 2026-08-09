@@ -34,6 +34,8 @@ const (
 
 var socks5HandshakeTimeout = 15 * time.Second
 
+const defaultSocks5UDPIdleTimeout = 5 * time.Minute
+
 // Socks5InboundConfig holds dependencies for the SOCKS5 inbound handler.
 type Socks5InboundConfig struct {
 	ProxyToken       string
@@ -43,13 +45,15 @@ type Socks5InboundConfig struct {
 	Events           EventEmitter
 	MetricsSink      MetricsEventSink
 	ProxyBypassRules []string
+	UDPIdleTimeout   time.Duration
 }
 
 // Socks5Inbound implements SOCKS5 CONNECT over a raw TCP connection.
 type Socks5Inbound struct {
-	token  string
-	tunnel tunnelDeps
-	events EventEmitter
+	token          string
+	tunnel         tunnelDeps
+	events         EventEmitter
+	udpIdleTimeout time.Duration
 }
 
 type socks5HandshakeResult struct {
@@ -65,6 +69,10 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 	if ev == nil {
 		ev = NoOpEventEmitter{}
 	}
+	udpIdleTimeout := cfg.UDPIdleTimeout
+	if udpIdleTimeout <= 0 {
+		udpIdleTimeout = defaultSocks5UDPIdleTimeout
+	}
 	return &Socks5Inbound{
 		token: cfg.ProxyToken,
 		tunnel: tunnelDeps{
@@ -74,7 +82,8 @@ func NewSocks5Inbound(cfg Socks5InboundConfig) *Socks5Inbound {
 			metricsSink: cfg.MetricsSink,
 			bypass:      NewTargetBypassMatcher(cfg.ProxyBypassRules),
 		},
-		events: ev,
+		events:         ev,
+		udpIdleTimeout: udpIdleTimeout,
 	}
 }
 

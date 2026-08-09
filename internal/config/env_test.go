@@ -74,6 +74,7 @@ func TestLoadEnvConfig_Defaults(t *testing.T) {
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 1024)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 64)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 90*time.Second)
+	assertEqual(t, "Socks5UDPIdleTimeout", cfg.Socks5UDPIdleTimeout, 5*time.Minute)
 	assertEqual(t, "ProxyBypassRulesLength", len(cfg.ProxyBypassRules), 0)
 
 	// Request log
@@ -118,6 +119,7 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS"] = "2048"
 	envs["RESIN_PROXY_TRANSPORT_MAX_IDLE_CONNS_PER_HOST"] = "128"
 	envs["RESIN_PROXY_TRANSPORT_IDLE_CONN_TIMEOUT"] = "2m"
+	envs["RESIN_SOCKS5_UDP_IDLE_TIMEOUT"] = "45s"
 	envs["RESIN_PROXY_BYPASS"] = "localhost;127.*; 192.168.*\n<local>,10.0.0.0/8"
 	envs["RESIN_REQUEST_LOG_QUEUE_FLUSH_INTERVAL"] = "10m"
 	setEnvs(t, envs)
@@ -161,6 +163,7 @@ func TestLoadEnvConfig_EnvOverrides(t *testing.T) {
 	assertEqual(t, "ProxyTransportMaxIdleConns", cfg.ProxyTransportMaxIdleConns, 2048)
 	assertEqual(t, "ProxyTransportMaxIdleConnsPerHost", cfg.ProxyTransportMaxIdleConnsPerHost, 128)
 	assertEqual(t, "ProxyTransportIdleConnTimeout", cfg.ProxyTransportIdleConnTimeout, 2*time.Minute)
+	assertEqual(t, "Socks5UDPIdleTimeout", cfg.Socks5UDPIdleTimeout, 45*time.Second)
 	assertEqual(t, "ProxyBypassRulesLength", len(cfg.ProxyBypassRules), 5)
 	assertEqual(t, "ProxyBypassRules[0]", cfg.ProxyBypassRules[0], "localhost")
 	assertEqual(t, "ProxyBypassRules[1]", cfg.ProxyBypassRules[1], "127.*")
@@ -444,6 +447,30 @@ func TestLoadEnvConfig_InvalidDuration(t *testing.T) {
 		t.Fatal("expected error for invalid duration")
 	}
 	assertContains(t, err.Error(), "RESIN_REQUEST_LOG_QUEUE_FLUSH_INTERVAL")
+}
+
+func TestLoadEnvConfig_InvalidSocks5UDPIdleTimeout(t *testing.T) {
+	envs := requiredEnvs()
+	envs["RESIN_SOCKS5_UDP_IDLE_TIMEOUT"] = "not-a-duration"
+	setEnvs(t, envs)
+
+	_, err := LoadEnvConfig()
+	if err == nil {
+		t.Fatal("expected error for invalid SOCKS5 UDP idle timeout")
+	}
+	assertContains(t, err.Error(), "RESIN_SOCKS5_UDP_IDLE_TIMEOUT")
+}
+
+func TestLoadEnvConfig_NonPositiveSocks5UDPIdleTimeout(t *testing.T) {
+	envs := requiredEnvs()
+	envs["RESIN_SOCKS5_UDP_IDLE_TIMEOUT"] = "0s"
+	setEnvs(t, envs)
+
+	_, err := LoadEnvConfig()
+	if err == nil {
+		t.Fatal("expected error for non-positive SOCKS5 UDP idle timeout")
+	}
+	assertContains(t, err.Error(), "RESIN_SOCKS5_UDP_IDLE_TIMEOUT must be positive")
 }
 
 func TestLoadEnvConfig_NegativeValue(t *testing.T) {

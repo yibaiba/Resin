@@ -445,6 +445,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		Events:           proxyEvents,
 		MetricsSink:      a.metricsManager,
 		ProxyBypassRules: a.envCfg.ProxyBypassRules,
+		UDPIdleTimeout:   a.envCfg.Socks5UDPIdleTimeout,
 	})
 
 	endpointManager := newEndpointRuntimeManager(
