@@ -80,12 +80,16 @@ func (r *CacheRepo) BulkUpsertNodesDynamic(nodes []model.NodeDynamic) error {
 				n.Hash,
 				n.FailureCount,
 				n.CircuitOpenSince,
+				n.UDPFailureCount,
+				n.UDPCircuitOpenSince,
 				n.EgressIP,
 				n.EgressRegion,
 				n.EgressUpdatedAtNs,
 				n.LastLatencyProbeAttemptNs,
 				n.LastAuthorityLatencyProbeAttemptNs,
 				n.LastEgressUpdateAttemptNs,
+				n.LastUDPProbeAttemptNs,
+				n.LastUDPProbeSuccessNs,
 			)
 			return err
 		},
@@ -108,8 +112,10 @@ func (r *CacheRepo) BulkDeleteNodesDynamic(hashes []string) error {
 // LoadAllNodesDynamic reads all node dynamic records.
 func (r *CacheRepo) LoadAllNodesDynamic() ([]model.NodeDynamic, error) {
 	rows, err := r.db.Query(`
-		SELECT hash, failure_count, circuit_open_since, egress_ip, egress_region, egress_updated_at_ns,
-		       last_latency_probe_attempt_ns, last_authority_latency_probe_attempt_ns, last_egress_update_attempt_ns
+		SELECT hash, failure_count, circuit_open_since, udp_failure_count, udp_circuit_open_since,
+		       egress_ip, egress_region, egress_updated_at_ns, last_latency_probe_attempt_ns,
+		       last_authority_latency_probe_attempt_ns, last_egress_update_attempt_ns,
+		       last_udp_probe_attempt_ns, last_udp_probe_success_ns
 		FROM nodes_dynamic`)
 	if err != nil {
 		return nil, err
@@ -123,12 +129,16 @@ func (r *CacheRepo) LoadAllNodesDynamic() ([]model.NodeDynamic, error) {
 			&n.Hash,
 			&n.FailureCount,
 			&n.CircuitOpenSince,
+			&n.UDPFailureCount,
+			&n.UDPCircuitOpenSince,
 			&n.EgressIP,
 			&n.EgressRegion,
 			&n.EgressUpdatedAtNs,
 			&n.LastLatencyProbeAttemptNs,
 			&n.LastAuthorityLatencyProbeAttemptNs,
 			&n.LastEgressUpdateAttemptNs,
+			&n.LastUDPProbeAttemptNs,
+			&n.LastUDPProbeSuccessNs,
 		); err != nil {
 			return nil, err
 		}
@@ -392,12 +402,16 @@ func (r *CacheRepo) FlushTx(ops FlushOps) error {
 				n.Hash,
 				n.FailureCount,
 				n.CircuitOpenSince,
+				n.UDPFailureCount,
+				n.UDPCircuitOpenSince,
 				n.EgressIP,
 				n.EgressRegion,
 				n.EgressUpdatedAtNs,
 				n.LastLatencyProbeAttemptNs,
 				n.LastAuthorityLatencyProbeAttemptNs,
 				n.LastEgressUpdateAttemptNs,
+				n.LastUDPProbeAttemptNs,
+				n.LastUDPProbeSuccessNs,
 			)
 			return err
 		}},
@@ -452,19 +466,25 @@ const (
 			created_at_ns    = excluded.created_at_ns`
 
 	upsertNodesDynamicSQL = `INSERT INTO nodes_dynamic (
-			hash, failure_count, circuit_open_since, egress_ip, egress_region, egress_updated_at_ns,
-			last_latency_probe_attempt_ns, last_authority_latency_probe_attempt_ns, last_egress_update_attempt_ns
+			hash, failure_count, circuit_open_since, udp_failure_count, udp_circuit_open_since,
+			egress_ip, egress_region, egress_updated_at_ns, last_latency_probe_attempt_ns,
+			last_authority_latency_probe_attempt_ns, last_egress_update_attempt_ns,
+			last_udp_probe_attempt_ns, last_udp_probe_success_ns
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(hash) DO UPDATE SET
 			failure_count                          = excluded.failure_count,
 			circuit_open_since                     = excluded.circuit_open_since,
+			udp_failure_count                      = excluded.udp_failure_count,
+			udp_circuit_open_since                 = excluded.udp_circuit_open_since,
 			egress_ip                              = excluded.egress_ip,
 			egress_region                          = excluded.egress_region,
 			egress_updated_at_ns                   = excluded.egress_updated_at_ns,
 			last_latency_probe_attempt_ns          = excluded.last_latency_probe_attempt_ns,
 			last_authority_latency_probe_attempt_ns = excluded.last_authority_latency_probe_attempt_ns,
-			last_egress_update_attempt_ns          = excluded.last_egress_update_attempt_ns`
+			last_egress_update_attempt_ns          = excluded.last_egress_update_attempt_ns,
+			last_udp_probe_attempt_ns              = excluded.last_udp_probe_attempt_ns,
+			last_udp_probe_success_ns              = excluded.last_udp_probe_success_ns`
 
 	upsertNodeLatencySQL = `INSERT INTO node_latency (node_hash, domain, ewma_ns, last_updated_ns)
 		 VALUES (?, ?, ?, ?)

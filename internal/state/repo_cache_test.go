@@ -84,12 +84,16 @@ func TestCacheRepo_NodesDynamic_BulkUpsertAndLoad(t *testing.T) {
 			Hash:                               "aaa",
 			FailureCount:                       3,
 			CircuitOpenSince:                   1000,
+			UDPFailureCount:                    4,
+			UDPCircuitOpenSince:                1100,
 			EgressIP:                           "1.2.3.4",
 			EgressRegion:                       "us",
 			EgressUpdatedAtNs:                  500,
 			LastLatencyProbeAttemptNs:          700,
 			LastAuthorityLatencyProbeAttemptNs: 800,
 			LastEgressUpdateAttemptNs:          900,
+			LastUDPProbeAttemptNs:              1200,
+			LastUDPProbeSuccessNs:              1300,
 		},
 	}
 	if err := repo.BulkUpsertNodesDynamic(nodes); err != nil {
@@ -108,8 +112,13 @@ func TestCacheRepo_NodesDynamic_BulkUpsertAndLoad(t *testing.T) {
 	}
 	if loaded[0].LastLatencyProbeAttemptNs != 700 ||
 		loaded[0].LastAuthorityLatencyProbeAttemptNs != 800 ||
-		loaded[0].LastEgressUpdateAttemptNs != 900 {
+		loaded[0].LastEgressUpdateAttemptNs != 900 ||
+		loaded[0].LastUDPProbeAttemptNs != 1200 ||
+		loaded[0].LastUDPProbeSuccessNs != 1300 {
 		t.Fatalf("unexpected probe attempt fields: %+v", loaded[0])
+	}
+	if loaded[0].UDPFailureCount != 4 || loaded[0].UDPCircuitOpenSince != 1100 {
+		t.Fatalf("unexpected UDP health fields: %+v", loaded[0])
 	}
 
 	// Update.
@@ -118,6 +127,55 @@ func TestCacheRepo_NodesDynamic_BulkUpsertAndLoad(t *testing.T) {
 	loaded, _ = repo.LoadAllNodesDynamic()
 	if loaded[0].FailureCount != 0 {
 		t.Fatalf("expected 0 failures after reset, got %d", loaded[0].FailureCount)
+	}
+}
+
+func TestMigrateCacheDB_AddsUnknownUDPHealthToExistingNodes(t *testing.T) {
+	db, err := OpenDB(t.TempDir() + "/cache.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	baseSQL, err := migrationsFS.ReadFile("migrations/cache/000001_cache_base.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(baseSQL)); err != nil {
+		t.Fatal(err)
+	}
+	evictedSQL, err := migrationsFS.ReadFile("migrations/cache/000002_subscription_nodes_evicted.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(evictedSQL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (version uint64 NOT NULL PRIMARY KEY, dirty bool NOT NULL);
+		INSERT INTO schema_migrations (version, dirty) VALUES (2, 0);
+		INSERT INTO nodes_dynamic (hash, failure_count) VALUES ('legacy', 2);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MigrateCacheDB(db); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := newCacheRepo(db).LoadAllNodesDynamic()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded nodes: got %d, want 1", len(loaded))
+	}
+	got := loaded[0]
+	if got.FailureCount != 2 {
+		t.Fatalf("legacy failure count: got %d, want 2", got.FailureCount)
+	}
+	if got.UDPFailureCount != 0 || got.UDPCircuitOpenSince != 0 ||
+		got.LastUDPProbeAttemptNs != 0 || got.LastUDPProbeSuccessNs != 0 {
+		t.Fatalf("legacy UDP health should be unknown: %+v", got)
 	}
 }
 

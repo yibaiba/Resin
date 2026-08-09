@@ -46,6 +46,8 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	egressAttemptAt := egressUpdatedAt - int64(5*time.Second)
 	latencyAttemptAt := egressUpdatedAt - int64(3*time.Second)
 	authorityAttemptAt := egressUpdatedAt - int64(2*time.Second)
+	udpAttemptAt := egressUpdatedAt - int64(time.Second)
+	udpSuccessAt := egressUpdatedAt - int64(500*time.Millisecond)
 
 	engine1, closer1, err := state.PersistenceBootstrap(stateDir, cacheDir)
 	if err != nil {
@@ -111,6 +113,10 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	entry1.LastLatencyProbeAttempt.Store(latencyAttemptAt)
 	entry1.LastAuthorityLatencyProbeAttempt.Store(authorityAttemptAt)
 	entry1.FailureCount.Store(2)
+	entry1.UDPFailureCount.Store(3)
+	entry1.UDPCircuitOpenSince.Store(egressUpdatedAt - int64(time.Minute))
+	entry1.LastUDPProbeAttempt.Store(udpAttemptAt)
+	entry1.LastUDPProbeSuccess.Store(udpSuccessAt)
 	if entry1.LatencyTable == nil {
 		t.Fatal("node latency table should be initialized")
 	}
@@ -229,6 +235,12 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	if got := entry2.FailureCount.Load(); got != 2 {
 		t.Fatalf("failure_count: got %d, want %d", got, 2)
 	}
+	if got := entry2.UDPFailureCount.Load(); got != 3 {
+		t.Fatalf("udp_failure_count: got %d, want %d", got, 3)
+	}
+	if got := entry2.UDPCircuitOpenSince.Load(); got == 0 {
+		t.Fatal("udp_circuit_open_since should be restored")
+	}
 	if got := entry2.GetEgressIP(); got != egressIP {
 		t.Fatalf("egress_ip: got %s, want %s", got, egressIP)
 	}
@@ -246,6 +258,12 @@ func TestBootstrapRestart_RecoversTopologyAndStickyLease(t *testing.T) {
 	}
 	if got := entry2.LastAuthorityLatencyProbeAttempt.Load(); got != authorityAttemptAt {
 		t.Fatalf("last_authority_latency_probe_attempt_ns: got %d, want %d", got, authorityAttemptAt)
+	}
+	if got := entry2.LastUDPProbeAttempt.Load(); got != udpAttemptAt {
+		t.Fatalf("last_udp_probe_attempt_ns: got %d, want %d", got, udpAttemptAt)
+	}
+	if got := entry2.LastUDPProbeSuccess.Load(); got != udpSuccessAt {
+		t.Fatalf("last_udp_probe_success_ns: got %d, want %d", got, udpSuccessAt)
 	}
 	if entry2.LatencyTable == nil {
 		t.Fatal("latency table should be restored")

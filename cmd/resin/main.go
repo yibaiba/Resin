@@ -504,12 +504,16 @@ func newFlushReaders(
 				Hash:                               hash,
 				FailureCount:                       int(entry.FailureCount.Load()),
 				CircuitOpenSince:                   entry.CircuitOpenSince.Load(),
+				UDPFailureCount:                    int(entry.UDPFailureCount.Load()),
+				UDPCircuitOpenSince:                entry.UDPCircuitOpenSince.Load(),
 				EgressIP:                           egressStr,
 				EgressRegion:                       entry.GetEgressRegion(),
 				EgressUpdatedAtNs:                  entry.LastEgressUpdate.Load(),
 				LastLatencyProbeAttemptNs:          entry.LastLatencyProbeAttempt.Load(),
 				LastAuthorityLatencyProbeAttemptNs: entry.LastAuthorityLatencyProbeAttempt.Load(),
 				LastEgressUpdateAttemptNs:          entry.LastEgressUpdateAttempt.Load(),
+				LastUDPProbeAttemptNs:              entry.LastUDPProbeAttempt.Load(),
+				LastUDPProbeSuccessNs:              entry.LastUDPProbeSuccess.Load(),
 			}
 		},
 		ReadNodeLatency: func(key model.NodeLatencyKey) *model.NodeLatency {
@@ -837,9 +841,13 @@ func restoreBootstrapNodeDynamics(
 		}
 		entry.FailureCount.Store(int32(nd.FailureCount))
 		entry.CircuitOpenSince.Store(nd.CircuitOpenSince)
+		entry.UDPFailureCount.Store(int32(nd.UDPFailureCount))
+		entry.UDPCircuitOpenSince.Store(nd.UDPCircuitOpenSince)
 		entry.LastLatencyProbeAttempt.Store(nd.LastLatencyProbeAttemptNs)
 		entry.LastAuthorityLatencyProbeAttempt.Store(nd.LastAuthorityLatencyProbeAttemptNs)
 		entry.LastEgressUpdateAttempt.Store(nd.LastEgressUpdateAttemptNs)
+		entry.LastUDPProbeAttempt.Store(nd.LastUDPProbeAttemptNs)
+		entry.LastUDPProbeSuccess.Store(nd.LastUDPProbeSuccessNs)
 		if nd.EgressIP != "" {
 			if ip, err := netip.ParseAddr(nd.EgressIP); err == nil {
 				entry.SetEgressIP(ip)
