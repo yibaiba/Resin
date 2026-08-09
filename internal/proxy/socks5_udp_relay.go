@@ -128,3 +128,11 @@ func (s *Socks5Inbound) CloseUDPAssociations() error {
 	}
 	return s.udpAssociations.close()
 }
+
+// CloseUDPAssociationScope closes sessions owned by one endpoint runtime.
+func (s *Socks5Inbound) CloseUDPAssociationScope(associationScope string) error {
+	if s == nil || s.udpAssociations == nil {
+		return nil
+	}
+	return s.udpAssociations.closeEndpoint(associationScope)
+}

@@ -17,10 +17,18 @@ import (
 )
 
 type managedEndpointRuntime struct {
-	config   atomic.Pointer[model.Endpoint]
-	server   *inboundDemuxServer
-	listener net.Listener
-	started  bool
+	config           atomic.Pointer[model.Endpoint]
+	server           *inboundDemuxServer
+	listener         net.Listener
+	associationScope string
+	packetHandler    endpointPacketHandler
+	started          bool
+
+	udpMu      sync.Mutex
+	packetConn net.PacketConn
+	udpCancel  context.CancelFunc
+	udpDone    chan struct{}
+	udpStarted bool
 }
 
 func (r *managedEndpointRuntime) current() model.Endpoint {
@@ -49,6 +57,7 @@ type endpointRuntimeManager struct {
 	started       bool
 	stopping      bool
 	serverErrCh   chan error
+	nextScopeID   uint64
 }
 
 func newEndpointRuntimeManager(
@@ -84,41 +93,16 @@ func (m *endpointRuntimeManager) ApplyEndpoint(endpoint model.Endpoint) error {
 	}
 
 	if current := m.runtimes[endpoint.ID]; current != nil && current.current().Port == endpoint.Port {
-		copy := endpoint
-		current.config.Store(&copy)
-		if current.started {
-			m.statuses[endpoint.ID] = service.EndpointRuntimeStatus{State: "active"}
-		} else {
-			m.statuses[endpoint.ID] = service.EndpointRuntimeStatus{State: "starting"}
-		}
-		return nil
+		return m.applySamePortEndpointLocked(current, endpoint)
 	}
 
-	listener, err := net.Listen("tcp", formatListenAddress(m.listenAddress, endpoint.Port))
+	runtime, err := m.createRuntimeLocked(endpoint)
 	if err != nil {
 		if m.runtimes[endpoint.ID] == nil {
 			m.statuses[endpoint.ID] = service.EndpointRuntimeStatus{State: "error", LastError: err.Error()}
 		}
 		return err
 	}
-	listener = proxy.NewCountingListener(listener, m.metricsSink)
-
-	runtime := &managedEndpointRuntime{listener: listener}
-	copy := endpoint
-	runtime.config.Store(&copy)
-	currentConfig := func() model.Endpoint { return runtime.current() }
-	httpHandler := newEndpointInboundMux(
-		currentConfig,
-		m.proxyToken,
-		m.forward,
-		m.reverse,
-		m.apiHandler,
-		m.tokenAPI,
-	)
-	runtime.server = newInboundDemuxServer(
-		&http.Server{Handler: httpHandler},
-		&endpointSocksGate{current: currentConfig, next: m.socks5},
-	)
 
 	old := m.runtimes[endpoint.ID]
 	m.runtimes[endpoint.ID] = runtime
@@ -142,8 +126,9 @@ func (m *endpointRuntimeManager) RemoveEndpoint(id string) {
 	delete(m.statuses, id)
 	m.mu.Unlock()
 	if runtime != nil {
-		// Release the port before returning so a following start can rebind it.
+		// Release both transport ports before returning so a following start can rebind them.
 		_ = runtime.listener.Close()
+		_ = runtime.stopUDP()
 		go stopManagedEndpoint(runtime, 5*time.Second)
 	}
 }
@@ -190,6 +175,7 @@ func (m *endpointRuntimeManager) startRuntimeLocked(runtime *managedEndpointRunt
 	endpoint := runtime.current()
 	m.statuses[endpoint.ID] = service.EndpointRuntimeStatus{State: "active"}
 	log.Printf("Endpoint %s starting on %s", endpoint.ID, formatListenAddress(m.listenAddress, endpoint.Port))
+	m.startUDPLocked(runtime)
 	go func() {
 		err := runtime.server.Serve(runtime.listener)
 		if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
@@ -208,6 +194,7 @@ func (m *endpointRuntimeManager) handleRuntimeError(runtime *managedEndpointRunt
 	}
 	stopping := m.stopping
 	m.mu.Unlock()
+	go stopManagedEndpoint(runtime, 5*time.Second)
 	if !stopping && endpoint.ID == service.DefaultEndpointID {
 		select {
 		case m.serverErrCh <- fmt.Errorf("default endpoint: %w", err):
@@ -235,10 +222,9 @@ func (m *endpointRuntimeManager) Shutdown(ctx context.Context) error {
 		wg.Add(1)
 		go func(runtime *managedEndpointRuntime) {
 			defer wg.Done()
-			if err := runtime.server.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			if err := shutdownManagedEndpoint(ctx, runtime); err != nil {
 				errCh <- err
 			}
-			_ = runtime.listener.Close()
 		}(runtime)
 	}
 	wg.Wait()
@@ -256,13 +242,44 @@ func stopManagedEndpoint(runtime *managedEndpointRuntime, timeout time.Duration)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	_ = runtime.server.Shutdown(ctx)
-	_ = runtime.listener.Close()
+	_ = shutdownManagedEndpoint(ctx, runtime)
+}
+
+func shutdownManagedEndpoint(ctx context.Context, runtime *managedEndpointRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	udpErr := runtime.stopUDP()
+	serverErr := runtime.server.Shutdown(ctx)
+	listenerErr := runtime.listener.Close()
+	return errors.Join(
+		ignoreShutdownError(serverErr),
+		ignoreClosedNetworkError(listenerErr),
+		udpErr,
+	)
+}
+
+func ignoreShutdownError(err error) error {
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
+}
+
+func ignoreClosedNetworkError(err error) error {
+	if err == nil || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 type endpointSocksGate struct {
-	current func() model.Endpoint
-	next    inboundConnHandler
+	current          func() model.Endpoint
+	next             inboundConnHandler
+	associationScope string
 }
 
 func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn) {
@@ -278,7 +295,9 @@ func (g *endpointSocksGate) ServeConnContext(ctx context.Context, conn net.Conn)
 		return
 	}
 	ctx = proxy.ContextWithInboundPolicy(ctx, proxy.InboundPolicy{
-		RequireProxyAuthInfo: endpoint.RequireProxyAuthInfo,
+		RequireProxyAuthInfo:      endpoint.RequireProxyAuthInfo,
+		Socks5UDPAssociationScope: g.associationScope,
+		Socks5UDPPort:             uint16(endpoint.Port),
 	})
 	g.next.ServeConnContext(ctx, conn)
 }
