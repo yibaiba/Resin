@@ -292,6 +292,14 @@ In this example, Resin uses `sk-abc123` as Account. Future requests with the sam
 
 ---
 
+## 🧭 Routing Control and Diagnostics
+
+The WebUI now exposes five connected controls: target rules, Platform fallback, the global egress-IP pool, sticky rotation, and routing diagnostics. Rules can route to a Platform, connect directly, or reject; fallback selects a Platform only before dialing and never replays an in-flight request; egress policy and capacity apply globally; rotation can preserve, prefer changing, or require changing the IP; diagnostics explain the full selection and can run a health-neutral LIVE_TCP check.
+
+See [Routing Control and Diagnostics](doc/routing-control.md) for behavior, WebUI paths, API fields, and executable examples. Existing default-Platform and sticky-routing behavior is unchanged until these controls are configured.
+
+---
+
 ## 🤖 Integrating Third-party Projects
 
 Different clients integrate Resin differently, with different code-intrusion levels.

@@ -279,6 +279,14 @@ curl "http://127.0.0.1:2260/my-token/MyPlatform/https/api.example.com/v1/orders"
 
 ---
 
+## 🧭 路由控制与诊断
+
+WebUI 已提供目标路由规则、Platform fallback、出口 IP 池、粘性轮换和路由诊断五个连续控制层。目标规则可以把流量送往指定 Platform、直接连接或拒绝；fallback 只在拨号前选择可用 Platform，不会重放已经开始的请求；出口策略与容量在所有 Platform 间全局生效；轮换支持保持 IP、优先或强制更换 IP；诊断工作台可以解释完整选择过程并执行无健康副作用的 LIVE_TCP。
+
+完整行为、WebUI 路径、API 字段和可执行示例见 [路由控制与诊断文档](doc/routing-control.zh-CN.md)。未配置上述功能时，现有默认 Platform 和粘性路由行为保持不变。
+
+---
+
 ## 🤖 接入第三方项目
 
 各类第三方客户端使用 Resin 的方式有所不同，对于业务代码的侵入程度也不同，总结如下：
