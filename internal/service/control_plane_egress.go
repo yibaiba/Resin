@@ -168,6 +168,9 @@ func (s *ControlPlaneService) UpdateEgressIPPolicy(
 	if svcErr != nil {
 		return nil, svcErr
 	}
+	s.egressPolicyMu.Lock()
+	defer s.egressPolicyMu.Unlock()
+
 	policy, err := s.loadEgressIPPolicy(ip)
 	if err != nil {
 		return nil, err

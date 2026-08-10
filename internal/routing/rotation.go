@@ -201,6 +201,9 @@ func (r *Router) RotateLease(
 	account string,
 	strategy platform.RotationStrategy,
 ) (RouteResult, error) {
+	r.leaseLifecycleMu.RLock()
+	defer r.leaseLifecycleMu.RUnlock()
+
 	root, ok := r.pool.GetPlatform(platformID)
 	if !ok {
 		return RouteResult{}, ErrPlatformNotFound

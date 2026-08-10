@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/Resinat/Resin/internal/model"
 	"github.com/Resinat/Resin/internal/routing"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -61,6 +62,58 @@ func TestReverseProxy_RoutingPolicyRejectsBeforeRouting(t *testing.T) {
 	}
 	if decisioner.calls.Load() != 1 {
 		t.Fatalf("decision calls=%d, want 1", decisioner.calls.Load())
+	}
+}
+
+func TestHTTPIngress_RoutingRulesInferDefaultAndPreserveExplicitPorts(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    uint16
+		forward string
+		reverse string
+	}{
+		{name: "http_default", port: 80, forward: "http://example.com/path", reverse: "/tok/plat:acct/http/example.com/path"},
+		{name: "https_default", port: 443, forward: "https://example.com/path", reverse: "/tok/plat:acct/https/example.com/path"},
+		{name: "explicit", port: 8443, forward: "https://example.com:8443/path", reverse: "/tok/plat:acct/https/example.com:8443/path"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decisioner := rejectPortDecisioner(t, test.port)
+			forward := NewForwardProxy(ForwardProxyConfig{
+				ProxyToken: "tok", Decisioner: decisioner, Events: NoOpEventEmitter{},
+			})
+			forwardRequest := httptest.NewRequest(http.MethodGet, test.forward, nil)
+			forwardRequest.Header.Set("Proxy-Authorization", basicAuth("plat", "tok"))
+			assertRouteRejected(t, forward, forwardRequest)
+
+			reverse := NewReverseProxy(ReverseProxyConfig{
+				ProxyToken: "tok", Decisioner: decisioner, Events: NoOpEventEmitter{},
+			})
+			assertRouteRejected(t, reverse, httptest.NewRequest(http.MethodGet, test.reverse, nil))
+		})
+	}
+}
+
+func rejectPortDecisioner(t *testing.T, port uint16) *routing.DecisionEngine {
+	t.Helper()
+	decisioner := routing.NewDecisionEngine(nil, nil)
+	err := decisioner.ReplaceRules([]model.RoutingRule{{
+		ID: "port-rule", Name: "Port rule", Enabled: true,
+		HostType: routing.RuleHostAny, Ports: []model.RoutingPortRange{{Start: port, End: port}},
+		Network: routing.RuleNetworkAny, Action: string(routing.DecisionReject), OverrideExplicitPlatform: true,
+	}})
+	if err != nil {
+		t.Fatalf("replace rules: %v", err)
+	}
+	return decisioner
+}
+
+func assertRouteRejected(t *testing.T, handler http.Handler, request *http.Request) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || response.Header().Get("X-Resin-Error") != "ROUTE_REJECTED" {
+		t.Fatalf("status=%d error=%q body=%q", response.Code, response.Header().Get("X-Resin-Error"), response.Body.String())
 	}
 }
 

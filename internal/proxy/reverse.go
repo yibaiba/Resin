@@ -311,7 +311,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var nodeHashRaw = route.NodeHash
 	domain := netutil.ExtractDomain(parsed.Host)
 	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
-		PlatformName: parsed.PlatformName, Account: account, Target: parsed.Host,
+		PlatformName: parsed.PlatformName, Account: account, Target: target.String(),
 	})
 	if routeErr != nil {
 		lifecycle.setProxyError(routeErr)

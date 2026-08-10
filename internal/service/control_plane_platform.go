@@ -398,6 +398,9 @@ type CreatePlatformRequest struct {
 
 // CreatePlatform creates a new platform.
 func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*PlatformResponse, error) {
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
+
 	// Validate name.
 	if req.Name == nil {
 		return nil, invalidArg("name is required")
@@ -501,6 +504,8 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	}); err != nil {
 		return nil, err
 	}
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
 
 	// Load current.
 	current, err := s.getPlatformModel(id)
@@ -627,6 +632,9 @@ func (s *ControlPlaneService) DeletePlatform(id string) error {
 	if id == platform.DefaultPlatformID {
 		return conflict("cannot delete Default platform")
 	}
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
+
 	referenced, err := s.Engine.RoutingRuleReferencesPlatform(id)
 	if err != nil {
 		return internal("check routing rule references", err)
@@ -649,11 +657,17 @@ func (s *ControlPlaneService) DeletePlatform(id string) error {
 		return internal("delete platform", err)
 	}
 	s.Pool.UnregisterPlatform(id)
+	if s.Router != nil {
+		s.Router.DeleteLeasesForPlatform(id)
+	}
 	return nil
 }
 
 // ResetPlatformToDefault resets a platform to env defaults.
 func (s *ControlPlaneService) ResetPlatformToDefault(id string) (*PlatformResponse, error) {
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
+
 	name, err := s.Engine.GetPlatformName(id)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {

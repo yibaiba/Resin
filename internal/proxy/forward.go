@@ -235,7 +235,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var hasRoute bool
 	var transport *http.Transport
 	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
-		PlatformName: platName, Account: account, Target: r.Host,
+		PlatformName: platName, Account: account, Target: r.URL.String(),
 	})
 	if routeErr != nil {
 		lifecycle.setProxyError(routeErr)

@@ -31,16 +31,17 @@ type PoolAccessor interface {
 
 // Router handles route selection and lease management.
 type Router struct {
-	pool            PoolAccessor
-	states          *xsync.Map[string, *PlatformRoutingState]
-	selectedStats   *xsync.Map[string, *IPLoadStats]
-	globalStats     *IPLoadStats
-	egressPolicies  *EgressPolicyStore
-	allocationMu    sync.Mutex
-	authorities     func() []string
-	p2cWindow       func() time.Duration
-	onLeaseEvent    LeaseEventFunc
-	nodeTagResolver func(node.Hash) string
+	pool             PoolAccessor
+	states           *xsync.Map[string, *PlatformRoutingState]
+	selectedStats    *xsync.Map[string, *IPLoadStats]
+	globalStats      *IPLoadStats
+	egressPolicies   *EgressPolicyStore
+	leaseLifecycleMu sync.RWMutex
+	allocationMu     sync.Mutex
+	authorities      func() []string
+	p2cWindow        func() time.Duration
+	onLeaseEvent     LeaseEventFunc
+	nodeTagResolver  func(node.Hash) string
 }
 
 type RouterConfig struct {
@@ -131,6 +132,9 @@ func (r *Router) RouteRequest(platName, account, target string) (RouteResult, er
 
 // RouteWithOptions routes a request through a network-compatible platform view.
 func (r *Router) RouteWithOptions(options RouteOptions) (RouteResult, error) {
+	r.leaseLifecycleMu.RLock()
+	defer r.leaseLifecycleMu.RUnlock()
+
 	requiredNetwork, err := normalizeRequiredNetwork(options.RequiredNetwork)
 	if err != nil {
 		return RouteResult{}, err
@@ -693,9 +697,22 @@ func (r *Router) ReadLease(key model.LeaseKey) *model.Lease {
 // UpsertLease writes or replaces a lease for (platform_id, account).
 // It updates per-IP lease counters and emits LeaseCreate/LeaseReplace events.
 func (r *Router) UpsertLease(ml model.Lease) error {
+	r.leaseLifecycleMu.RLock()
+	defer r.leaseLifecycleMu.RUnlock()
+
 	platformID := strings.TrimSpace(ml.PlatformID)
 	if platformID == "" {
 		return errors.New("platform_id is required")
+	}
+	if _, ok := r.pool.GetPlatform(platformID); !ok {
+		return ErrPlatformNotFound
+	}
+	selectedPlatformID := strings.TrimSpace(ml.SelectedPlatformID)
+	if selectedPlatformID == "" {
+		selectedPlatformID = platformID
+	}
+	if _, ok := r.pool.GetPlatform(selectedPlatformID); !ok {
+		return ErrPlatformNotFound
 	}
 	account := strings.TrimSpace(ml.Account)
 	if account == "" {
@@ -715,7 +732,7 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 	lease := Lease{
 		NodeHash:                  h,
 		EgressIP:                  ip,
-		SelectedPlatformID:        strings.TrimSpace(ml.SelectedPlatformID),
+		SelectedPlatformID:        selectedPlatformID,
 		CreatedAtNs:               ml.CreatedAtNs,
 		ExpiryNs:                  ml.ExpiryNs,
 		LastAccessedNs:            ml.LastAccessedNs,
@@ -725,10 +742,6 @@ func (r *Router) UpsertLease(ml model.Lease) error {
 		RotationDeferred:          ml.RotationDeferred,
 		RotationDeferredReason:    ml.RotationDeferredReason,
 	}
-	if lease.SelectedPlatformID == "" {
-		lease.SelectedPlatformID = platformID
-	}
-
 	eventType := LeaseCreate
 	var allocationErr error
 	_, _ = state.Leases.leases.Compute(account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
@@ -773,6 +786,17 @@ func (r *Router) SnapshotIPLoad(platformID string) map[netip.Addr]int64 {
 // RestoreLeases restores leases from persistence during bootstrap.
 func (r *Router) RestoreLeases(leases []model.Lease) {
 	for _, ml := range leases {
+		platformID := strings.TrimSpace(ml.PlatformID)
+		if _, ok := r.pool.GetPlatform(platformID); !ok {
+			continue
+		}
+		selectedPlatformID := strings.TrimSpace(ml.SelectedPlatformID)
+		if selectedPlatformID == "" {
+			selectedPlatformID = platformID
+		}
+		if _, ok := r.pool.GetPlatform(selectedPlatformID); !ok {
+			continue
+		}
 		h, err := node.ParseHex(ml.NodeHash)
 		if err != nil {
 			continue
@@ -782,14 +806,14 @@ func (r *Router) RestoreLeases(leases []model.Lease) {
 			continue
 		}
 
-		state, _ := r.states.LoadOrCompute(ml.PlatformID, func() (*PlatformRoutingState, bool) {
+		state, _ := r.states.LoadOrCompute(platformID, func() (*PlatformRoutingState, bool) {
 			return NewPlatformRoutingState(), false
 		})
 
 		l := Lease{
 			NodeHash:                  h,
 			EgressIP:                  ip,
-			SelectedPlatformID:        strings.TrimSpace(ml.SelectedPlatformID),
+			SelectedPlatformID:        selectedPlatformID,
 			CreatedAtNs:               ml.CreatedAtNs,
 			ExpiryNs:                  ml.ExpiryNs,
 			LastAccessedNs:            ml.LastAccessedNs,
@@ -799,14 +823,11 @@ func (r *Router) RestoreLeases(leases []model.Lease) {
 			RotationDeferred:          ml.RotationDeferred,
 			RotationDeferredReason:    ml.RotationDeferredReason,
 		}
-		if l.SelectedPlatformID == "" {
-			l.SelectedPlatformID = ml.PlatformID
-		}
 		_, _ = state.Leases.leases.Compute(ml.Account, func(current Lease, loaded bool) (Lease, xsync.ComputeOp) {
 			r.allocationMu.Lock()
 			defer r.allocationMu.Unlock()
 			if loaded {
-				r.decrementLeaseLoads(ml.PlatformID, state, current)
+				r.decrementLeaseLoads(platformID, state, current)
 			}
 			r.incrementLeaseLoads(state, l)
 			return l, xsync.UpdateOp
@@ -905,4 +926,36 @@ func (r *Router) DeleteAllLeases(platformID string) int {
 		return true
 	})
 	return count
+}
+
+// DeleteLeasesForPlatform removes leases owned by or selected from a Platform.
+func (r *Router) DeleteLeasesForPlatform(platformID string) int {
+	r.leaseLifecycleMu.Lock()
+	defer r.leaseLifecycleMu.Unlock()
+
+	type leaseKey struct {
+		ownerID string
+		account string
+	}
+	keys := make([]leaseKey, 0)
+	r.states.Range(func(ownerID string, state *PlatformRoutingState) bool {
+		state.Leases.Range(func(account string, lease Lease) bool {
+			selectedID := lease.SelectedPlatformID
+			if selectedID == "" {
+				selectedID = ownerID
+			}
+			if ownerID == platformID || selectedID == platformID {
+				keys = append(keys, leaseKey{ownerID: ownerID, account: account})
+			}
+			return true
+		})
+		return true
+	})
+	deleted := 0
+	for _, key := range keys {
+		if r.DeleteLease(key.ownerID, key.account) {
+			deleted++
+		}
+	}
+	return deleted
 }

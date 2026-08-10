@@ -65,10 +65,12 @@ type ControlPlaneService struct {
 	DiagnosticTCPProber     DiagnosticTCPProber
 	OnUDPProbeConfigChanged func()
 
-	configMu      sync.Mutex
-	configVersion int
-	endpointMu    sync.RWMutex
-	routingRuleMu sync.Mutex
+	configMu       sync.Mutex
+	configVersion  int
+	endpointMu     sync.RWMutex
+	routingRuleMu  sync.Mutex
+	platformMu     sync.Mutex
+	egressPolicyMu sync.Mutex
 }
 
 // ------------------------------------------------------------------
