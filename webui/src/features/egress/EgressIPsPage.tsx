@@ -92,10 +92,10 @@ function EgressStateGuide() {
     { icon: Droplets, title: "排空", detail: "停止新分配，现有租约在下次使用时迁移。" },
     { icon: Ban, title: "禁用", detail: "立即排除该出口，现有租约不再继续使用。" },
   ] as const;
-  return <section className="egress-state-guide" aria-label={t("出口状态说明")}>{states.map(({ icon: Icon, title, detail }) => <div key={title}><Icon size={17} /><span><strong>{t(title)}</strong><small>{t(detail)}</small></span></div>)}</section>;
+  return <section className="card egress-state-guide" aria-label={t("出口状态说明")}>{states.map(({ icon: Icon, title, detail }) => <div key={title}><Icon size={17} /><span><strong>{t(title)}</strong><small>{t(detail)}</small></span></div>)}</section>;
 }
 
 function ResultPanel({ title, items }: { title: string; items: Array<{ key: string; ok: boolean; detail?: string }> }) {
   const { t } = useI18n();
-  return <section className="operation-results"><h3>{title}</h3>{items.map((item) => <div key={item.key} className={item.ok ? "result-ok" : "result-error"}><strong>{item.key}</strong><span>{item.detail ? t(item.detail) : item.ok ? t("成功") : t("失败")}</span></div>)}</section>;
+  return <section className="card operation-results"><h3>{title}</h3>{items.map((item) => <div key={item.key} className={item.ok ? "result-ok" : "result-error"}><strong>{item.key}</strong><span>{item.detail ? t(item.detail) : item.ok ? t("成功") : t("失败")}</span></div>)}</section>;
 }

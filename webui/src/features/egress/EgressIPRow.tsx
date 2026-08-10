@@ -50,7 +50,7 @@ export function EgressIPRow({ item, checked, pending, onChecked, onSave, onRotat
   const save = () => onSave({ status, max_active_leases: capacityValue, resume_at: toRFC3339(resumeAt) });
 
   return (
-    <article className="egress-item">
+    <article className="card egress-item">
       <header className="egress-item-header">
         <label className="egress-select">
           <input type="checkbox" checked={checked} onChange={(event) => onChecked(event.target.checked)} />

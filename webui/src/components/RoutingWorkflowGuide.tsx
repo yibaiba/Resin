@@ -7,6 +7,7 @@ type RoutingWorkflowStep = "rules" | "fallback" | "egress" | "rotation" | "diagn
 
 type Props = {
   active: RoutingWorkflowStep | RoutingWorkflowStep[];
+  embedded?: boolean;
 };
 
 const steps = [
@@ -17,11 +18,11 @@ const steps = [
   { id: "diagnostics", label: "路由诊断", description: "解释最终选择结果", path: "/routing-diagnostics", icon: FlaskConical },
 ] as const;
 
-export function RoutingWorkflowGuide({ active }: Props) {
+export function RoutingWorkflowGuide({ active, embedded = false }: Props) {
   const { t } = useI18n();
   const activeSteps = Array.isArray(active) ? active : [active];
   return (
-    <nav className="routing-workflow" aria-label={t("路由控制流程")}>
+    <nav className={cn(!embedded && "card", "routing-workflow", embedded && "is-embedded")} aria-label={t("路由控制流程")}>
       <div className="routing-workflow-heading">
         <strong>{t("路由控制流程")}</strong>
         <span>{t("按流量经过系统的顺序配置；日常排障可直接从诊断开始。")}</span>

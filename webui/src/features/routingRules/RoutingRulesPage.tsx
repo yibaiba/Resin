@@ -103,7 +103,7 @@ export function RoutingRulesPage() {
         <div className="section-heading"><div><h3>{t("优先级队列")}</h3><p>{t("从上到下匹配，命中第一条后停止。共 {{count}} 条。", { count: rules.length })}</p></div></div>
         {rulesQuery.isLoading ? <p className="muted route-rule-state">{t("正在加载规则...")}</p> : null}
         {!rulesQuery.isLoading && rules.length === 0 ? <div className="empty-box route-rule-empty"><Route size={18} /><div><strong>{t("暂无目标路由规则")}</strong><p>{t("没有规则时，请求会使用显式 Platform 或 Default。")}</p></div><Button size="sm" onClick={() => openEditor()}><Plus size={15} />{t("新建第一条规则")}</Button></div> : null}
-        <div className="route-rule-rows">
+        <div className="card route-rule-rows">
           {rules.map((rule, index) => (
             <article className={rule.enabled ? "route-rule-row" : "route-rule-row is-disabled"} key={rule.id}>
               <span className="route-rule-priority" aria-label={t("优先级 {{value}}", { value: index + 1 })}>{index + 1}</span>

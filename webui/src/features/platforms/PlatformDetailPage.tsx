@@ -576,7 +576,7 @@ export function PlatformDetailPage() {
                   <p>{t("修改过滤策略与路由策略后点击保存。")}</p>
                 </div>
 
-                <RoutingWorkflowGuide active={["fallback", "rotation"]} />
+                <RoutingWorkflowGuide active={["fallback", "rotation"]} embedded />
 
                 <form className="form-grid platform-config-form" onSubmit={onEditSubmit}>
                   <div className="field-group">
