@@ -95,7 +95,12 @@ services:
       - ./data/state:/var/lib/resin
       - ./data/log:/var/log/resin
 ```
-运行 `docker compose up -d` 启动服务。
+仓库根目录也提供了可直接使用的 [`docker-compose.yml`](docker-compose.yml)。从仓库部署时，请先复制 `.env.example` 并修改其中的两个令牌，再启动服务：
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
 
 不要把上述两条映射简写成单独的 `"2260"`：Compose 此时只会把容器的 `2260/tcp` 发布到随机宿主机端口，不会发布 UDP。固定端口的 SOCKS5 接入必须同时配置 `"2260:2260/tcp"` 和 `"2260:2260/udp"`。
 

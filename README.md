@@ -96,7 +96,12 @@ services:
       - ./data/log:/var/log/resin
 ```
 
-Run `docker compose up -d` to start the service.
+The repository also includes a ready-to-use [`docker-compose.yml`](docker-compose.yml). When deploying from the repository, copy `.env.example` to `.env` and change both token values before starting:
+
+```bash
+cp .env.example .env
+docker compose up -d
+```
 
 Do not replace the two mappings with a bare `"2260"`: Compose would publish only container port `2260/tcp` on a random host port and would not publish UDP. A fixed SOCKS5 endpoint requires both `"2260:2260/tcp"` and `"2260:2260/udp"`.
 
