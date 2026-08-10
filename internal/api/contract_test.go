@@ -1146,6 +1146,7 @@ func TestAPIContract_RouteDiagnosticIsReproducibleAndLiveTCPIsNeutral(t *testing
 		"required_network": "tcp", "seed": 12345,
 	}
 	first := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", request, true)
+	request["required_network"] = "TCP"
 	second := doJSONRequest(t, srv, http.MethodPost, "/api/v1/routing-diagnostics", request, true)
 	if first.Code != http.StatusOK || second.Code != http.StatusOK {
 		t.Fatalf("dry-run status: first=%d second=%d bodies=%s / %s", first.Code, second.Code, first.Body.String(), second.Body.String())

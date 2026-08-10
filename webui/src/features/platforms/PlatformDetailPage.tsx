@@ -1,9 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { AlertTriangle, ArrowLeft, Info, RefreshCw, Search, Sparkles, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Info, RefreshCw, RotateCw, Search, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -24,8 +24,10 @@ import {
   deletePlatform,
   deletePlatformLease,
   getPlatform,
+  listPlatforms,
   listPlatformLeases,
   resetPlatform,
+  rotatePlatformLease,
   updatePlatform,
 } from "./api";
 import {
@@ -46,6 +48,7 @@ import {
 } from "./formModel";
 import { PlatformAccessPanel } from "./PlatformAccessPanel";
 import { PlatformMonitorPanel } from "./PlatformMonitorPanel";
+import { PlatformRoutingSettings } from "./PlatformRoutingSettings";
 import type { PlatformLease } from "./types";
 
 type PlatformDetailTab = "monitor" | "access" | "config" | "ops";
@@ -126,7 +129,16 @@ export function PlatformDetailPage() {
     resolver: zodResolver(platformFormSchema),
     defaultValues: defaultPlatformFormValues,
   });
-  const detailEmptyAccountBehavior = editForm.watch("reverse_proxy_empty_account_behavior");
+  const detailEmptyAccountBehavior = useWatch({ control: editForm.control, name: "reverse_proxy_empty_account_behavior" });
+  const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" });
+  const rotationInterval = useWatch({ control: editForm.control, name: "rotation_interval" });
+  const rotationStrategy = useWatch({ control: editForm.control, name: "rotation_strategy" });
+
+  const platformChoicesQuery = useQuery({
+    queryKey: ["platforms", "fallback-choices"],
+    queryFn: () => listPlatforms({ limit: 1000 }),
+    staleTime: 30_000,
+  });
 
   useEffect(() => {
     if (!platform) {
@@ -134,12 +146,6 @@ export function PlatformDetailPage() {
     }
     editForm.reset(platformToFormValues(platform));
   }, [platform, editForm]);
-
-  useEffect(() => {
-    setLeasePage(0);
-    setLeaseSearch("");
-    setDebouncedLeaseSearch("");
-  }, [platformId]);
 
   useEffect(() => {
     const timeoutID = window.setTimeout(() => {
@@ -151,16 +157,16 @@ export function PlatformDetailPage() {
 
   useEffect(() => {
     const maxPage = Math.max(0, Math.ceil(leasesPage.total / leasePageSize) - 1);
-    if (leasePage > maxPage) {
-      setLeasePage(maxPage);
-    }
+    if (leasePage <= maxPage) return;
+    const frame = window.requestAnimationFrame(() => setLeasePage(maxPage));
+    return () => window.cancelAnimationFrame(frame);
   }, [leasePage, leasePageSize, leasesPage.total]);
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
-    if (tab === "ops" || location.hash === `#${LEASE_MANAGEMENT_ANCHOR}`) {
-      setActiveTab("ops");
-    }
+    if (tab !== "ops" && location.hash !== `#${LEASE_MANAGEMENT_ANCHOR}`) return;
+    const frame = window.requestAnimationFrame(() => setActiveTab("ops"));
+    return () => window.cancelAnimationFrame(frame);
   }, [location.hash, location.search]);
 
   useEffect(() => {
@@ -275,6 +281,18 @@ export function PlatformDetailPage() {
     },
   });
 
+  const rotateLeaseMutation = useMutation({
+    mutationFn: async (lease: PlatformLease) => {
+      if (!platform) throw new Error("平台不存在或已被删除");
+      return rotatePlatformLease(platform.id, lease.account, platform.rotation_strategy);
+    },
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["platform-leases", platform?.id] });
+      showToast("success", t("租约轮换结果：{{status}}", { status: result.status }));
+    },
+    onError: (error) => showToast("error", formatApiErrorMessage(error, t)),
+  });
+
   const onEditSubmit = editForm.handleSubmit(async (values) => {
     await updateMutation.mutateAsync(values);
   });
@@ -310,6 +328,15 @@ export function PlatformDetailPage() {
       return;
     }
     await releaseLeaseMutation.mutateAsync(lease);
+  };
+
+  const handleRotateLease = (lease: PlatformLease) => {
+    if (!platform) return;
+    const confirmed = window.confirm(t("确认按 {{strategy}} 轮换账号 {{account}} 的租约？", {
+      strategy: platform.rotation_strategy,
+      account: lease.account,
+    }));
+    if (confirmed) rotateLeaseMutation.mutate(lease);
   };
 
   const changeLeasePageSize = (next: number) => {
@@ -356,6 +383,13 @@ export function PlatformDetailPage() {
       cell: ({ row }) => formatDateTime(row.original.last_accessed),
     },
     {
+      id: "rotation",
+      header: t("轮换"),
+      cell: ({ row }) => row.original.rotation_deferred ? (
+        <Badge variant="warning" title={row.original.rotation_deferred_reason}>{t("已延期")}</Badge>
+      ) : <span className="muted">{row.original.last_rotated_at ? formatDateTime(row.original.last_rotated_at) : "-"}</span>,
+    },
+    {
       id: "actions",
       header: t("操作"),
       cell: ({ row }) => {
@@ -363,6 +397,16 @@ export function PlatformDetailPage() {
         const releasing = releaseLeaseMutation.isPending && releaseLeaseMutation.variables?.account === lease.account;
         return (
           <div className="lease-row-actions" onClick={(event) => event.stopPropagation()}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => handleRotateLease(lease)}
+              disabled={rotateLeaseMutation.isPending || clearLeasesMutation.isPending}
+              title={t("轮换租约")}
+              aria-label={t("轮换账号 {{account}} 的租约", { account: lease.account })}
+            >
+              <RotateCw size={14} />
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -556,6 +600,17 @@ export function PlatformDetailPage() {
                       {...editForm.register("sticky_ttl")}
                     />
                   </div>
+
+                  <PlatformRoutingSettings
+                    platformID={platform.id}
+                    platforms={platformChoicesQuery.data?.items ?? []}
+                    fallbackIDs={fallbackPlatformIDs}
+                    rotationInterval={rotationInterval}
+                    rotationStrategy={rotationStrategy}
+                    onFallbackChange={(ids) => editForm.setValue("fallback_platform_ids", ids, { shouldDirty: true })}
+                    onRotationIntervalChange={(value) => editForm.setValue("rotation_interval", value, { shouldDirty: true })}
+                    onRotationStrategyChange={(value) => editForm.setValue("rotation_strategy", value, { shouldDirty: true })}
+                  />
 
                   <div className="field-group">
                     <label className="field-label" htmlFor="detail-edit-miss-action">

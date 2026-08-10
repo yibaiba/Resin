@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createColumnHelper } from "@tanstack/react-table";
 import { AlertTriangle, Eraser, RefreshCw, Sparkles, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -369,11 +369,11 @@ export function RequestLogsPage() {
   const [selectedLogId, setSelectedLogId] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [payloadTab, setPayloadTab] = useState<PayloadTab>("request");
-  const [payloadData, setPayloadData] = useState<{ headers: string; body: string }>({
+  const [payloadData, setPayloadData] = useState<{ key: string; headers: string; body: string }>({
+    key: "",
     headers: "",
     body: "",
   });
-  const [payloadDecodePending, setPayloadDecodePending] = useState(false);
   const { toasts, dismissToast } = useToast();
 
   const configQuery = useQuery({
@@ -544,15 +544,12 @@ export function RequestLogsPage() {
     const payload = payloadQuery.data;
 
     if (!payload) {
-      setPayloadData({ headers: "", body: "" });
-      setPayloadDecodePending(false);
       return () => {
         cancelled = true;
       };
     }
 
-    setPayloadData({ headers: "", body: "" });
-    setPayloadDecodePending(true);
+    const key = `${selectedLogId}:${payloadTab}`;
 
     const decodePayload = async () => {
       const [headersBase64, bodyBase64] =
@@ -568,8 +565,7 @@ export function RequestLogsPage() {
       if (cancelled) {
         return;
       }
-      setPayloadData({ headers, body });
-      setPayloadDecodePending(false);
+      setPayloadData({ key, headers, body });
     };
 
     void decodePayload().catch((error: unknown) => {
@@ -577,17 +573,20 @@ export function RequestLogsPage() {
         return;
       }
       const message = error instanceof Error ? translatePayloadDecodeErrorMessage(error.message, t) : t("未知错误");
-      setPayloadData({ headers: "", body: t("[Body 解码失败：{{message}}]", { message }) });
-      setPayloadDecodePending(false);
+      setPayloadData({ key, headers: "", body: t("[Body 解码失败：{{message}}]", { message }) });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [payloadQuery.data, payloadTab, t]);
+  }, [payloadQuery.data, payloadTab, selectedLogId, t]);
+
+  const payloadKey = payloadQuery.data ? `${selectedLogId}:${payloadTab}` : "";
+  const visiblePayloadData = payloadData.key === payloadKey ? payloadData : { headers: "", body: "" };
+  const payloadDecodePending = Boolean(payloadQuery.data) && payloadData.key !== payloadKey;
 
   const hasMore = Boolean(logsQuery.data?.has_more && logsQuery.data?.next_cursor);
-  const renderProxyTypeBadge = (proxyType: number, context: "table" | "drawer" = "table") => {
+  const renderProxyTypeBadge = useCallback((proxyType: number, context: "table" | "drawer" = "table") => {
     const className = proxyTypeBadgeClassName(proxyType);
     if (!className) {
       return t(proxyTypeLabel(proxyType));
@@ -603,7 +602,7 @@ export function RequestLogsPage() {
     }
 
     return <Badge className={className}>{label}</Badge>;
-  };
+  }, [t]);
 
   const col = useMemo(() => createColumnHelper<RequestLogItem>(), []);
 
@@ -718,7 +717,7 @@ export function RequestLogsPage() {
         },
       }),
     ],
-    [col, t]
+    [col, renderProxyTypeBadge, t]
   );
 
   return (
@@ -1155,7 +1154,7 @@ export function RequestLogsPage() {
                       </div>
                     ) : null}
 
-                    {(payloadQuery.isFetching || payloadDecodePending) && !(payloadData.headers || payloadData.body) ? (
+                    {(payloadQuery.isFetching || payloadDecodePending) && !(visiblePayloadData.headers || visiblePayloadData.body) ? (
                       <div className="callout" style={{ marginTop: "12px", color: "var(--text-secondary)" }}>
                         <RefreshCw size={14} className="spin" />
                         <span>{t("加载报文内容中...")}</span>
@@ -1163,10 +1162,10 @@ export function RequestLogsPage() {
                     ) : (
                       <>
                         <pre className="logs-payload-box" style={{ minHeight: "auto", border: "1px solid var(--border)", marginBottom: "8px" }}>
-                          {payloadData.headers || t("（空 Headers）")}
+                          {visiblePayloadData.headers || t("（空 Headers）")}
                         </pre>
                         <pre className="logs-payload-box">
-                          {payloadData.body || t("（空 Body）")}
+                          {visiblePayloadData.body || t("（空 Body）")}
                         </pre>
                       </>
                     )}

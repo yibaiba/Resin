@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { allocationPolicies, emptyAccountBehaviors, missActions } from "./constants";
+import { allocationPolicies, emptyAccountBehaviors, missActions, rotationStrategies } from "./constants";
 import { parseHeaderLines, parseLinesToList } from "./formParsers";
 import type { Platform, PlatformCreateInput, PlatformUpdateInput } from "./types";
 
@@ -38,6 +38,9 @@ export const platformFormSchema = z.object({
   reverse_proxy_fixed_account_header: z.string().optional(),
   allocation_policy: z.enum(allocationPolicies),
   passive_circuit_breaker_disabled: z.boolean(),
+  fallback_platform_ids: z.array(z.string()),
+  rotation_interval: z.string(),
+  rotation_strategy: z.enum(rotationStrategies),
 }).superRefine((value, ctx) => {
   if (
     value.reverse_proxy_empty_account_behavior === "FIXED_HEADER" &&
@@ -63,6 +66,9 @@ export const defaultPlatformFormValues: PlatformFormValues = {
   reverse_proxy_fixed_account_header: "Authorization",
   allocation_policy: "BALANCED",
   passive_circuit_breaker_disabled: false,
+  fallback_platform_ids: [],
+  rotation_interval: "0s",
+  rotation_strategy: "ANY",
 };
 
 export function platformToFormValues(platform: Platform): PlatformFormValues {
@@ -79,6 +85,9 @@ export function platformToFormValues(platform: Platform): PlatformFormValues {
     reverse_proxy_fixed_account_header: platform.reverse_proxy_fixed_account_header,
     allocation_policy: platform.allocation_policy,
     passive_circuit_breaker_disabled: platform.passive_circuit_breaker_disabled,
+    fallback_platform_ids: platform.fallback_platform_ids,
+    rotation_interval: platform.rotation_interval,
+    rotation_strategy: platform.rotation_strategy,
   };
 }
 
@@ -92,6 +101,9 @@ function toPlatformPayloadBase(values: PlatformFormValues) {
     reverse_proxy_fixed_account_header: parseHeaderLines(values.reverse_proxy_fixed_account_header).join("\n"),
     allocation_policy: values.allocation_policy,
     passive_circuit_breaker_disabled: values.passive_circuit_breaker_disabled,
+    fallback_platform_ids: [...values.fallback_platform_ids],
+    rotation_interval: values.rotation_interval.trim() || "0s",
+    rotation_strategy: values.rotation_strategy,
   };
 }
 

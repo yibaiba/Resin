@@ -1,7 +1,7 @@
 import * as countries from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 import zhLocale from "i18n-iso-countries/langs/zh.json";
-import { getCurrentLocale, isEnglishLocale } from "../../i18n/locale";
+import { getCurrentLocale, isEnglishLocale, type AppLocale } from "../../i18n/locale";
 
 countries.registerLocale(enLocale);
 countries.registerLocale(zhLocale);
@@ -11,12 +11,12 @@ export interface RegionOption {
     name: string;
 }
 
-function getCountryLocale(): "zh" | "en" {
-    return isEnglishLocale(getCurrentLocale()) ? "en" : "zh";
+function getCountryLocale(locale: AppLocale = getCurrentLocale()): "zh" | "en" {
+    return isEnglishLocale(locale) ? "en" : "zh";
 }
 
-export const getAllRegions = (): RegionOption[] => {
-    const names = countries.getNames(getCountryLocale(), { select: "official" });
+export const getAllRegions = (locale?: AppLocale): RegionOption[] => {
+    const names = countries.getNames(getCountryLocale(locale), { select: "official" });
     return Object.entries(names).map(([code, name]) => ({
         code,
         name: `${code} (${name})`,

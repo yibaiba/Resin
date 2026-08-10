@@ -5,6 +5,8 @@ import type {
   Platform,
   PlatformCreateInput,
   PlatformLease,
+  RotateLeaseResult,
+  RotationStrategy,
   PlatformUpdateInput,
 } from "./types";
 
@@ -18,6 +20,9 @@ type ApiPlatform = Omit<Platform, "regex_filters" | "region_filters"> & {
   reverse_proxy_empty_account_behavior?: Platform["reverse_proxy_empty_account_behavior"] | null;
   reverse_proxy_fixed_account_header?: string | null;
   passive_circuit_breaker_disabled?: boolean | null;
+  fallback_platform_ids?: string[] | null;
+  rotation_interval?: string | null;
+  rotation_strategy?: Platform["rotation_strategy"] | null;
 };
 
 type ApiPlatformLease = Partial<PlatformLease>;
@@ -46,6 +51,14 @@ function normalizePlatform(raw: ApiPlatform): Platform {
       typeof raw.reverse_proxy_fixed_account_header === "string" ? raw.reverse_proxy_fixed_account_header : "",
     passive_circuit_breaker_disabled:
       typeof raw.passive_circuit_breaker_disabled === "boolean" ? raw.passive_circuit_breaker_disabled : false,
+    fallback_platform_ids: Array.isArray(raw.fallback_platform_ids) ? raw.fallback_platform_ids : [],
+    rotation_interval: typeof raw.rotation_interval === "string" ? raw.rotation_interval : "0s",
+    rotation_strategy:
+      raw.rotation_strategy === "SAME_IP" ||
+      raw.rotation_strategy === "PREFER_NEW_IP" ||
+      raw.rotation_strategy === "REQUIRE_NEW_IP"
+        ? raw.rotation_strategy
+        : "ANY",
   };
 }
 
@@ -59,12 +72,19 @@ function normalizePlatformPage(raw: PageResponse<ApiPlatform>): PageResponse<Pla
 function normalizeLease(raw: ApiPlatformLease): PlatformLease {
   return {
     platform_id: typeof raw.platform_id === "string" ? raw.platform_id : "",
+    selected_platform_id: typeof raw.selected_platform_id === "string" ? raw.selected_platform_id : "",
     account: typeof raw.account === "string" ? raw.account : "",
     node_hash: typeof raw.node_hash === "string" ? raw.node_hash : "",
     node_tag: typeof raw.node_tag === "string" ? raw.node_tag : "",
     egress_ip: typeof raw.egress_ip === "string" ? raw.egress_ip : "",
     expiry: typeof raw.expiry === "string" ? raw.expiry : "",
     last_accessed: typeof raw.last_accessed === "string" ? raw.last_accessed : "",
+    last_rotated_at: typeof raw.last_rotated_at === "string" ? raw.last_rotated_at : "",
+    rotation_requested_at: typeof raw.rotation_requested_at === "string" ? raw.rotation_requested_at : "",
+    rotation_requested_strategy:
+      typeof raw.rotation_requested_strategy === "string" ? raw.rotation_requested_strategy : "",
+    rotation_deferred: raw.rotation_deferred === true,
+    rotation_deferred_reason: typeof raw.rotation_deferred_reason === "string" ? raw.rotation_deferred_reason : "",
   };
 }
 
@@ -166,5 +186,12 @@ export async function deletePlatformLease(id: string, account: string): Promise<
 export async function clearAllPlatformLeases(id: string): Promise<void> {
   await apiRequest<void>(`${basePath}/${id}/leases`, {
     method: "DELETE",
+  });
+}
+
+export function rotatePlatformLease(id: string, account: string, strategy: RotationStrategy): Promise<RotateLeaseResult> {
+  return apiRequest<RotateLeaseResult>(`${basePath}/${id}/leases/${encodeURIComponent(account)}/actions/rotate`, {
+    method: "POST",
+    body: { strategy },
   });
 }

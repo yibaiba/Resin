@@ -2,6 +2,7 @@ import type {
   PlatformAllocationPolicy,
   PlatformEmptyAccountBehavior,
   PlatformMissAction,
+  RotationStrategy,
 } from "./types";
 
 export const allocationPolicies: PlatformAllocationPolicy[] = [
@@ -9,6 +10,20 @@ export const allocationPolicies: PlatformAllocationPolicy[] = [
   "PREFER_LOW_LATENCY",
   "PREFER_IDLE_IP",
 ];
+
+export const rotationStrategies: RotationStrategy[] = [
+  "ANY",
+  "SAME_IP",
+  "PREFER_NEW_IP",
+  "REQUIRE_NEW_IP",
+];
+
+export const rotationStrategyLabel: Record<RotationStrategy, string> = {
+  ANY: "任意可用出口",
+  SAME_IP: "保持当前出口 IP",
+  PREFER_NEW_IP: "优先切换出口 IP",
+  REQUIRE_NEW_IP: "必须切换出口 IP",
+};
 
 export const missActions: PlatformMissAction[] = ["TREAT_AS_EMPTY", "REJECT"];
 

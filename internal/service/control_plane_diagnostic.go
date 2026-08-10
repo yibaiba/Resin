@@ -62,9 +62,10 @@ func (s *ControlPlaneService) DiagnoseRoute(
 	if err != nil {
 		return nil, internal("initialize routing diagnostics", err)
 	}
+	requiredNetwork := strings.ToLower(strings.TrimSpace(req.RequiredNetwork))
 	input := routing.DecisionInput{
 		PlatformName: req.PlatformName, Target: req.Target,
-		RequiredNetwork: req.RequiredNetwork,
+		RequiredNetwork: requiredNetwork,
 	}
 	decision, decisionTrace, err := decisionEngine.Diagnose(input)
 	if err != nil {
@@ -77,7 +78,7 @@ func (s *ControlPlaneService) DiagnoseRoute(
 		seed := diagnosticSeed(req.Seed)
 		route, routeErr := s.Router.DiagnoseRoute(routing.RouteOptions{
 			PlatformName: decision.PlatformName, Account: req.Account,
-			Target: req.Target, RequiredNetwork: req.RequiredNetwork,
+			Target: req.Target, RequiredNetwork: requiredNetwork,
 		}, seed)
 		response.Route = &route
 		if routeErr != nil && !errors.Is(routeErr, routing.ErrNoAvailableNodes) {

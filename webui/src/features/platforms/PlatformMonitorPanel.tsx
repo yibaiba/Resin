@@ -178,7 +178,7 @@ function formatLeaseDuration(value: number): string {
   return `${seconds} 秒`;
 }
 
-function formatClock(iso: string): string {
+function formatClock(iso: string, locale = numberLocale()): string {
   if (!iso) {
     return "--";
   }
@@ -186,7 +186,7 @@ function formatClock(iso: string): string {
   if (Number.isNaN(date.getTime())) {
     return "--";
   }
-  return new Intl.DateTimeFormat(numberLocale(), {
+  return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -465,10 +465,16 @@ async function fetchPlatformSnapshotNodeLatency(platformId: string): Promise<Sna
 
 type TrendTooltipContentProps = {
   active?: boolean;
-  payload?: any[];
+  payload?: ChartTooltipEntry[];
   label?: string;
   lines: TrendLineDefinition[];
   valueFormatter: (value: number) => string;
+};
+
+type ChartTooltipEntry<Payload = unknown> = {
+  dataKey?: string | number;
+  value?: number | string;
+  payload?: Payload;
 };
 
 function TrendTooltipContent({ active, payload, label, lines, valueFormatter }: TrendTooltipContentProps) {
@@ -500,7 +506,10 @@ function TrendTooltipContent({ active, payload, label, lines, valueFormatter }: 
   );
 }
 
-function HistogramTooltipContent({ active, payload }: any) {
+function HistogramTooltipContent({ active, payload }: {
+  active?: boolean;
+  payload?: Array<ChartTooltipEntry<HistogramBarPoint>>;
+}) {
   const { t } = useI18n();
 
   if (!active || !payload?.length) {
@@ -794,14 +803,14 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
 
   const leaseTrendData = useMemo(() => {
     return downsampleArray(sortedRealtimeItems, MAX_TREND_POINTS).map((item) => ({
-      label: formatClock(item.ts),
+      label: formatClock(item.ts, locale),
       active_leases: item.active_leases,
     }));
   }, [sortedRealtimeItems, locale]);
 
   const requestTrendData = useMemo(() => {
     return downsampleArray(sortedRequestsItems, MAX_TREND_POINTS).map((item) => ({
-      label: formatClock(item.bucket_start),
+      label: formatClock(item.bucket_start, locale),
       total_requests: item.total_requests,
       success_requests: item.success_requests,
     }));
@@ -809,7 +818,7 @@ export function PlatformMonitorPanel({ platform }: { platform: Platform }) {
 
   const leaseLifetimeTrendData = useMemo(() => {
     return downsampleArray(sortedLeaseLifetimeItems, MAX_TREND_POINTS).map((item) => ({
-      label: formatClock(item.bucket_start),
+      label: formatClock(item.bucket_start, locale),
       p1_ms: item.p1_ms,
       p5_ms: item.p5_ms,
       p50_ms: item.p50_ms,
