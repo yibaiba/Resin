@@ -149,6 +149,10 @@ func (l *requestLifecycle) setAccount(account string) {
 	l.log.Account = account
 }
 
+func (l *requestLifecycle) setRequestedPlatformName(platformName string) {
+	l.log.RequestedPlatformName = platformName
+}
+
 func (l *requestLifecycle) setTarget(host, rawURL string) {
 	l.log.TargetHost = host
 	l.log.TargetURL = rawURL

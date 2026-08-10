@@ -97,6 +97,10 @@ function formatOptionalDurationMs(value: number | undefined): string {
   return formatDurationMs(value);
 }
 
+function displayPlatformName(log: RequestLogItem): string {
+  return log.platform_name || log.requested_platform_name;
+}
+
 function decodeBase64ToBytes(raw: string): Uint8Array | null {
   if (!raw) {
     return new Uint8Array(0);
@@ -631,7 +635,7 @@ export function RequestLogsPage() {
           const log = info.row.original;
           return (
             <div className="logs-cell-stack">
-              <span>{log.platform_name || "-"}</span>
+              <span>{displayPlatformName(log) || "-"}</span>
               <small>{log.account || "-"}</small>
             </div>
           );
@@ -1003,7 +1007,7 @@ export function RequestLogsPage() {
                   </div>
                   <div>
                     <span>{t("平台")}</span>
-                    <p>{detailLog.platform_name || "-"}</p>
+                    <p>{displayPlatformName(detailLog) || "-"}</p>
                   </div>
                   <div>
                     <span>{t("账号")}</span>

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	client_ip             TEXT NOT NULL DEFAULT '',
 	platform_id           TEXT NOT NULL DEFAULT '',
 	platform_name         TEXT NOT NULL DEFAULT '',
+	requested_platform_name TEXT NOT NULL DEFAULT '',
 	account               TEXT NOT NULL DEFAULT '',
 	target_host           TEXT NOT NULL DEFAULT '',
 	target_url            TEXT NOT NULL DEFAULT '',
@@ -61,6 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_proxy_type_ts_id
 CREATE INDEX IF NOT EXISTS idx_request_logs_account_ts_id
 	ON request_logs(account, ts_ns DESC, id ASC) WHERE account <> '';
 CREATE INDEX IF NOT EXISTS idx_request_logs_platform_name ON request_logs(platform_name);
+CREATE INDEX IF NOT EXISTS idx_request_logs_requested_platform_name ON request_logs(requested_platform_name);
 CREATE INDEX IF NOT EXISTS idx_request_logs_plat_acct    ON request_logs(platform_id, account);
 CREATE INDEX IF NOT EXISTS idx_request_logs_target_host  ON request_logs(target_host);
 CREATE INDEX IF NOT EXISTS idx_request_logs_egress_ip    ON request_logs(egress_ip);
@@ -77,6 +79,9 @@ const CreateDDL = requestLogTablesDDL + requestLogIndexesDDL
 
 func ensureRequestLogSchema(db *sql.DB) error {
 	if err := ensureRequestLogColumn(db, "request_logs", "first_byte_duration_ns", "first_byte_duration_ns INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureRequestLogColumn(db, "request_logs", "requested_platform_name", "requested_platform_name TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 

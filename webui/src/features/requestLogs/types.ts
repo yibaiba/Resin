@@ -5,6 +5,7 @@ export type RequestLogItem = {
   client_ip: string;
   platform_id: string;
   platform_name: string;
+  requested_platform_name: string;
   account: string;
   target_host: string;
   target_url: string;

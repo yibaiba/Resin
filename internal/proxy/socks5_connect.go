@@ -12,6 +12,7 @@ func (s *Socks5Inbound) serveConnect(session socks5Session) {
 	)
 	lifecycle.setTarget(session.handshake.request.target, "")
 	lifecycle.setAccount(session.handshake.account)
+	lifecycle.setRequestedPlatformName(session.handshake.platformName)
 	defer lifecycle.finish()
 
 	prepare := prepareConnectTunnel(connectTunnelRequest{

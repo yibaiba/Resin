@@ -58,29 +58,30 @@ func TestRepo_InsertListGetPayloads(t *testing.T) {
 			RespBodyTruncated:   true,
 		},
 		{
-			ID:                  "log-b",
-			StartedAtNs:         ts,
-			ProxyType:           proxy.ProxyTypeReverse,
-			ClientIP:            "10.0.0.2",
-			PlatformID:          "plat-2",
-			PlatformName:        "Platform Two",
-			Account:             "acct-b",
-			TargetHost:          "example.org",
-			TargetURL:           "https://example.org/b",
-			DurationNs:          int64(20 * time.Millisecond),
-			FirstByteDurationNs: int64(15 * time.Millisecond),
-			NetOK:               false,
-			HTTPMethod:          "POST",
-			HTTPStatus:          502,
-			ResinError:          "UPSTREAM_REQUEST_FAILED",
-			UpstreamStage:       "reverse_roundtrip",
-			UpstreamErrKind:     "connection_refused",
-			UpstreamErrno:       "ECONNREFUSED",
-			UpstreamErrMsg:      "dial tcp 203.0.113.1:443: connect: connection refused",
-			IngressBytes:        2222,
-			EgressBytes:         1111,
-			ReqBodyLen:          10,
-			RespBodyLen:         11,
+			ID:                    "log-b",
+			StartedAtNs:           ts,
+			ProxyType:             proxy.ProxyTypeReverse,
+			ClientIP:              "10.0.0.2",
+			PlatformID:            "plat-2",
+			PlatformName:          "Platform Two",
+			RequestedPlatformName: "Requested Two",
+			Account:               "acct-b",
+			TargetHost:            "example.org",
+			TargetURL:             "https://example.org/b",
+			DurationNs:            int64(20 * time.Millisecond),
+			FirstByteDurationNs:   int64(15 * time.Millisecond),
+			NetOK:                 false,
+			HTTPMethod:            "POST",
+			HTTPStatus:            502,
+			ResinError:            "UPSTREAM_REQUEST_FAILED",
+			UpstreamStage:         "reverse_roundtrip",
+			UpstreamErrKind:       "connection_refused",
+			UpstreamErrno:         "ECONNREFUSED",
+			UpstreamErrMsg:        "dial tcp 203.0.113.1:443: connect: connection refused",
+			IngressBytes:          2222,
+			EgressBytes:           1111,
+			ReqBodyLen:            10,
+			RespBodyLen:           11,
 		},
 	}
 	inserted, err := repo.InsertBatch(rows)
@@ -137,6 +138,14 @@ func TestRepo_InsertListGetPayloads(t *testing.T) {
 	}
 	if len(filteredByName) != 1 || filteredByName[0].ID != "log-a" {
 		t.Fatalf("filtered by platform_name list: got %+v", filteredByName)
+	}
+
+	filteredByRequestedName, _, _, err := repo.List(ListFilter{PlatformName: "Requested Two", Limit: 10})
+	if err != nil {
+		t.Fatalf("repo.List filtered by requested platform name: %v", err)
+	}
+	if len(filteredByRequestedName) != 1 || filteredByRequestedName[0].ID != "log-b" {
+		t.Fatalf("filtered by requested platform name list: got %+v", filteredByRequestedName)
 	}
 
 	filteredByProxyType, hasMore, nextCursor, err := repo.List(ListFilter{
@@ -214,6 +223,9 @@ func TestRepo_InsertListGetPayloads(t *testing.T) {
 	}
 	if rowB == nil {
 		t.Fatal("expected log-b row")
+	}
+	if rowB.RequestedPlatformName != "Requested Two" {
+		t.Fatalf("requested platform name was not persisted: %+v", rowB)
 	}
 	if rowB.ResinError != "UPSTREAM_REQUEST_FAILED" ||
 		rowB.UpstreamStage != "reverse_roundtrip" ||
@@ -370,6 +382,36 @@ func TestRepo_OpenCreatesOptimizedIndexes(t *testing.T) {
 	`, "acct-a")
 }
 
+func TestEnsureRequestLogSchemaAddsRequestedPlatformName(t *testing.T) {
+	logDir := t.TempDir()
+	path := filepath.Join(logDir, "request_logs-0000000000001.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open legacy DB: %v", err)
+	}
+	legacyDDL := strings.Replace(
+		requestLogTablesDDL,
+		"\trequested_platform_name TEXT NOT NULL DEFAULT '',\n",
+		"",
+		1,
+	)
+	if _, err := db.Exec(legacyDDL); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy DB: %v", err)
+	}
+	repo := NewRepo(logDir, 1<<20, 2)
+	if err := repo.Open(); err != nil {
+		t.Fatalf("open and migrate legacy repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	exists, err := hasRequestLogColumn(repo.activeDB, "request_logs", "requested_platform_name")
+	if err != nil || !exists {
+		t.Fatalf("requested_platform_name column: exists=%v err=%v", exists, err)
+	}
+}
+
 func TestRepo_OpenMigratesIndexesInHistoricalDBs(t *testing.T) {
 	logDir := t.TempDir()
 	repo := NewRepo(logDir, 1<<20, 2)
@@ -469,6 +511,7 @@ func assertRequestLogIndexes(t *testing.T, db *sql.DB) {
 		"idx_request_logs_proxy_type_ts_id",
 		"idx_request_logs_account_ts_id",
 		"idx_request_logs_platform_name",
+		"idx_request_logs_requested_platform_name",
 		"idx_request_logs_plat_acct",
 		"idx_request_logs_target_host",
 		"idx_request_logs_egress_ip",

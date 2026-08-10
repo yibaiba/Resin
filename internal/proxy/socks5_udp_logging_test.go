@@ -49,6 +49,9 @@ func TestSocks5UDPAssociationLogClearsMetadataForMultipleTargets(t *testing.T) {
 		entry.NodeTag != "" || entry.EgressIP != "" {
 		t.Fatalf("multi-target route was not cleared: %+v", entry)
 	}
+	if entry.RequestedPlatformName != "requested-platform" {
+		t.Fatalf("requested platform was not retained: %+v", entry)
+	}
 	if entry.UpstreamStage != "udp_upstream_read" || entry.UpstreamErrMsg == "" {
 		t.Fatalf("association failure summary was lost: %+v", entry)
 	}
@@ -63,6 +66,7 @@ func newLoggedUDPAssociation(t *testing.T) (*socks5UDPAssociation, *mockEventEmi
 	lifecycle := newRequestLifecycleFromMetadata(
 		emitter, "198.51.100.40:48000", "UDP_ASSOCIATE", ProxyTypeSocks5Forward, true,
 	)
+	lifecycle.setRequestedPlatformName("requested-platform")
 	association, err := manager.register(socks5UDPAssociationOptions{
 		endpointID:      "logging-scope",
 		clientIP:        netip.MustParseAddr("198.51.100.40"),

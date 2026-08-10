@@ -230,6 +230,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	lifecycle.setTarget(r.Host, r.URL.String())
 	defer lifecycle.finish()
 	lifecycle.setAccount(account)
+	lifecycle.setRequestedPlatformName(platName)
 
 	var route routing.RouteResult
 	var hasRoute bool
@@ -347,6 +348,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	lifecycle.setTarget(target, "")
 	defer lifecycle.finish()
 	lifecycle.setAccount(account)
+	lifecycle.setRequestedPlatformName(platName)
 
 	prepare := prepareConnectTunnel(connectTunnelRequest{
 		ctx: r.Context(),

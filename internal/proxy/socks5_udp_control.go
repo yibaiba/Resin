@@ -40,6 +40,7 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 		true,
 	)
 	lifecycle.setAccount(session.handshake.account)
+	lifecycle.setRequestedPlatformName(session.handshake.platformName)
 	association, replyAddr, err := s.registerUDPAssociation(socks5UDPRegistration{
 		ctx:       session.ctx,
 		conn:      session.conn,

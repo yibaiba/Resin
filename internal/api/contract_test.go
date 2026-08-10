@@ -302,37 +302,38 @@ func seedObservabilityData(
 	logID := "log-contract-1"
 	inserted, err := requestlogRepo.InsertBatch([]proxy.RequestLogEntry{
 		{
-			ID:                   logID,
-			StartedAtNs:          time.Now().Add(-2 * time.Minute).UnixNano(),
-			ProxyType:            proxy.ProxyTypeReverse,
-			ClientIP:             "127.0.0.1",
-			PlatformID:           platformID,
-			PlatformName:         "Platform One",
-			Account:              "acct-1",
-			TargetHost:           "example.com",
-			TargetURL:            "https://example.com/api",
-			NodeHash:             "node-1",
-			NodeTag:              "sub/tag-1",
-			EgressIP:             "8.8.8.8",
-			DurationNs:           int64(45 * time.Millisecond),
-			FirstByteDurationNs:  int64(12 * time.Millisecond),
-			NetOK:                true,
-			HTTPMethod:           "GET",
-			HTTPStatus:           200,
-			IngressBytes:         210,
-			EgressBytes:          120,
-			ReqHeadersLen:        10,
-			ReqBodyLen:           11,
-			RespHeadersLen:       12,
-			RespBodyLen:          13,
-			ReqHeadersTruncated:  true,
-			ReqBodyTruncated:     true,
-			RespHeadersTruncated: false,
-			RespBodyTruncated:    true,
-			ReqHeaders:           []byte("req-h-1"),
-			ReqBody:              []byte("req-b-1"),
-			RespHeaders:          []byte("resp-h-1"),
-			RespBody:             []byte("resp-b-1"),
+			ID:                    logID,
+			StartedAtNs:           time.Now().Add(-2 * time.Minute).UnixNano(),
+			ProxyType:             proxy.ProxyTypeReverse,
+			ClientIP:              "127.0.0.1",
+			PlatformID:            platformID,
+			PlatformName:          "Platform One",
+			RequestedPlatformName: "Requested Platform",
+			Account:               "acct-1",
+			TargetHost:            "example.com",
+			TargetURL:             "https://example.com/api",
+			NodeHash:              "node-1",
+			NodeTag:               "sub/tag-1",
+			EgressIP:              "8.8.8.8",
+			DurationNs:            int64(45 * time.Millisecond),
+			FirstByteDurationNs:   int64(12 * time.Millisecond),
+			NetOK:                 true,
+			HTTPMethod:            "GET",
+			HTTPStatus:            200,
+			IngressBytes:          210,
+			EgressBytes:           120,
+			ReqHeadersLen:         10,
+			ReqBodyLen:            11,
+			RespHeadersLen:        12,
+			RespBodyLen:           13,
+			ReqHeadersTruncated:   true,
+			ReqBodyTruncated:      true,
+			RespHeadersTruncated:  false,
+			RespBodyTruncated:     true,
+			ReqHeaders:            []byte("req-h-1"),
+			ReqBody:               []byte("req-b-1"),
+			RespHeaders:           []byte("resp-h-1"),
+			RespBody:              []byte("resp-b-1"),
 		},
 		{
 			ID:                  "log-contract-2",
@@ -1910,7 +1911,7 @@ func TestAPIContract_RequestLogEndpoints(t *testing.T) {
 	if !ok {
 		t.Fatalf("first item type: got %T", items[0])
 	}
-	for _, key := range []string{"first_byte_duration_ms", "resin_error", "upstream_stage", "upstream_err_kind", "upstream_errno", "upstream_err_msg"} {
+	for _, key := range []string{"requested_platform_name", "first_byte_duration_ms", "resin_error", "upstream_stage", "upstream_err_kind", "upstream_errno", "upstream_err_msg"} {
 		if _, exists := firstItem[key]; !exists {
 			t.Fatalf("first item missing field %q", key)
 		}
@@ -2032,7 +2033,7 @@ func TestAPIContract_RequestLogEndpoints(t *testing.T) {
 	if row["id"] != logID {
 		t.Fatalf("id: got %v, want %q", row["id"], logID)
 	}
-	for _, key := range []string{"first_byte_duration_ms", "resin_error", "upstream_stage", "upstream_err_kind", "upstream_errno", "upstream_err_msg"} {
+	for _, key := range []string{"requested_platform_name", "first_byte_duration_ms", "resin_error", "upstream_stage", "upstream_err_kind", "upstream_errno", "upstream_err_msg"} {
 		if _, exists := row[key]; !exists {
 			t.Fatalf("row missing field %q", key)
 		}

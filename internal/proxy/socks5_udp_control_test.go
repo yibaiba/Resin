@@ -139,7 +139,7 @@ func TestSocks5UDPAssociateInheritsAuthenticatedIdentity(t *testing.T) {
 		if entry.HTTPMethod != "UDP_ASSOCIATE" || entry.ProxyType != ProxyTypeSocks5Forward {
 			t.Fatalf("UDP association log identity: %+v", entry)
 		}
-		if entry.Account != "account" || !entry.NetOK {
+		if entry.Account != "account" || entry.RequestedPlatformName != "platform" || !entry.NetOK {
 			t.Fatalf("UDP association log account/success: %+v", entry)
 		}
 	case <-time.After(time.Second):

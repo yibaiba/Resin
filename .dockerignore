@@ -1,6 +1,8 @@
 .git
 .env
 .agents
+.mission
+dist
 resin
 sing-box-reference
 node_modules
