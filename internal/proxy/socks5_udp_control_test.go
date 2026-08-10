@@ -175,6 +175,29 @@ func TestSocks5UDPAssociateRequireProxyAuthInfo(t *testing.T) {
 	waitSocks5ControlDone(t, done)
 }
 
+func TestSocks5UDPAssociateAcceptsClientIPWithUnknownPort(t *testing.T) {
+	inbound := NewSocks5Inbound(Socks5InboundConfig{ProxyToken: "token"})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	clientIP := netip.MustParseAddr("198.51.100.26")
+	options := socks5UDPControlTestOptions{
+		scope: "clash-compatible", proxyPort: 2260,
+		clientIP: clientIP, tcpPort: 40106,
+	}
+	client, reader, done := startSocks5UDPControlSession(t, inbound, options)
+	authenticateSocks5UDPControl(t, client, reader, "platform.account", "token")
+	writeSocks5UDPAssociateRequest(t, client, "198.51.100.26:0")
+	if code, _ := readSocks5CommandReply(t, reader); code != socks5ReplySucceeded {
+		t.Fatalf("UDP ASSOCIATE reply: got %d", code)
+	}
+	source := netip.MustParseAddrPort("198.51.100.26:45006")
+	association, err := inbound.udpAssociations.match(options.scope, source)
+	if err != nil || association.platformName != "platform" || association.account != "account" {
+		t.Fatalf("compatible association: association=%p err=%v", association, err)
+	}
+	_ = client.Close()
+	waitSocks5ControlDone(t, done)
+}
+
 func TestSocks5UDPAssociateRejectsConcurrentPendingSessions(t *testing.T) {
 	inbound := NewSocks5Inbound(Socks5InboundConfig{ProxyToken: "token"})
 	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })

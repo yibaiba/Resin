@@ -207,6 +207,43 @@ For reverse proxy, include Platform in the URL prefix:
 curl http://127.0.0.1:2260/my-token/MyPlatform/https/api.ipify.org
 ```
 
+#### Example: create and use a GB-only Platform
+
+1. Open `http://127.0.0.1:2260/ui/platforms` and create a Platform named `GB`.
+2. Enter `gb` in **Region filters**. Leave node tag rules and fallback Platforms empty, then save.
+3. Connect with the identity `GB.client01`, where `client01` is a stable Account name for that client.
+
+Region filter values have the following meanings:
+
+- `gb`: only allow nodes whose detected egress region is GB.
+- `!gb`: exclude GB nodes.
+- Empty: do not filter by region, so GB and other regions are allowed.
+
+Client settings:
+
+```text
+Host: 127.0.0.1
+Port: 2260
+Username: GB.client01
+Password: RESIN_PROXY_TOKEN (leave empty when RESIN_PROXY_TOKEN="")
+```
+
+HTTP and SOCKS5 examples:
+
+```bash
+curl -x http://127.0.0.1:2260 \
+  -U "GB.client01:my-token" \
+  https://api.ipify.org
+
+curl --proxy socks5h://127.0.0.1:2260 \
+  -U "GB.client01:my-token" \
+  https://api.ipify.org
+```
+
+Replace `my-token` with `RESIN_PROXY_TOKEN`. When the token is explicitly empty, use `-U "GB.client01:"`. Reuse the same Account name to keep sticky routing. Without a fallback Platform, Resin returns a connection error when no GB node is available instead of selecting another region.
+
+If the new Platform shows zero routable nodes, first confirm that the filter is exactly `gb` (not `gk`). A node must also be enabled and healthy, have a working outbound, a known egress IP, and at least one latency record before it becomes routable.
+
 ## 📖 Advanced Usage: Sticky Session Proxy
 
 When your business depends on IP continuity or long-lived interactions, use Resin's core feature: **sticky proxying**.

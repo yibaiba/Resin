@@ -1,7 +1,7 @@
 import type { ColumnDef } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowDown, ArrowUp, Eye, Play, Plus, RefreshCw, Route, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { RoutingWorkflowGuide } from "../../components/RoutingWorkflowGuide";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
@@ -31,7 +31,7 @@ export function RoutingRulesPage() {
   const [decision, setDecision] = useState<RoutingDecision | null>(null);
   const rulesQuery = useQuery({ queryKey: ["routing-rules"], queryFn: listRoutingRules });
   const platformsQuery = useQuery({ queryKey: ["platforms", "routing-choices"], queryFn: () => listPlatforms({ limit: 1000 }) });
-  const rules = rulesQuery.data ?? [];
+  const rules = useMemo(() => rulesQuery.data ?? [], [rulesQuery.data]);
   const platforms = useMemo(() => platformsQuery.data?.items ?? [], [platformsQuery.data?.items]);
   const platformNames = useMemo(() => new Map(platforms.map((platform) => [platform.id, platform.name])), [platforms]);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["routing-rules"] });
@@ -61,29 +61,25 @@ export function RoutingRulesPage() {
     onError: (error) => showToast("error", formatApiErrorMessage(error, t)),
   });
 
-  const openEditor = (rule?: RoutingRule) => {
+  const reorderRules = orderMutation.mutate;
+  const toggleRule = toggleMutation.mutate;
+  const deleteRule = deleteMutation.mutate;
+  const openEditor = useCallback((rule?: RoutingRule) => {
     setForm(rule ? routingRuleToForm(rule) : { ...emptyRoutingRuleForm, platformID: platforms[0]?.id ?? "" });
     setEditing(rule ?? "new");
-  };
-  const move = (index: number, delta: number) => {
+  }, [platforms]);
+  const move = useCallback((index: number, delta: number) => {
     const target = index + delta;
     if (target < 0 || target >= rules.length) return;
     const ids = rules.map((rule) => rule.id);
     [ids[index], ids[target]] = [ids[target], ids[index]];
-    orderMutation.mutate(ids);
-  };
-  const remove = (rule: RoutingRule) => {
-    if (window.confirm(t("确认删除路由规则 {{name}}？", { name: rule.name }))) deleteMutation.mutate(rule.id);
-  };
-  const columns = createRuleColumns({
-    t,
-    platformNames,
-    ruleCount: rules.length,
-    orderPending: orderMutation.isPending,
-    onMove: move,
-    onToggle: (rule) => toggleMutation.mutate(rule),
-    onDelete: remove,
-  });
+    reorderRules(ids);
+  }, [reorderRules, rules]);
+  const remove = useCallback((rule: RoutingRule) => {
+    if (window.confirm(t("确认删除路由规则 {{name}}？", { name: rule.name }))) deleteRule(rule.id);
+  }, [deleteRule, t]);
+  const createRule = useCallback(() => openEditor(), [openEditor]);
+  const toggle = useCallback((rule: RoutingRule) => toggleRule(rule), [toggleRule]);
 
   return (
     <section className="routing-control-page">
@@ -91,7 +87,7 @@ export function RoutingRulesPage() {
         <div><h2>{t("目标路由")}</h2><p className="module-description">{t("按优先级决定目标走平台、直连或拒绝。")}</p></div>
         <div className="module-actions">
           <Button variant="secondary" size="sm" onClick={() => void rulesQuery.refetch()} disabled={rulesQuery.isFetching}><RefreshCw size={15} className={rulesQuery.isFetching ? "spin" : undefined} />{t("刷新")}</Button>
-          <Button size="sm" onClick={() => openEditor()}><Plus size={15} />{t("新建规则")}</Button>
+          <Button size="sm" onClick={createRule}><Plus size={15} />{t("新建规则")}</Button>
         </div>
       </header>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -110,16 +106,45 @@ export function RoutingRulesPage() {
         </form>
         {decision ? <RoutingPreviewResult decision={decision} /> : <div className="empty-box route-preview-empty"><Route size={17} /><span>{t("输入一个实际访问目标，即可看到规范化目标、命中规则和最终动作。")}</span></div>}
       </Card>
-      <Card id="routing-rules-list" className="platform-cards-container subscriptions-table-card route-rules-table-card routing-anchor-target" aria-label={t("路由规则列表")}>
-        <div className="route-table-heading"><div><h3>{t("优先级队列")}</h3><p>{t("从上到下匹配，命中第一条后停止。共 {{count}} 条。", { count: rules.length })}</p></div></div>
-        {rulesQuery.isLoading ? <p className="muted route-rule-state">{t("正在加载规则...")}</p> : null}
-        {!rulesQuery.isLoading && rules.length === 0 ? <div className="empty-box route-rule-empty"><Route size={18} /><div><strong>{t("暂无目标路由规则")}</strong><p>{t("没有规则时，请求会使用显式 Platform 或 Default。")}</p></div><Button size="sm" onClick={() => openEditor()}><Plus size={15} />{t("新建第一条规则")}</Button></div> : null}
-        {rules.length ? <DataTable data={rules} columns={columns} onRowClick={openEditor} getRowId={(rule) => rule.id} className="data-table-routing-rules" wrapClassName="route-rules-table-wrap" /> : null}
-      </Card>
+      <RoutingRulesTable rules={rules} platformNames={platformNames} loading={rulesQuery.isLoading} orderPending={orderMutation.isPending} onCreate={createRule} onEdit={openEditor} onMove={move} onToggle={toggle} onDelete={remove} />
       {editing ? <RoutingRuleEditor form={form} platforms={platforms} pending={saveMutation.isPending} presentation={editing === "new" ? "modal" : "drawer"} title={editing === "new" ? "新建路由规则" : "编辑路由规则"} onChange={setForm} onClose={() => setEditing(null)} onSubmit={() => saveMutation.mutate()} /> : null}
     </section>
   );
 }
+
+type RoutingRulesTableProps = {
+  rules: RoutingRule[];
+  platformNames: Map<string, string>;
+  loading: boolean;
+  orderPending: boolean;
+  onCreate: () => void;
+  onEdit: (rule: RoutingRule) => void;
+  onMove: (index: number, delta: number) => void;
+  onToggle: (rule: RoutingRule) => void;
+  onDelete: (rule: RoutingRule) => void;
+};
+
+const RoutingRulesTable = memo(function RoutingRulesTable(props: RoutingRulesTableProps) {
+  const { t } = useI18n();
+  const columns = useMemo(() => createRuleColumns({
+    t,
+    platformNames: props.platformNames,
+    ruleCount: props.rules.length,
+    orderPending: props.orderPending,
+    onMove: props.onMove,
+    onToggle: props.onToggle,
+    onDelete: props.onDelete,
+  }), [props.onDelete, props.onMove, props.onToggle, props.orderPending, props.platformNames, props.rules.length, t]);
+
+  return (
+    <Card id="routing-rules-list" className="platform-cards-container subscriptions-table-card route-rules-table-card routing-anchor-target" aria-label={t("路由规则列表")}>
+      <div className="route-table-heading"><div><h3>{t("优先级队列")}</h3><p>{t("从上到下匹配，命中第一条后停止。共 {{count}} 条。", { count: props.rules.length })}</p></div></div>
+      {props.loading ? <p className="muted route-rule-state">{t("正在加载规则...")}</p> : null}
+      {!props.loading && props.rules.length === 0 ? <div className="empty-box route-rule-empty"><Route size={18} /><div><strong>{t("暂无目标路由规则")}</strong><p>{t("没有规则时，请求会使用显式 Platform 或 Default。")}</p></div><Button size="sm" onClick={props.onCreate}><Plus size={15} />{t("新建第一条规则")}</Button></div> : null}
+      {props.rules.length > 0 ? <DataTable data={props.rules} columns={columns} onRowClick={props.onEdit} getRowId={(rule) => rule.id} className="data-table-routing-rules" wrapClassName="route-rules-table-wrap" /> : null}
+    </Card>
+  );
+});
 
 type ColumnOptions = {
   t: ReturnType<typeof useI18n>["t"];

@@ -34,14 +34,18 @@ export function EgressIPDrawer({ item, pending, onClose, onSave, onRotate }: Pro
   const [resumeAt, setResumeAt] = useState(toLocalDateTime(item.resume_at));
   const [strategy, setStrategy] = useState<RotationStrategy>("ANY");
 
-  const capacityValue = Number(capacity);
-  const capacityInvalid = !Number.isInteger(capacityValue) || capacityValue < 0;
+  const normalizedCapacity = capacity.trim();
+  const capacityValue = Number(normalizedCapacity);
+  const capacityInvalid = normalizedCapacity === "" || !Number.isSafeInteger(capacityValue) || capacityValue < 0;
   const badge = item.status === "ACTIVE" ? "success" : item.status === "DRAINING" ? "warning" : "danger";
-  const save = () => onSave({
-    status,
-    max_active_leases: capacityValue,
-    resume_at: resumeAt ? new Date(resumeAt).toISOString() : "",
-  });
+  const save = () => {
+    if (capacityInvalid) return;
+    onSave({
+      status,
+      max_active_leases: capacityValue,
+      resume_at: resumeAt ? new Date(resumeAt).toISOString() : "",
+    });
+  };
 
   return (
     <div className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="egress-drawer-title" onClick={onClose}>
@@ -60,7 +64,7 @@ export function EgressIPDrawer({ item, pending, onClose, onSave, onRotate }: Pro
             </dl>
             <form className="form-grid egress-policy-form" onSubmit={(event) => { event.preventDefault(); save(); }}>
               <div className="field-group"><label className="field-label" htmlFor="egress-drawer-status">{t("运行状态")}</label><Select id="egress-drawer-status" value={status} onChange={(event) => setStatus(event.target.value as EgressIP["status"])}><option value="ACTIVE">{t("正常接收新租约")}</option><option value="DRAINING">{t("停止新分配并迁移现有租约")}</option><option value="BLOCKED">{t("立即禁止使用")}</option></Select></div>
-              <div className="field-group"><label className="field-label" htmlFor="egress-drawer-capacity">{t("最大活跃租约")}</label><Input id="egress-drawer-capacity" type="number" min={0} value={capacity} invalid={capacityInvalid} aria-invalid={capacityInvalid} aria-describedby={capacityInvalid ? "egress-capacity-error" : undefined} onChange={(event) => setCapacity(event.target.value)} />{capacityInvalid ? <span id="egress-capacity-error" className="field-error" role="alert">{t("{{field}} 必须是非负整数", { field: t("最大活跃租约") })}</span> : null}<span className="field-help">{t("0 表示不限制此出口的并发粘性租约数。")}</span></div>
+              <div className="field-group"><label className="field-label" htmlFor="egress-drawer-capacity">{t("最大活跃租约")}</label><Input id="egress-drawer-capacity" type="number" min={0} step={1} required value={capacity} invalid={capacityInvalid} aria-invalid={capacityInvalid} aria-describedby={capacityInvalid ? "egress-capacity-error" : undefined} onChange={(event) => setCapacity(event.target.value)} />{capacityInvalid ? <span id="egress-capacity-error" className="field-error" role="alert">{t("{{field}} 必须是非负整数", { field: t("最大活跃租约") })}</span> : null}<span className="field-help">{t("0 表示不限制此出口的并发粘性租约数。")}</span></div>
               <div className="field-group field-span-2"><label className="field-label" htmlFor="egress-drawer-resume">{t("自动恢复时间")}</label><Input id="egress-drawer-resume" type="datetime-local" value={resumeAt} disabled={status === "ACTIVE"} onChange={(event) => setResumeAt(event.target.value)} /><span className="field-help">{t("仅在排空或禁用时生效；留空表示不自动恢复。")}</span></div>
               <div className="detail-actions field-span-2"><Button type="submit" disabled={pending || capacityInvalid}><Save size={15} />{pending ? t("保存中...") : t("保存策略")}</Button></div>
             </form>

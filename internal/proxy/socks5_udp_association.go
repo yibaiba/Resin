@@ -220,20 +220,15 @@ func validateSocks5UDPAssociationOptions(
 		return netip.Addr{}, netip.AddrPort{}, false, errSocks5UDPInvalidAssociationSource
 	}
 	requestedIP := requested.Addr()
-	if requested.Port() == 0 {
-		if !requestedIP.IsUnspecified() {
-			return netip.Addr{}, netip.AddrPort{}, false, fmt.Errorf(
-				"%w: zero port requires unspecified address",
-				errSocks5UDPInvalidAssociationSource,
-			)
-		}
-		return clientIP, netip.AddrPort{}, true, nil
-	}
+	// Clash may send the TCP peer IP with port zero until its UDP source port is known.
 	if !requestedIP.IsUnspecified() && requestedIP != clientIP {
 		return netip.Addr{}, netip.AddrPort{}, false, fmt.Errorf(
 			"%w: requested IP does not match TCP client",
 			errSocks5UDPInvalidAssociationSource,
 		)
+	}
+	if requested.Port() == 0 {
+		return clientIP, netip.AddrPort{}, true, nil
 	}
 	return clientIP, netip.AddrPortFrom(clientIP, requested.Port()), false, nil
 }

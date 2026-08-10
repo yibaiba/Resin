@@ -199,6 +199,43 @@ curl --proxy socks5h://127.0.0.1:2260 \
 curl http://127.0.0.1:2260/my-token/MyPlatform/https/api.ipify.org
 ```
 
+#### 示例：创建并使用仅包含英国节点的 Platform
+
+1. 打开 `http://127.0.0.1:2260/ui/platforms`，新建名为 `GB` 的 Platform。
+2. 在“地区筛选”中填写 `gb`；节点名称规则和 fallback 均留空，然后保存。
+3. 使用身份 `GB.client01` 连接，其中 `client01` 是这个客户端固定使用的 Account 名称。
+
+地区筛选的含义：
+
+- `gb`：只允许出口地区识别为 GB 的节点。
+- `!gb`：排除 GB 节点。
+- 留空：不限制地区，GB 和其他地区都可以使用。
+
+客户端填写方式：
+
+```text
+服务器：127.0.0.1
+端口：2260
+用户名：GB.client01
+密码：RESIN_PROXY_TOKEN（RESIN_PROXY_TOKEN="" 时留空）
+```
+
+HTTP 和 SOCKS5 示例：
+
+```bash
+curl -x http://127.0.0.1:2260 \
+  -U "GB.client01:my-token" \
+  https://api.ipify.org
+
+curl --proxy socks5h://127.0.0.1:2260 \
+  -U "GB.client01:my-token" \
+  https://api.ipify.org
+```
+
+请将 `my-token` 替换为 `RESIN_PROXY_TOKEN`。Token 明确配置为空时，使用 `-U "GB.client01:"`。同一客户端持续使用相同 Account，才能保持粘性路由。未配置 fallback 时，如果没有可用的 GB 节点，连接会失败，不会切换到其他地区。
+
+如果新建后显示 0 个可路由节点，先确认地区筛选填写的是 `gb`，不是 `gk`。节点还必须处于启用且健康状态，并且已有可用出站、已识别出口 IP 和至少一条延迟记录，才会进入 Platform。
+
 ## 📖 进阶使用：粘性代理
 
 当业务遇到**对 IP 变化敏感**的服务，或者需要持续交互时，你需要使用 Resin 的核心特性：**粘性代理**。

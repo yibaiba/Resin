@@ -187,7 +187,7 @@ func TestSocks5UDPAssociationValidatesRequestedSource(t *testing.T) {
 	openUDPAssociationTestScope(t, manager, "endpoint")
 	tests := []netip.AddrPort{
 		netip.MustParseAddrPort("198.51.100.7:43000"),
-		netip.MustParseAddrPort("198.51.100.6:0"),
+		netip.MustParseAddrPort("198.51.100.7:0"),
 	}
 	for _, requested := range tests {
 		_, err := manager.register(socks5UDPAssociationOptions{
@@ -198,6 +198,26 @@ func TestSocks5UDPAssociationValidatesRequestedSource(t *testing.T) {
 		if !errors.Is(err, errSocks5UDPInvalidAssociationSource) {
 			t.Fatalf("requested source %s: got %v", requested, err)
 		}
+	}
+}
+
+func TestSocks5UDPAssociationAcceptsClientIPWithUnknownPort(t *testing.T) {
+	manager := newSocks5UDPAssociationManager(time.Minute)
+	defer manager.close()
+	clientIP := netip.MustParseAddr("198.51.100.6")
+	openUDPAssociationTestScope(t, manager, "endpoint")
+	association, err := manager.register(socks5UDPAssociationOptions{
+		endpointID:      "endpoint",
+		clientIP:        clientIP,
+		requestedSource: netip.AddrPortFrom(clientIP, 0),
+	})
+	if err != nil {
+		t.Fatalf("register client IP with unknown port: %v", err)
+	}
+	source := netip.MustParseAddrPort("198.51.100.6:43001")
+	matched, err := manager.match("endpoint", source)
+	if err != nil || matched != association || association.sourceAddr() != source {
+		t.Fatalf("first-packet bind: matched=%p source=%s err=%v", matched, association.sourceAddr(), err)
 	}
 }
 

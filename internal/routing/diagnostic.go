@@ -73,7 +73,9 @@ func (r *Router) DiagnoseRoute(options RouteOptions, seed uint64) (RouteDiagnost
 	}
 	diagnostic := RouteDiagnostic{
 		Seed: seed, Root: diagnosticPlatform(root),
-		Fallback: make([]DiagnosticPlatform, 0, len(candidates)), Outcome: "no_available_nodes",
+		Fallback: make([]DiagnosticPlatform, 0, len(candidates)),
+		P2C:      make([]DiagnosticP2C, 0),
+		Outcome:  "no_available_nodes",
 	}
 	for _, candidate := range candidates {
 		diagnostic.Fallback = append(diagnostic.Fallback, diagnosticPlatform(candidate))
@@ -85,7 +87,7 @@ func (r *Router) DiagnoseRoute(options RouteOptions, seed uint64) (RouteDiagnost
 	diagnostic.Candidates = r.diagnosticCandidates(request, existing)
 	rng := rand.New(rand.NewPCG(seed, seed^diagnosticSeedSalt))
 	selection, traces, outcome, err := r.diagnoseRouteSelection(request, existing, rng)
-	diagnostic.P2C = traces
+	diagnostic.P2C = append(diagnostic.P2C, traces...)
 	diagnostic.Selection = selection
 	diagnostic.Outcome = outcome
 	return diagnostic, err
@@ -174,7 +176,12 @@ func (r *Router) diagnosticCandidate(
 	enforceCapacity bool,
 	previous *Lease,
 ) DiagnosticCandidate {
-	trace := DiagnosticCandidate{PlatformID: attempt.platform.ID, NodeHash: hash.Hex(), Eligible: true}
+	trace := DiagnosticCandidate{
+		PlatformID: attempt.platform.ID,
+		NodeHash:   hash.Hex(),
+		Eligible:   true,
+		Exclusions: make([]string, 0),
+	}
 	entry, ok := r.pool.GetEntry(hash)
 	if !ok {
 		trace.Eligible = false

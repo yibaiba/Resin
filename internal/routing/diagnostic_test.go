@@ -62,6 +62,11 @@ func TestRouteDiagnosticIsSeededAndDoesNotMutateState(t *testing.T) {
 	if first.Selection == nil || first.Selection.NodeHash == "" || len(first.P2C) == 0 {
 		t.Fatalf("diagnostic selection is incomplete: %+v", first)
 	}
+	for _, candidate := range first.Candidates {
+		if candidate.Exclusions == nil {
+			t.Fatalf("candidate exclusions must serialize as an array: %+v", candidate)
+		}
+	}
 	if got := fixture.router.ReadLease(model.LeaseKey{PlatformID: fixture.platform.ID, Account: "new-account"}); got != nil {
 		t.Fatalf("diagnostic created a lease: %+v", got)
 	}
@@ -71,6 +76,22 @@ func TestRouteDiagnosticIsSeededAndDoesNotMutateState(t *testing.T) {
 	}
 	if fixture.router.states.Size() != beforeStates {
 		t.Fatalf("diagnostic mutated platform state map")
+	}
+}
+
+func TestRouteDiagnosticUsesEmptyP2CArrayForExistingLease(t *testing.T) {
+	fixture := newRotationFixture(t, true, true)
+	diagnostic, err := fixture.router.DiagnoseRoute(RouteOptions{
+		PlatformName:    fixture.platform.Name,
+		Account:         "account",
+		Target:          "example.com:443",
+		RequiredNetwork: "tcp",
+	}, 42)
+	if err != nil {
+		t.Fatalf("existing lease diagnostic: %v", err)
+	}
+	if diagnostic.Outcome != "existing_lease" || diagnostic.P2C == nil || len(diagnostic.P2C) != 0 {
+		t.Fatalf("existing lease P2C trace = %+v", diagnostic)
 	}
 }
 

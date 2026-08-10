@@ -26,15 +26,15 @@ export function EgressIPsPage() {
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [selected, setSelected] = useState<string[]>([]);
-  const [editing, setEditing] = useState<EgressIP | null>(null);
+  const [editingIP, setEditingIP] = useState<string | null>(null);
   const [resumeAt, setResumeAt] = useState("");
   const [batchResults, setBatchResults] = useState<BatchEgressResult[]>([]);
   const [rotationResults, setRotationResults] = useState<EgressRotationResult[]>([]);
-  const egressQuery = useQuery({ queryKey: ["egress-ips", deferredSearch], queryFn: () => listEgressIPs(deferredSearch), placeholderData: (previous) => previous });
+  const egressQuery = useQuery({ queryKey: ["egress-ips", deferredSearch], queryFn: () => listEgressIPs(deferredSearch) });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["egress-ips"] });
   const policyMutation = useMutation({
     mutationFn: ({ ip, input }: { ip: string; input: EgressPolicyInput }) => updateEgressPolicy(ip, input),
-    onSuccess: async () => { await invalidate(); setEditing(null); showToast("success", t("出口策略已更新")); },
+    onSuccess: async () => { await invalidate(); setEditingIP(null); showToast("success", t("出口策略已更新")); },
     onError: (error) => showToast("error", formatApiErrorMessage(error, t)),
   });
   const drainMutation = useMutation({
@@ -44,12 +44,19 @@ export function EgressIPsPage() {
   });
   const rotateMutation = useMutation({
     mutationFn: ({ ip, strategy }: { ip: string; strategy: RotationStrategy }) => rotateEgressLeases(ip, { strategy }),
-    onSuccess: (response) => setRotationResults(response.items),
+    onSuccess: async (response) => { setRotationResults(response.items); await invalidate(); },
     onError: (error) => showToast("error", formatApiErrorMessage(error, t)),
   });
   const items = egressQuery.data ?? [];
+  const searchPending = search !== deferredSearch || egressQuery.isFetching;
+  const editing = editingIP ? items.find((item) => item.egress_ip === editingIP) ?? null : null;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const toggle = (ip: string, checked: boolean) => setSelected((current) => checked ? current.includes(ip) ? current : [...current, ip] : current.filter((item) => item !== ip));
+  const changeSearch = (value: string) => {
+    setSearch(value);
+    setSelected([]);
+    setEditingIP(null);
+  };
   const drain = () => {
     if (selected.length === 0) return;
     if (window.confirm(t("确认排空选中的 {{count}} 个出口 IP？", { count: selected.length }))) drainMutation.mutate();
@@ -62,6 +69,7 @@ export function EgressIPsPage() {
     t,
     items,
     selected: selectedSet,
+    disabled: searchPending,
     onToggle: toggle,
     onToggleAll: (checked) => setSelected(checked ? items.map((item) => item.egress_ip) : []),
   });
@@ -77,20 +85,20 @@ export function EgressIPsPage() {
       <EgressStateGuide />
       <Card className="platform-list-card platform-directory-card egress-toolbar-card">
         <div className="egress-toolbar">
-          <div className="field-group egress-search-field"><label className="field-label" htmlFor="egress-search">{t("查找出口 IP")}</label><label className="search-box" htmlFor="egress-search"><Search size={15} /><Input id="egress-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="203.0.113.10" /></label></div>
+          <div className="field-group egress-search-field"><label className="field-label" htmlFor="egress-search">{t("查找出口 IP")}</label><label className="search-box" htmlFor="egress-search"><Search size={15} /><Input id="egress-search" value={search} onChange={(event) => changeSearch(event.target.value)} placeholder="203.0.113.10" /></label></div>
           <div className="field-group"><label className="field-label" htmlFor="egress-batch-resume">{t("批量自动恢复时间")}</label><Input id="egress-batch-resume" type="datetime-local" value={resumeAt} onChange={(event) => setResumeAt(event.target.value)} /></div>
-          <Button className="egress-batch-action" variant="secondary" onClick={drain} disabled={selected.length === 0 || drainMutation.isPending}><Droplets size={15} />{t("排空已选 {{count}} 项", { count: selected.length })}</Button>
+          <Button className="egress-batch-action" variant="secondary" onClick={drain} disabled={selected.length === 0 || drainMutation.isPending || searchPending}><Droplets size={15} />{t("排空已选 {{count}} 项", { count: selected.length })}</Button>
         </div>
       </Card>
       {egressQuery.isError ? <div className="callout callout-error"><AlertTriangle size={15} /><span>{formatApiErrorMessage(egressQuery.error, t)}</span></div> : null}
       <Card id="egress-policies" className="platform-cards-container subscriptions-table-card egress-table-card routing-anchor-target" aria-label={t("出口 IP 列表")}>
         {egressQuery.isLoading ? <p className="muted egress-state">{t("正在加载出口 IP...")}</p> : null}
         {!egressQuery.isLoading && items.length === 0 ? <div className="empty-box egress-empty"><Droplets size={18} /><div><strong>{t("暂无出口 IP")}</strong><p>{t("节点完成出口探测并获取公网 IP 后，会自动出现在这里。")}</p></div><Button variant="secondary" size="sm" onClick={() => void egressQuery.refetch()}><RefreshCw size={15} />{t("重新检查")}</Button></div> : null}
-        {items.length ? <DataTable data={items} columns={columns} onRowClick={setEditing} getRowId={(item) => item.egress_ip} className="data-table-egress" wrapClassName="egress-table-wrap" /> : null}
+        {items.length ? <DataTable data={items} columns={columns} onRowClick={(item) => setEditingIP(item.egress_ip)} selectedRowId={editingIP ?? undefined} getRowId={(item) => item.egress_ip} className="data-table-egress" wrapClassName="egress-table-wrap" /> : null}
       </Card>
       {batchResults.length ? <ResultPanel title={t("批量排空结果")} items={batchResults.map((item) => ({ key: item.egress_ip, ok: item.success, detail: item.error }))} /> : null}
       {rotationResults.length ? <ResultPanel title={t("租约轮换结果")} items={rotationResults.map((item) => ({ key: `${item.platform_id} / ${item.account}`, ok: !item.error, detail: item.error || routingLabel(item.status) }))} /> : null}
-      {editing ? <EgressIPDrawer item={editing} pending={policyMutation.isPending || rotateMutation.isPending} onClose={() => setEditing(null)} onSave={(input) => policyMutation.mutate({ ip: editing.egress_ip, input })} onRotate={(strategy) => rotate(editing.egress_ip, strategy)} /> : null}
+      {editing ? <EgressIPDrawer item={editing} pending={policyMutation.isPending || rotateMutation.isPending} onClose={() => setEditingIP(null)} onSave={(input) => policyMutation.mutate({ ip: editing.egress_ip, input })} onRotate={(strategy) => rotate(editing.egress_ip, strategy)} /> : null}
     </section>
   );
 }
@@ -99,6 +107,7 @@ type EgressColumnOptions = {
   t: ReturnType<typeof useI18n>["t"];
   items: EgressIP[];
   selected: Set<string>;
+  disabled: boolean;
   onToggle: (ip: string, checked: boolean) => void;
   onToggleAll: (checked: boolean) => void;
 };
@@ -106,9 +115,9 @@ type EgressColumnOptions = {
 function createEgressColumns(options: EgressColumnOptions): ColumnDef<EgressIP>[] {
   const { t } = options;
   const allSelected = options.items.length > 0 && options.items.every((item) => options.selected.has(item.egress_ip));
-  const checkbox = (item: EgressIP) => <label className="egress-select" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={options.selected.has(item.egress_ip)} onChange={(event) => options.onToggle(item.egress_ip, event.target.checked)} /><span className="sr-only">{t("选择出口 {{ip}}", { ip: item.egress_ip })}</span></label>;
+  const checkbox = (item: EgressIP) => <label className="egress-select" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={options.selected.has(item.egress_ip)} disabled={options.disabled} onChange={(event) => options.onToggle(item.egress_ip, event.target.checked)} /><span className="sr-only">{t("选择出口 {{ip}}", { ip: item.egress_ip })}</span></label>;
   return [
-    { id: "selected", header: () => <label className="egress-select"><input type="checkbox" checked={allSelected} onChange={(event) => options.onToggleAll(event.target.checked)} /><span className="sr-only">{t("选择全部出口 IP")}</span></label>, cell: ({ row }) => checkbox(row.original) },
+    { id: "selected", header: () => <label className="egress-select"><input type="checkbox" checked={allSelected} disabled={options.disabled} onChange={(event) => options.onToggleAll(event.target.checked)} /><span className="sr-only">{t("选择全部出口 IP")}</span></label>, cell: ({ row }) => checkbox(row.original) },
     { accessorKey: "egress_ip", header: t("出口 IP"), cell: ({ row }) => <strong className="egress-ip-value">{row.original.egress_ip}</strong> },
     { id: "status", header: t("状态"), cell: ({ row }) => <div className="egress-status-cell"><Badge variant={row.original.status === "ACTIVE" ? "success" : row.original.status === "DRAINING" ? "warning" : "danger"}>{t(routingLabel(row.original.status))}</Badge>{row.original.status !== row.original.configured_status ? <small>{t("配置等待生效：{{status}}", { status: t(routingLabel(row.original.configured_status)) })}</small> : null}</div> },
     { accessorKey: "node_count", header: t("关联节点") },
