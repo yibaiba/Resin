@@ -699,6 +699,719 @@
   }
 }
 
+/* Routing workflow and contextual guidance. */
+.routing-workflow {
+  padding: 13px 0 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.routing-workflow-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px 11px;
+}
+
+.routing-workflow-heading strong {
+  flex: 0 0 auto;
+  font-size: 13px;
+}
+
+.routing-workflow-heading span,
+.field-help {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.routing-workflow ol {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: var(--border);
+  list-style: none;
+}
+
+.routing-workflow-step {
+  position: relative;
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: 22px 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 9px;
+  background: #f7f9fb;
+  color: var(--text-muted);
+}
+
+.routing-workflow-step:hover {
+  background: var(--surface-strong);
+  color: var(--text);
+}
+
+.routing-workflow-step.is-active {
+  background: var(--surface-strong);
+  color: var(--primary-strong);
+  box-shadow: inset 0 -3px 0 var(--primary);
+}
+
+.routing-workflow-index {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.routing-workflow-step strong,
+.routing-workflow-step small {
+  display: block;
+  min-width: 0;
+}
+
+.routing-workflow-step strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.routing-workflow-step small {
+  margin-top: 2px;
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.field-help {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Target route preview and rule editor. */
+.route-preview-panel {
+  position: static;
+  gap: 14px;
+  padding: 16px;
+}
+
+.route-preview-header,
+.route-preview-result-head,
+.diagnostic-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.route-preview-header .section-heading {
+  min-height: 0;
+  margin: 0;
+}
+
+.route-preview-safety {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.route-preview-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 2fr) minmax(210px, 1.2fr) minmax(120px, .6fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.route-preview-submit,
+.egress-save,
+.egress-batch-action {
+  align-self: start;
+  margin-top: 25px;
+  min-height: 40px;
+}
+
+.route-preview-empty,
+.route-rule-empty,
+.egress-empty {
+  min-height: 66px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px;
+  border: 1px dashed rgba(37, 72, 120, .24);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.route-rule-empty,
+.egress-empty {
+  justify-content: flex-start;
+}
+
+.route-rule-empty > div,
+.egress-empty > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.route-rule-empty strong,
+.egress-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.route-rule-empty p,
+.egress-empty p {
+  margin-top: 3px;
+}
+
+.route-preview-result {
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.route-preview-result-head {
+  justify-content: flex-start;
+}
+
+.route-preview-result-head > div {
+  min-width: 0;
+}
+
+.route-preview-result-head strong {
+  display: block;
+  font-size: 13px;
+}
+
+.route-preview-result-head p,
+.route-preview-note {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.route-preview-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.route-preview-path > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--primary);
+  background: var(--surface-strong);
+}
+
+.route-preview-path > div:last-child {
+  grid-column: 5;
+}
+
+.route-preview-path small,
+.route-preview-path strong {
+  display: block;
+}
+
+.route-preview-path small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.route-preview-path strong {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.route-rule-row.is-disabled {
+  opacity: .6;
+  background: #f7f8fa;
+}
+
+.route-rule-form-section {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.route-rule-form-section-head {
+  margin-bottom: 11px;
+}
+
+.route-rule-form-section-head h4 {
+  font-size: 13px;
+}
+
+.route-rule-form-section-head p,
+.route-rule-toggle small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.route-rule-section-grid,
+.route-rule-toggle-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.route-rule-toggle span,
+.route-rule-toggle strong,
+.route-rule-toggle small {
+  display: block;
+}
+
+.route-rule-toggle > span {
+  min-width: 0;
+}
+
+.route-rule-toggle .switch {
+  flex: 0 0 auto;
+}
+
+.fallback-empty {
+  margin-top: 10px;
+  padding: 12px;
+  border-left: 3px solid var(--border);
+  background: #f8fafc;
+  text-align: left;
+}
+
+.fallback-empty strong {
+  font-size: 12px;
+}
+
+.fallback-empty p {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Egress pool. */
+.egress-state-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.egress-state-guide > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  border-right: 1px solid var(--border);
+}
+
+.egress-state-guide > div:last-child {
+  border-right: 0;
+}
+
+.egress-state-guide svg {
+  flex: 0 0 auto;
+  color: var(--primary-strong);
+}
+
+.egress-state-guide strong,
+.egress-state-guide small {
+  display: block;
+}
+
+.egress-state-guide strong {
+  font-size: 12px;
+}
+
+.egress-state-guide small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.egress-toolbar {
+  align-items: start;
+}
+
+.egress-toolbar .search-box {
+  width: 100%;
+}
+
+.egress-search-field {
+  min-width: 0;
+}
+
+.egress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.egress-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+
+.egress-item-header {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.egress-select {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.egress-item-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.egress-item-title .egress-ip-value {
+  font-size: 14px;
+}
+
+.egress-effective-note {
+  color: var(--warning);
+  font-size: 11px;
+}
+
+.egress-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.egress-metrics > div {
+  min-width: 0;
+  padding: 10px 13px;
+  border-right: 1px solid var(--border);
+}
+
+.egress-metrics > div:last-child {
+  border-right: 0;
+}
+
+.egress-metrics span,
+.egress-metrics strong {
+  display: block;
+}
+
+.egress-metrics span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.egress-metrics strong {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.egress-policy-grid {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.4fr) minmax(150px, .7fr) minmax(210px, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 13px;
+}
+
+.egress-rotation-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(210px, 260px) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border-top: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.egress-rotation-row strong {
+  font-size: 12px;
+}
+
+.egress-rotation-row p {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Routing diagnostics. */
+.diagnostic-mode {
+  width: 100%;
+  padding: 0;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.diagnostic-mode button {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.diagnostic-mode button.active {
+  border-color: rgba(20, 112, 255, .48);
+  background: rgba(20, 112, 255, .06);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.diagnostic-mode button > span,
+.diagnostic-mode button strong,
+.diagnostic-mode button small {
+  display: block;
+  min-width: 0;
+}
+
+.diagnostic-mode button strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.diagnostic-mode button small {
+  margin-top: 2px;
+  font-family: "Manrope", "PingFang SC", sans-serif;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.diagnostic-form-grid {
+  grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.diagnostic-advanced {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostic-advanced summary {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 2px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.diagnostic-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnostic-advanced summary span,
+.diagnostic-advanced summary strong,
+.diagnostic-advanced summary small {
+  display: block;
+}
+
+.diagnostic-advanced summary strong {
+  font-size: 12px;
+}
+
+.diagnostic-advanced summary small {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.diagnostic-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 2px 13px;
+}
+
+.diagnostic-submit-row > span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.diagnostic-submit-row .btn {
+  flex: 0 0 auto;
+}
+
+.diagnostic-outcome {
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr);
+}
+
+.diagnostic-outcome.has-live-tcp {
+  grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr);
+}
+
+@media (max-width: 1200px) {
+  .routing-workflow ol {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .routing-workflow li {
+    flex: 1 0 170px;
+  }
+
+  .route-preview-form,
+  .egress-policy-grid,
+  .diagnostic-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .route-preview-target-field,
+  .diagnostic-target-field {
+    grid-column: 1 / -1;
+  }
+
+  .route-preview-submit,
+  .egress-save {
+    margin-top: 0;
+    justify-self: start;
+  }
+}
+
+@media (max-width: 760px) {
+  .routing-workflow-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .routing-workflow-step {
+    min-height: 58px;
+  }
+
+  .route-preview-header,
+  .diagnostic-submit-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .route-preview-form,
+  .route-rule-section-grid,
+  .route-rule-toggle-group,
+  .egress-policy-grid,
+  .egress-rotation-row,
+  .diagnostic-form-grid,
+  .diagnostic-advanced-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-preview-target-field,
+  .diagnostic-target-field {
+    grid-column: auto;
+  }
+
+  .route-preview-path {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .route-preview-path > div:last-child {
+    grid-column: auto;
+  }
+
+  .route-preview-path > svg {
+    transform: rotate(90deg);
+    justify-self: center;
+  }
+
+  .route-rule-empty,
+  .egress-empty {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .route-rule-empty .btn,
+  .egress-empty .btn,
+  .diagnostic-submit-row .btn,
+  .egress-rotation-row .btn,
+  .egress-save,
+  .egress-batch-action {
+    width: 100%;
+  }
+
+  .egress-state-guide,
+  .egress-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .egress-state-guide > div,
+  .egress-metrics > div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .egress-state-guide > div:last-child,
+  .egress-metrics > div:last-child {
+    border-bottom: 0;
+  }
+
+  .egress-batch-action {
+    margin-top: 0;
+  }
+
+  .egress-rotation-row {
+    align-items: stretch;
+  }
+
+  .diagnostic-outcome,
+  .diagnostic-outcome.has-live-tcp {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 540px) {
+  .diagnostic-mode {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,

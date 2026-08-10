@@ -25,6 +25,13 @@ export const rotationStrategyLabel: Record<RotationStrategy, string> = {
   REQUIRE_NEW_IP: "必须切换出口 IP",
 };
 
+export const rotationStrategyDescription: Record<RotationStrategy, string> = {
+  ANY: "更换为任意其他可用节点，不要求出口 IP 发生变化。",
+  SAME_IP: "只在当前出口 IP 内更换节点；没有替代节点时延后轮换。",
+  PREFER_NEW_IP: "优先切换到新出口 IP，不可用时允许更换为其他节点。",
+  REQUIRE_NEW_IP: "只有找到新出口 IP 才轮换，否则保留原租约并标记延期。",
+};
+
 export const missActions: PlatformMissAction[] = ["TREAT_AS_EMPTY", "REJECT"];
 
 export const emptyAccountBehaviors: PlatformEmptyAccountBehavior[] = [

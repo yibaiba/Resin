@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, Info, RefreshCw, RotateCw, Search, Sparkles, 
 import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { RoutingWorkflowGuide } from "../../components/RoutingWorkflowGuide";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
@@ -574,6 +575,8 @@ export function PlatformDetailPage() {
                   <h4>{t("平台配置")}</h4>
                   <p>{t("修改过滤策略与路由策略后点击保存。")}</p>
                 </div>
+
+                <RoutingWorkflowGuide active={["fallback", "rotation"]} />
 
                 <form className="form-grid platform-config-form" onSubmit={onEditSubmit}>
                   <div className="field-group">
