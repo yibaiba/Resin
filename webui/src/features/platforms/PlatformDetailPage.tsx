@@ -56,6 +56,8 @@ type PlatformDetailTab = "monitor" | "access" | "config" | "ops";
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 const LEASE_MANAGEMENT_ANCHOR = "platform-lease-management";
+const PLATFORM_FALLBACK_ANCHOR = "platform-fallback";
+const STICKY_ROTATION_ANCHOR = "sticky-rotation";
 const LEASE_SEARCH_DEBOUNCE_MS = 300;
 const LEASE_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 const DETAIL_TABS: Array<{ key: PlatformDetailTab; label: string; hint: string }> = [
@@ -165,19 +167,22 @@ export function PlatformDetailPage() {
 
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
-    if (tab !== "ops" && location.hash !== `#${LEASE_MANAGEMENT_ANCHOR}`) return;
-    const frame = window.requestAnimationFrame(() => setActiveTab("ops"));
+    let requestedTab: PlatformDetailTab | null = null;
+    if (tab === "monitor" || tab === "access" || tab === "config" || tab === "ops") requestedTab = tab;
+    if (location.hash === `#${LEASE_MANAGEMENT_ANCHOR}`) requestedTab = "ops";
+    if (location.hash === `#${PLATFORM_FALLBACK_ANCHOR}` || location.hash === `#${STICKY_ROTATION_ANCHOR}`) requestedTab = "config";
+    if (!requestedTab) return;
+    const frame = window.requestAnimationFrame(() => setActiveTab(requestedTab));
     return () => window.cancelAnimationFrame(frame);
   }, [location.hash, location.search]);
 
   useEffect(() => {
-    if (activeTab !== "ops" || location.hash !== `#${LEASE_MANAGEMENT_ANCHOR}`) {
-      return;
-    }
-
-    window.requestAnimationFrame(() => {
-      document.getElementById(LEASE_MANAGEMENT_ANCHOR)?.scrollIntoView({ block: "start" });
-    });
+    const anchor = location.hash.slice(1);
+    if (!anchor) return;
+    if (anchor === LEASE_MANAGEMENT_ANCHOR && activeTab !== "ops") return;
+    if ((anchor === PLATFORM_FALLBACK_ANCHOR || anchor === STICKY_ROTATION_ANCHOR) && activeTab !== "config") return;
+    const frame = window.requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+    return () => window.cancelAnimationFrame(frame);
   }, [activeTab, location.hash]);
 
   const invalidatePlatform = async (id: string) => {
@@ -576,7 +581,7 @@ export function PlatformDetailPage() {
                   <p>{t("修改过滤策略与路由策略后点击保存。")}</p>
                 </div>
 
-                <RoutingWorkflowGuide active={["fallback", "rotation"]} embedded />
+                <RoutingWorkflowGuide active={["fallback", "rotation"]} embedded platformID={platform.id} />
 
                 <form className="form-grid platform-config-form" onSubmit={onEditSubmit}>
                   <div className="field-group">

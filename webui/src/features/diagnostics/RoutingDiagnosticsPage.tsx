@@ -40,7 +40,7 @@ export function RoutingDiagnosticsPage() {
       </header>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       <RoutingWorkflowGuide active="diagnostics" />
-      <Card className="diagnostic-form-panel">
+      <Card id="diagnostic-form" className="diagnostic-form-panel routing-anchor-target">
         <DiagnosticModePicker mode={form.mode} onChange={(mode) => patch("mode", mode)} />
         <div className="diagnostic-form-grid">
           <div className="field-group diagnostic-target-field">

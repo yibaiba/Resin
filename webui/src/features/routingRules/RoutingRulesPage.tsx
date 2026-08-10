@@ -99,7 +99,7 @@ export function RoutingRulesPage() {
         </form>
         {decision ? <RoutingPreviewResult decision={decision} /> : <div className="route-preview-empty"><Route size={17} /><span>{t("输入一个实际访问目标，即可看到规范化目标、命中规则和最终动作。")}</span></div>}
       </Card>
-      <section className="route-rule-list" aria-label={t("路由规则列表")}>
+      <section id="routing-rules-list" className="route-rule-list routing-anchor-target" aria-label={t("路由规则列表")}>
         <div className="section-heading"><div><h3>{t("优先级队列")}</h3><p>{t("从上到下匹配，命中第一条后停止。共 {{count}} 条。", { count: rules.length })}</p></div></div>
         {rulesQuery.isLoading ? <p className="muted route-rule-state">{t("正在加载规则...")}</p> : null}
         {!rulesQuery.isLoading && rules.length === 0 ? <div className="empty-box route-rule-empty"><Route size={18} /><div><strong>{t("暂无目标路由规则")}</strong><p>{t("没有规则时，请求会使用显式 Platform 或 Default。")}</p></div><Button size="sm" onClick={() => openEditor()}><Plus size={15} />{t("新建第一条规则")}</Button></div> : null}

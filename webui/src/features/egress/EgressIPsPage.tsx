@@ -74,7 +74,7 @@ export function EgressIPsPage() {
         <Button className="egress-batch-action" variant="secondary" onClick={drain} disabled={selected.length === 0 || drainMutation.isPending}><Droplets size={15} />{t("排空已选 {{count}} 项", { count: selected.length })}</Button>
       </div>
       {egressQuery.isError ? <div className="callout callout-error"><AlertTriangle size={15} /><span>{formatApiErrorMessage(egressQuery.error, t)}</span></div> : null}
-      <div className="egress-list">
+      <div id="egress-policies" className="egress-list routing-anchor-target">
         {items.map((item) => <EgressIPRow key={item.egress_ip} item={item} checked={selected.includes(item.egress_ip)} pending={policyMutation.isPending || rotateMutation.isPending} onChecked={(checked) => toggle(item.egress_ip, checked)} onSave={(input) => policyMutation.mutate({ ip: item.egress_ip, input })} onRotate={(strategy) => rotate(item.egress_ip, strategy)} />)}
         {egressQuery.isLoading ? <p className="muted egress-state">{t("正在加载出口 IP...")}</p> : null}
         {!egressQuery.isLoading && items.length === 0 ? <div className="empty-box egress-empty"><Droplets size={18} /><div><strong>{t("暂无出口 IP")}</strong><p>{t("节点完成出口探测并获取公网 IP 后，会自动出现在这里。")}</p></div><Button variant="secondary" size="sm" onClick={() => void egressQuery.refetch()}><RefreshCw size={15} />{t("重新检查")}</Button></div> : null}

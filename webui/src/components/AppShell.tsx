@@ -15,7 +15,8 @@ import {
   Server,
   Settings,
 } from "lucide-react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Button } from "./ui/Button";
 import { cn } from "../lib/cn";
@@ -52,6 +53,7 @@ type SystemInfoResponse = {
 
 export function AppShell() {
   const { t } = useI18n();
+  useLocationAnchor();
   const clearToken = useAuthStore((state) => state.clearToken);
   const token = useAuthStore((state) => state.token);
   const navigate = useNavigate();
@@ -177,4 +179,14 @@ export function AppShell() {
       </main>
     </div>
   );
+}
+
+function useLocationAnchor() {
+  const location = useLocation();
+  useEffect(() => {
+    const anchor = location.hash.slice(1);
+    if (!anchor) return;
+    const frame = window.requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash, location.pathname]);
 }
