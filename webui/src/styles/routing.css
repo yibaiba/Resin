@@ -1,0 +1,1042 @@
+.routing-control-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.routing-control-page .badge {
+  font-size: 12px;
+}
+
+.module-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.routing-anchor-target {
+  scroll-margin-top: 18px;
+}
+
+.routing-workflow a:focus-visible,
+.routing-control-page button:focus-visible,
+.data-table tbody tr.clickable-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.data-table tbody tr.clickable-row:focus-visible {
+  outline-offset: -2px;
+}
+
+.field-help {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.diagnostic-code,
+.egress-ip-value,
+.route-rule-match code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Contextual workflow guide */
+.routing-workflow {
+  min-width: 0;
+}
+
+.routing-workflow.is-embedded {
+  margin: 12px 0 2px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.routing-workflow-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.routing-workflow-heading strong {
+  flex: 0 0 auto;
+  font-size: 14px;
+}
+
+.routing-workflow-heading span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.routing-workflow ol {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.routing-workflow li + li {
+  border-left: 1px solid var(--border);
+}
+
+.routing-workflow-step {
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 24px 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  transition: 0.2s ease;
+}
+
+.routing-workflow-step:hover {
+  background: rgba(20, 112, 255, 0.06);
+}
+
+.routing-workflow-step.is-active {
+  background: transparent;
+  color: var(--primary-strong);
+}
+
+.routing-workflow-step.is-active strong {
+  color: var(--primary-strong);
+}
+
+.routing-workflow-step.is-active .routing-workflow-index {
+  background: var(--primary-soft);
+}
+
+.routing-workflow-index {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.routing-workflow-step strong {
+  display: block;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.routing-workflow-step small {
+  display: block;
+  min-width: 0;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+/* Target routing */
+.route-preview-panel,
+.diagnostic-form-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.diagnostic-form-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.route-preview-header .badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.route-preview-form {
+  grid-template-columns: minmax(250px, 2fr) minmax(210px, 1.2fr) minmax(120px, 0.7fr) auto;
+  align-items: start;
+}
+
+.route-preview-submit,
+.egress-batch-action {
+  align-self: start;
+  min-height: 40px;
+  margin-top: 25px;
+}
+
+.route-preview-empty,
+.route-rule-empty,
+.egress-empty {
+  min-height: 66px;
+  justify-content: flex-start;
+  margin-top: 0;
+  padding: 14px;
+}
+
+.route-rule-empty > div,
+.egress-empty > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.route-rule-empty strong,
+.egress-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.route-rule-empty p,
+.egress-empty p {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.route-preview-result {
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+}
+
+.route-preview-result-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.route-preview-result-head span {
+  color: var(--text-muted);
+}
+
+.route-preview-result dl,
+.compact-kv {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.route-preview-result dt,
+.compact-kv dt {
+  color: var(--text-muted);
+}
+
+.route-preview-result dd,
+.compact-kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.route-preview-note {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.route-rules-table-card,
+.egress-table-card,
+.diagnostic-candidate-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.route-table-heading,
+.diagnostic-candidate-heading {
+  padding: 16px 16px 4px;
+}
+
+.route-table-heading h3,
+.diagnostic-candidate-heading h3 {
+  font-size: 18px;
+}
+
+.route-table-heading p,
+.diagnostic-candidate-heading p {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.route-rules-table-wrap,
+.egress-table-wrap,
+.diagnostic-table-wrap {
+  max-height: 560px;
+  margin-top: 10px;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 0;
+}
+
+.data-table-routing-rules {
+  min-width: 900px;
+}
+
+.route-rule-priority {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.route-rule-match {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.route-rule-match span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.route-rule-table-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.route-rule-table-actions .btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.route-rule-state {
+  padding: 16px;
+}
+
+.route-rule-modal {
+  width: min(760px, 100%);
+}
+
+.route-rule-drawer {
+  width: min(760px, 100vw);
+}
+
+.route-rule-form {
+  margin-top: 14px;
+}
+
+.route-rule-span-2 {
+  grid-column: 1 / -1;
+}
+
+.route-rule-form-section {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.route-rule-form-section-head {
+  margin-bottom: 12px;
+}
+
+.route-rule-form-section-head h4 {
+  font-size: 14px;
+}
+
+.route-rule-form-section-head p {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.route-rule-section-grid,
+.route-rule-toggle-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.route-rule-toggle {
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.route-rule-toggle span,
+.route-rule-toggle strong {
+  display: block;
+}
+
+.route-rule-toggle small {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.route-rule-toggle > span {
+  min-width: 0;
+}
+
+.route-rule-toggle .switch {
+  flex: 0 0 auto;
+}
+
+.route-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Platform routing fields */
+.routing-settings-heading {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.routing-settings-heading h5 {
+  font-size: 14px;
+}
+
+.routing-settings-heading p {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fallback-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.fallback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fallback-list li {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.fallback-order {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fallback-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.fallback-actions .btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.fallback-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fallback-empty {
+  padding: 10px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.fallback-empty strong {
+  font-size: 12px;
+}
+
+.fallback-empty p {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+/* Egress pool */
+.egress-state-guide,
+.egress-toolbar-card {
+  padding: 16px;
+}
+
+.egress-state-legend {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.egress-state-legend > div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.egress-state-legend .badge {
+  flex: 0 0 auto;
+}
+
+.egress-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 280px) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.egress-toolbar .search-box {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
+.data-table-egress {
+  min-width: 920px;
+}
+
+.egress-select {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.egress-select input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.egress-state {
+  padding: 18px;
+}
+
+.egress-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.egress-status-cell small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.egress-drawer {
+  width: min(680px, 100vw);
+}
+
+.egress-summary-grid,
+.diagnostic-summary-grid {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.egress-summary-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diagnostic-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.egress-summary-grid > div,
+.diagnostic-summary-grid > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.68);
+}
+
+.egress-summary-grid dt,
+.diagnostic-summary-grid dt {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.egress-summary-grid dd,
+.diagnostic-summary-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.egress-policy-form {
+  margin-top: 0;
+}
+
+.egress-policy-form .detail-actions {
+  justify-content: flex-end;
+}
+
+.egress-rotation-controls {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.egress-rotation-controls .select {
+  flex: 1;
+}
+
+.operation-results {
+  overflow: hidden;
+}
+
+.operation-results h3 {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.operation-results > div {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 2fr;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.operation-results > div:last-child {
+  border-bottom: 0;
+}
+
+.operation-results span {
+  overflow-wrap: anywhere;
+}
+
+.result-ok strong,
+.text-success {
+  color: var(--success);
+}
+
+.result-error strong,
+.text-danger {
+  color: var(--danger);
+}
+
+/* Routing diagnostics */
+.diagnostic-mode.platform-detail-tabs {
+  width: min(560px, 100%);
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostic-mode .platform-detail-tab {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 0;
+}
+
+.diagnostic-mode .platform-detail-tab span,
+.diagnostic-mode .platform-detail-tab strong {
+  display: block;
+  font-size: 13px;
+}
+
+.diagnostic-mode .platform-detail-tab small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.diagnostic-form-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.diagnostic-advanced {
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.diagnostic-advanced-toggle {
+  width: 100%;
+  min-height: 52px;
+  justify-content: flex-start;
+  padding-right: 4px;
+  padding-left: 4px;
+  text-align: left;
+}
+
+.diagnostic-advanced-toggle span,
+.diagnostic-advanced-toggle strong {
+  display: block;
+}
+
+.diagnostic-advanced-toggle small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.diagnostic-advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+
+.diagnostic-submit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.diagnostic-running {
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+}
+
+.diagnostic-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.diagnostic-summary-card,
+.diagnostic-process-card {
+  padding: 16px;
+}
+
+.diagnostic-process-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.diagnostic-process-section {
+  min-width: 0;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostic-process-section h4 {
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.trace-row {
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 18px minmax(110px, 1fr) minmax(130px, 1fr);
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid rgba(37, 72, 120, 0.1);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.trace-row:last-child {
+  border-bottom: 0;
+}
+
+.trace-row-matched {
+  color: var(--success);
+}
+
+.diagnostic-fallback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.diagnostic-fallback-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.diagnostic-fallback-list li > span {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+}
+
+.p2c-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) repeat(2, minmax(120px, 1fr));
+  gap: 7px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(37, 72, 120, 0.1);
+  font-size: 12px;
+}
+
+.p2c-row span {
+  padding: 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.p2c-row span.selected {
+  border-color: rgba(4, 136, 103, 0.45);
+  color: var(--success);
+  background: rgba(4, 136, 103, 0.08);
+}
+
+.diagnostic-errors {
+  max-width: 480px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.data-table-diagnostic {
+  min-width: 900px;
+}
+
+.diagnostic-table-wrap .data-table tbody tr {
+  cursor: default;
+}
+
+@media (max-width: 1200px) {
+  .route-preview-form,
+  .diagnostic-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .route-preview-target-field,
+  .diagnostic-target-field {
+    grid-column: 1 / -1;
+  }
+
+  .route-preview-submit {
+    width: fit-content;
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 980px) {
+  .routing-workflow ol {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .routing-workflow li:nth-child(4) {
+    border-left: 0;
+  }
+
+  .routing-workflow li:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+
+  .egress-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .egress-batch-action {
+    width: fit-content;
+    margin-top: 0;
+  }
+
+  .diagnostic-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .module-actions {
+    width: 100%;
+  }
+
+  .module-actions .btn {
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .routing-workflow-heading,
+  .route-preview-header,
+  .diagnostic-submit-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .routing-workflow ol,
+  .route-preview-form,
+  .diagnostic-form-grid,
+  .egress-toolbar,
+  .diagnostic-process-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .routing-workflow li + li,
+  .routing-workflow li:nth-child(4) {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .route-preview-target-field,
+  .diagnostic-target-field {
+    grid-column: auto;
+  }
+
+  .route-preview-submit,
+  .egress-batch-action,
+  .diagnostic-submit-row .btn {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .route-rule-section-grid,
+  .route-rule-toggle-group,
+  .diagnostic-advanced-grid,
+  .egress-summary-grid,
+  .diagnostic-summary-grid,
+  .egress-state-legend {
+    grid-template-columns: 1fr;
+  }
+
+  .route-rule-span-2,
+  .field-span-2 {
+    grid-column: auto;
+  }
+
+  .fallback-actions .btn,
+  .route-rule-table-actions .btn {
+    min-width: 44px;
+    height: 44px;
+  }
+
+  .egress-rotation-controls,
+  .operation-results > div {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+  }
+
+  .egress-rotation-controls {
+    flex-direction: column;
+  }
+
+  .operation-results > div {
+    display: grid;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 480px) {
+  .routing-workflow ol {
+    grid-template-columns: 1fr;
+  }
+
+  .routing-workflow-step {
+    min-height: 54px;
+  }
+
+  .fallback-add-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fallback-add-row .btn {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .routing-workflow-step,
+  .route-rule-drawer,
+  .egress-drawer {
+    transition: none;
+    animation: none;
+  }
+}

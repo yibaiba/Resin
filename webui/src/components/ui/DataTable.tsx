@@ -1,4 +1,5 @@
 import { type ColumnDef, flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import type { KeyboardEvent } from "react";
 
 type DataTableProps<T> = {
     data: T[];
@@ -49,8 +50,10 @@ export function DataTable<T>({
                         return (
                             <tr
                                 key={row.id}
-                                className={isSelected ? "data-table-row-selected" : onRowClick ? "clickable-row" : undefined}
+                                className={[isSelected && "data-table-row-selected", onRowClick && "clickable-row"].filter(Boolean).join(" ") || undefined}
                                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+                                onKeyDown={onRowClick ? (event) => activateRow(event, row.original, onRowClick) : undefined}
+                                tabIndex={onRowClick ? 0 : undefined}
                             >
                                 {row.getVisibleCells().map((cell) => (
                                     <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
@@ -62,4 +65,10 @@ export function DataTable<T>({
             </table>
         </div>
     );
+}
+
+function activateRow<T>(event: KeyboardEvent<HTMLTableRowElement>, row: T, onRowClick: (row: T) => void) {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onRowClick(row);
 }

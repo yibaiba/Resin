@@ -1,7 +1,7 @@
 import { FlaskConical, GitFork, Globe2, RefreshCw, Route } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useI18n } from "../i18n";
-import { cn } from "../lib/cn";
+import { Card } from "./ui/Card";
 
 type RoutingWorkflowStep = "rules" | "fallback" | "egress" | "rotation" | "diagnostics";
 
@@ -17,8 +17,8 @@ export function RoutingWorkflowGuide({ active, embedded = false, platformID = DE
   const { t } = useI18n();
   const activeSteps = Array.isArray(active) ? active : [active];
   const steps = workflowSteps(platformID);
-  return (
-    <nav className={cn(!embedded && "card", "routing-workflow", embedded && "is-embedded")} aria-label={t("路由控制流程")}>
+  const guide = (
+    <nav className="routing-workflow-content" aria-label={t("路由控制流程")}>
       <div className="routing-workflow-heading">
         <strong>{t("路由控制流程")}</strong>
         <span>{t("按流量经过系统的顺序配置；日常排障可直接从诊断开始。")}</span>
@@ -28,7 +28,7 @@ export function RoutingWorkflowGuide({ active, embedded = false, platformID = DE
           const Icon = step.icon;
           return (
             <li key={step.id}>
-              <Link className={cn("routing-workflow-step", activeSteps.includes(step.id) && "is-active")} to={step.path} aria-current={activeSteps.includes(step.id) ? "step" : undefined}>
+              <Link className={`routing-workflow-step${activeSteps.includes(step.id) ? " is-active" : ""}`} to={step.path} aria-current={activeSteps.includes(step.id) ? "step" : undefined}>
                 <span className="routing-workflow-index">{index + 1}</span>
                 <Icon size={16} aria-hidden="true" />
                 <span><strong>{t(step.label)}</strong><small>{t(step.description)}</small></span>
@@ -39,6 +39,9 @@ export function RoutingWorkflowGuide({ active, embedded = false, platformID = DE
       </ol>
     </nav>
   );
+
+  if (embedded) return <div className="routing-workflow is-embedded">{guide}</div>;
+  return <Card className="platform-list-card platform-directory-card routing-workflow">{guide}</Card>;
 }
 
 function workflowSteps(platformID: string) {

@@ -13,6 +13,7 @@ type Props = {
   form: RoutingRuleForm;
   platforms: Platform[];
   pending: boolean;
+  presentation: "modal" | "drawer";
   title: string;
   onChange: (next: RoutingRuleForm) => void;
   onClose: () => void;
@@ -21,7 +22,7 @@ type Props = {
 
 type PatchForm = <Key extends keyof RoutingRuleForm>(key: Key, value: RoutingRuleForm[Key]) => void;
 
-export function RoutingRuleEditor({ form, platforms, pending, title, onChange, onClose, onSubmit }: Props) {
+export function RoutingRuleEditor({ form, platforms, pending, presentation, title, onChange, onClose, onSubmit }: Props) {
   const { t } = useI18n();
   const patch: PatchForm = (key, value) => onChange({ ...form, [key]: value });
   const submit = (event: FormEvent) => {
@@ -29,14 +30,13 @@ export function RoutingRuleEditor({ form, platforms, pending, title, onChange, o
     onSubmit();
   };
 
-  return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title">
-      <Card className="modal-card route-rule-modal">
-        <div className="modal-header">
-          <div><h3 id="routing-rule-editor-title">{t(title)}</h3><p>{t("先定义匹配范围，再决定命中后的动作。")}</p></div>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label={t("关闭")} title={t("关闭")}><X size={16} /></Button>
-        </div>
-        <form className="route-rule-form" onSubmit={submit}>
+  const content = (
+    <>
+      <div className={presentation === "drawer" ? "drawer-header" : "modal-header"}>
+        <div><h3 id="routing-rule-editor-title">{t(title)}</h3><p>{t("先定义匹配范围，再决定命中后的动作。")}</p></div>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label={t("关闭")} title={t("关闭")}><X size={16} /></Button>
+      </div>
+      <form className="route-rule-form form-grid" onSubmit={submit}>
           <div className="field-group route-rule-span-2">
             <label className="field-label" htmlFor="route-rule-name">{t("规则名称")}</label>
             <Input id="route-rule-name" value={form.name} placeholder={t("例如：拒绝内部域名")} onChange={(event) => patch("name", event.target.value)} autoFocus />
@@ -58,8 +58,21 @@ export function RoutingRuleEditor({ form, platforms, pending, title, onChange, o
             <Button variant="secondary" onClick={onClose}>{t("取消")}</Button>
             <Button type="submit" disabled={pending}><Save size={15} />{pending ? t("保存中...") : t("保存规则")}</Button>
           </div>
-        </form>
-      </Card>
+      </form>
+    </>
+  );
+
+  if (presentation === "drawer") {
+    return (
+      <div className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
+        <Card className="drawer-panel route-rule-drawer" onClick={(event) => event.stopPropagation()}>{content}</Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
+      <Card className="modal-card route-rule-modal" onClick={(event) => event.stopPropagation()}>{content}</Card>
     </div>
   );
 }

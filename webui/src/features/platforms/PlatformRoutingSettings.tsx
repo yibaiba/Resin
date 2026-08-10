@@ -37,16 +37,23 @@ export function PlatformRoutingSettings(props: Props) {
   };
 
   return (
-    <div className="platform-routing-settings route-rule-span-2">
-      <div id="platform-fallback" className="platform-config-subsection routing-anchor-target">
-        <div className="section-heading"><div><h5>{t("Platform fallback")}</h5><p>{t("仅当当前 Platform 没有可用节点时，才按顺序尝试后备 Platform；连接失败后不会重放请求。")}</p></div></div>
+    <>
+      <div id="platform-fallback" className="routing-settings-heading field-span-2 routing-anchor-target">
+        <h5>{t("Platform fallback")}</h5>
+        <p>{t("仅当当前 Platform 没有可用节点时，才按顺序尝试后备 Platform；连接失败后不会重放请求。")}</p>
+      </div>
+      <div className="field-group">
+        <label className="field-label" htmlFor="detail-edit-fallback-platform">{t("添加后备 Platform")}</label>
         <div className="fallback-add-row">
-          <Select value={candidate} onChange={(event) => setCandidate(event.target.value)} aria-label={t("选择 fallback 平台")}>
+          <Select id="detail-edit-fallback-platform" value={candidate} onChange={(event) => setCandidate(event.target.value)} aria-label={t("选择 fallback 平台")}>
             <option value="">{available.length ? t("选择平台") : t("没有可添加的平台")}</option>
             {available.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </Select>
           <Button variant="secondary" size="sm" onClick={add} disabled={!candidate}><Plus size={15} />{t("添加")}</Button>
         </div>
+      </div>
+      <div className="field-group fallback-order-field">
+        <span className="field-label">{t("回退顺序")}</span>
         {props.fallbackIDs.length === 0 ? <div className="fallback-empty"><strong>{t("未配置后备 Platform")}</strong><p>{t("当前 Platform 无可用节点时，请求会直接失败。")}</p></div> : null}
         <ol className="fallback-list">
           {props.fallbackIDs.map((id, index) => (
@@ -62,11 +69,12 @@ export function PlatformRoutingSettings(props: Props) {
           ))}
         </ol>
       </div>
-      <div id="sticky-rotation" className="platform-config-subsection rotation-config-grid routing-anchor-target">
-        <div className="section-heading route-rule-span-2"><div><h5>{t("粘性轮换")}</h5><p>{t("Account 租约使用达到间隔后，在下一次请求时按策略重新选择。")}</p></div></div>
-        <div className="field-group"><label className="field-label" htmlFor="detail-edit-rotation-interval">{t("轮换间隔")}</label><Input id="detail-edit-rotation-interval" value={props.rotationInterval} placeholder="30m" onChange={(event) => props.onRotationIntervalChange(event.target.value)} /><span className="field-help">{t("例如 30m 或 6h；0s 关闭定时轮换，且间隔必须小于粘性 TTL。")}</span></div>
-        <div className="field-group"><label className="field-label" htmlFor="detail-edit-rotation-strategy">{t("轮换策略")}</label><Select id="detail-edit-rotation-strategy" value={props.rotationStrategy} onChange={(event) => props.onRotationStrategyChange(event.target.value as RotationStrategy)}>{rotationStrategies.map((strategy) => <option key={strategy} value={strategy}>{t(rotationStrategyLabel[strategy])}</option>)}</Select><span className="field-help">{t(rotationStrategyDescription[props.rotationStrategy])}</span></div>
+      <div id="sticky-rotation" className="routing-settings-heading field-span-2 routing-anchor-target">
+        <h5>{t("粘性轮换")}</h5>
+        <p>{t("Account 租约使用达到间隔后，在下一次请求时按策略重新选择。")}</p>
       </div>
-    </div>
+      <div className="field-group"><label className="field-label" htmlFor="detail-edit-rotation-interval">{t("轮换间隔")}</label><Input id="detail-edit-rotation-interval" value={props.rotationInterval} placeholder="30m" onChange={(event) => props.onRotationIntervalChange(event.target.value)} /><span className="field-help">{t("例如 30m 或 6h；0s 关闭定时轮换，且间隔必须小于粘性 TTL。")}</span></div>
+      <div className="field-group"><label className="field-label" htmlFor="detail-edit-rotation-strategy">{t("轮换策略")}</label><Select id="detail-edit-rotation-strategy" value={props.rotationStrategy} onChange={(event) => props.onRotationStrategyChange(event.target.value as RotationStrategy)}>{rotationStrategies.map((strategy) => <option key={strategy} value={strategy}>{t(rotationStrategyLabel[strategy])}</option>)}</Select><span className="field-help">{t(rotationStrategyDescription[props.rotationStrategy])}</span></div>
+    </>
   );
 }
