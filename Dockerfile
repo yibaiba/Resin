@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1.7
 
-ARG BUILDPLATFORM
-
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
 WORKDIR /src/webui
 
