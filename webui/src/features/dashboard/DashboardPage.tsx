@@ -469,7 +469,7 @@ function TrendChart({ labels, series, formatYAxisLabel }: TrendChartProps) {
   return (
     <div className="trend-chart">
       <div className="trend-svg">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           <ComposedChart data={data} margin={chartMargin}>
             {leadingSeries?.fillColor ? (
               <defs>
@@ -627,7 +627,7 @@ function Histogram({ buckets }: { buckets: LatencyBucket[] }) {
 
   return (
     <div className="histogram-chart">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <BarChart data={data} margin={chartMargin}>
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">

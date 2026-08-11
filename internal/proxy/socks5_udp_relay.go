@@ -102,7 +102,11 @@ func (s *Socks5Inbound) createAndWriteUDPFlow(
 		)
 		association.recordRoute(relay.datagram.target, created.route)
 		if created.proxyErr != nil {
-			association.recordFailure(created.stage, created.err, created.proxyErr)
+			association.recordFailure(
+				created.stage,
+				created.err,
+				created.proxyErr,
+			)
 		}
 		return
 	}

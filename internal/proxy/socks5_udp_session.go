@@ -17,17 +17,19 @@ type socks5UDPAssociation struct {
 	platformName string
 	account      string
 
-	mu           sync.Mutex
-	source       netip.AddrPort
-	lastActivity time.Time
-	timer        *time.Timer
-	flows        map[string]*socks5UDPFlowRef
-	lifecycle    *requestLifecycle
-	done         chan struct{}
-	loggedTarget string
-	multiTarget  bool
-	netFailed    bool
-	closed       atomic.Bool
+	mu                sync.Mutex
+	source            netip.AddrPort
+	lastActivity      time.Time
+	timer             *time.Timer
+	flows             map[string]*socks5UDPFlowRef
+	lifecycle         *requestLifecycle
+	done              chan struct{}
+	loggedTarget      string
+	multiTarget       bool
+	networkGeneration uint64
+	// Only a successful upstream write after this generation may recover the association.
+	failureGeneration uint64
+	closed            atomic.Bool
 }
 
 type socks5UDPFlow interface {
@@ -164,18 +166,42 @@ func (a *socks5UDPAssociation) recordTraffic(ingressBytes, egressBytes int64) {
 	}
 }
 
-func (a *socks5UDPAssociation) recordSuccess() {
+func (a *socks5UDPAssociation) recordAssociationSuccess() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.lifecycle != nil && !a.netFailed {
+	if a.lifecycle != nil && a.failureGeneration == 0 {
 		a.lifecycle.setNetOK(true)
 	}
 }
 
-func (a *socks5UDPAssociation) recordFailure(stage string, err error, proxyErr *ProxyError) {
+func (a *socks5UDPAssociation) beginRecoveryGeneration() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.netFailed = true
+	a.networkGeneration++
+	return a.networkGeneration
+}
+
+func (a *socks5UDPAssociation) recordFlowSuccess(generation uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failureGeneration != 0 && generation <= a.failureGeneration {
+		return
+	}
+	a.failureGeneration = 0
+	if a.lifecycle != nil {
+		a.lifecycle.setNetOK(true)
+	}
+}
+
+func (a *socks5UDPAssociation) recordFailure(
+	stage string,
+	err error,
+	proxyErr *ProxyError,
+) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.networkGeneration++
+	a.failureGeneration = a.networkGeneration
 	if a.lifecycle == nil {
 		return
 	}

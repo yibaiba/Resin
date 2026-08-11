@@ -101,6 +101,25 @@ function displayPlatformName(log: RequestLogItem): string {
   return log.platform_name || log.requested_platform_name;
 }
 
+function networkStatus(log: RequestLogItem): {
+  label: "成功" | "失败" | "已建立" | "已恢复";
+  variant: "success" | "warning" | "info";
+} {
+  if (!log.net_ok) {
+    return { label: "失败", variant: "warning" };
+  }
+  if (log.http_method !== "UDP_ASSOCIATE") {
+    return { label: "成功", variant: "success" };
+  }
+  if (log.upstream_stage || log.upstream_err_msg) {
+    return { label: "已恢复", variant: "info" };
+  }
+  if ((log.ingress_bytes || 0) + (log.egress_bytes || 0) === 0) {
+    return { label: "已建立", variant: "info" };
+  }
+  return { label: "成功", variant: "success" };
+}
+
 function decodeBase64ToBytes(raw: string): Uint8Array | null {
   if (!raw) {
     return new Uint8Array(0);
@@ -670,11 +689,10 @@ export function RequestLogsPage() {
 
       col.accessor("net_ok", {
         header: t("网络"),
-        cell: (info) => (
-          <Badge variant={info.getValue() ? "success" : "warning"}>
-            {info.getValue() ? t("成功") : t("失败")}
-          </Badge>
-        ),
+        cell: (info) => {
+          const status = networkStatus(info.row.original);
+          return <Badge variant={status.variant}>{t(status.label)}</Badge>;
+        },
       }),
       col.accessor("first_byte_duration_ms", {
         header: t("首字耗时"),
@@ -996,6 +1014,14 @@ export function RequestLogsPage() {
                       {detailLog.http_method || "-"} {detailLog.http_status || "-"}
                     </p>
                   </div>
+                  <div>
+                    <span>{t("网络状态")}</span>
+                    <p>
+                      <Badge variant={networkStatus(detailLog).variant}>
+                        {t(networkStatus(detailLog).label)}
+                      </Badge>
+                    </p>
+                  </div>
 
                   <div>
                     <span>{t("首字耗时")}</span>
@@ -1027,7 +1053,11 @@ export function RequestLogsPage() {
               <section className="platform-drawer-section">
                 <div className="platform-drawer-section-head">
                   <h4>{t("诊断")}</h4>
-                  <p>{t("异常排查与连接状态分析。")}</p>
+                  <p>
+                    {detailLog.net_ok && (detailLog.upstream_stage || detailLog.upstream_err_msg)
+                      ? t("连接已恢复；以下为本次会话保留的历史错误。")
+                      : t("异常排查与连接状态分析。")}
+                  </p>
                 </div>
                 <div style={{
                   backgroundColor: "var(--surface)",

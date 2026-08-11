@@ -97,6 +97,16 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "{{count}} 个节点": "{{count}} nodes",
   "确认排空选中的 {{count}} 个出口 IP？": "Drain the selected {{count}} egress IPs?",
   "正在加载出口 IP...": "Loading egress IPs...",
+  "页面加载中...": "Loading page...",
+  "页面加载失败": "Unable to load page",
+  "页面资源加载失败，请重新加载应用。":
+    "The page resources could not be loaded. Reload the application to try again.",
+  "重新加载": "Reload",
+  "正在验证管理员会话...": "Validating administrator session...",
+  "无法验证管理员会话": "Unable to validate administrator session",
+  "Resin API 暂时不可用，当前令牌未被清除。":
+    "The Resin API is temporarily unavailable. Your current token has not been cleared.",
+  "重试连接": "Retry connection",
   "暂无出口 IP": "No egress IPs",
   "路由诊断": "Route Diagnostics",
   "复现路由决策并检查真实 TCP 连通性。": "Reproduce route decisions and inspect real TCP connectivity.",
@@ -401,6 +411,10 @@ Note: Once enabled, requests without authentication information are rejected ins
   "有更多数据": "More data available",
   "成功": "Success",
   "失败": "Failed",
+  "已建立": "Established",
+  "已恢复": "Recovered",
+  "连接已恢复；以下为本次会话保留的历史错误。":
+    "The connection recovered; the error below is retained from this session's history.",
   "未知错误": "Unknown error",
   "错误": "Error",
   "状态": "Status",

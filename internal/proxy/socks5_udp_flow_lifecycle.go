@@ -30,6 +30,12 @@ func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
 	}
 	f.writeMu.Lock()
 	n, err := writeUDPRelayPacket(f.packetConn, payload, f.upstream)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		f.recoveryGeneration = f.association.beginRecoveryGeneration()
+	}
 	f.writeMu.Unlock()
 	if n > 0 {
 		f.association.recordTraffic(0, int64(n))
@@ -37,16 +43,12 @@ func (f *socks5UDPRelayFlow) writePayload(payload []byte) error {
 			f.metricsSink.OnTrafficDelta(0, int64(n))
 		}
 	}
-	if err == nil && n != len(payload) {
-		err = io.ErrShortWrite
-	}
 	if err != nil {
 		if !f.closed.Load() {
 			f.fail("udp_upstream_write", err, true)
 		}
 		return err
 	}
-	f.association.recordSuccess()
 	return nil
 }
 
@@ -77,7 +79,10 @@ func (f *socks5UDPRelayFlow) readResponses() {
 	}
 }
 
-func (f *socks5UDPRelayFlow) relayResponse(payload []byte, source net.Addr) error {
+func (f *socks5UDPRelayFlow) relayResponse(
+	payload []byte,
+	source net.Addr,
+) error {
 	if !f.touchIdleTimeout() {
 		return errSocks5UDPFlowClosed
 	}
@@ -105,6 +110,12 @@ func (f *socks5UDPRelayFlow) relayResponse(payload []byte, source net.Addr) erro
 
 func (f *socks5UDPRelayFlow) recordResponse(payloadLength int) {
 	f.association.recordTraffic(int64(payloadLength), 0)
+	f.writeMu.Lock()
+	recoveryGeneration := f.recoveryGeneration
+	f.writeMu.Unlock()
+	if recoveryGeneration != 0 {
+		f.association.recordFlowSuccess(recoveryGeneration)
+	}
 	if f.metricsSink != nil {
 		f.metricsSink.OnTrafficDelta(int64(payloadLength), 0)
 	}

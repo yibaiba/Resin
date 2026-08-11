@@ -57,10 +57,14 @@ func (s *Socks5Inbound) serveUDPAssociate(session socks5Session) {
 	defer association.Close()
 
 	if err := writeSocks5Reply(session.conn, socks5ReplySucceeded, replyAddr); err != nil {
-		association.recordFailure("socks5_udp_associate_response_write", err, ErrUpstreamRequestFailed)
+		association.recordFailure(
+			"socks5_udp_associate_response_write",
+			err,
+			ErrUpstreamRequestFailed,
+		)
 		return
 	}
-	association.recordSuccess()
+	association.recordAssociationSuccess()
 	if !association.startIdleTimeout() {
 		return
 	}

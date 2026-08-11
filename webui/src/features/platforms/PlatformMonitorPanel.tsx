@@ -550,7 +550,7 @@ function TrendLineChart({ data, lines, yTickFormatter, tooltipValueFormatter, em
   return (
     <div className="trend-chart">
       <div className="trend-svg">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
           <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 4, left: 8 }}>
             <CartesianGrid stroke="rgba(65, 87, 121, 0.16)" strokeDasharray="2 4" vertical={false} />
             <XAxis
@@ -657,7 +657,7 @@ function LatencyHistogram({ buckets, emptyText }: LatencyHistogramProps) {
 
   return (
     <div className="histogram-chart">
-      <ResponsiveContainer width="100%" height="100%">
+      <ResponsiveContainer width="100%" height="100%" minWidth={0}>
         <BarChart data={data} margin={{ top: 6, right: 8, bottom: 4, left: 8 }}>
           <CartesianGrid stroke="rgba(65, 87, 121, 0.16)" strokeDasharray="2 4" vertical={false} />
           <XAxis

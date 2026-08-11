@@ -8,6 +8,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { DataTable } from "../../components/ui/DataTable";
 import { Input } from "../../components/ui/Input";
+import { OffsetPagination } from "../../components/ui/OffsetPagination";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
@@ -19,18 +20,27 @@ import { batchDrainEgressIPs, listEgressIPs, rotateEgressLeases, updateEgressPol
 import { EgressIPDrawer } from "./EgressIPDrawer";
 import type { BatchEgressResult, EgressIP, EgressPolicyInput, EgressRotationResult } from "./types";
 
+const EGRESS_PAGE_SIZE_OPTIONS = [25, 50, 100, 200] as const;
+
 export function EgressIPsPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const { toasts, showToast, dismissToast } = useToast();
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [selected, setSelected] = useState<string[]>([]);
   const [editingIP, setEditingIP] = useState<string | null>(null);
   const [resumeAt, setResumeAt] = useState("");
   const [batchResults, setBatchResults] = useState<BatchEgressResult[]>([]);
   const [rotationResults, setRotationResults] = useState<EgressRotationResult[]>([]);
-  const egressQuery = useQuery({ queryKey: ["egress-ips", deferredSearch], queryFn: () => listEgressIPs(deferredSearch) });
+  const egressQuery = useQuery({
+    queryKey: ["egress-ips", deferredSearch, page, pageSize],
+    queryFn: () => listEgressIPs(deferredSearch, pageSize, page * pageSize),
+    placeholderData: (previous) => previous,
+    staleTime: 0,
+  });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["egress-ips"] });
   const policyMutation = useMutation({
     mutationFn: ({ ip, input }: { ip: string; input: EgressPolicyInput }) => updateEgressPolicy(ip, input),
@@ -47,13 +57,34 @@ export function EgressIPsPage() {
     onSuccess: async (response) => { setRotationResults(response.items); await invalidate(); },
     onError: (error) => showToast("error", formatApiErrorMessage(error, t)),
   });
-  const items = egressQuery.data ?? [];
+  const items = egressQuery.data?.items ?? [];
+  const totalItems = egressQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const searchPending = search !== deferredSearch || egressQuery.isFetching;
   const editing = editingIP ? items.find((item) => item.egress_ip === editingIP) ?? null : null;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  if (!egressQuery.isPlaceholderData && page >= totalPages) {
+    setPage(totalPages - 1);
+    if (selected.length > 0) setSelected([]);
+    if (editingIP) setEditingIP(null);
+  }
+
   const toggle = (ip: string, checked: boolean) => setSelected((current) => checked ? current.includes(ip) ? current : [...current, ip] : current.filter((item) => item !== ip));
   const changeSearch = (value: string) => {
     setSearch(value);
+    setPage(0);
+    setSelected([]);
+    setEditingIP(null);
+  };
+  const changePage = (nextPage: number) => {
+    setPage(nextPage);
+    setSelected([]);
+    setEditingIP(null);
+  };
+  const changePageSize = (nextPageSize: number) => {
+    setPageSize(nextPageSize);
+    setPage(0);
     setSelected([]);
     setEditingIP(null);
   };
@@ -95,6 +126,16 @@ export function EgressIPsPage() {
         {egressQuery.isLoading ? <p className="muted egress-state">{t("正在加载出口 IP...")}</p> : null}
         {!egressQuery.isLoading && items.length === 0 ? <div className="empty-box egress-empty"><Droplets size={18} /><div><strong>{t("暂无出口 IP")}</strong><p>{t("节点完成出口探测并获取公网 IP 后，会自动出现在这里。")}</p></div><Button variant="secondary" size="sm" onClick={() => void egressQuery.refetch()}><RefreshCw size={15} />{t("重新检查")}</Button></div> : null}
         {items.length ? <DataTable data={items} columns={columns} onRowClick={(item) => setEditingIP(item.egress_ip)} selectedRowId={editingIP ?? undefined} getRowId={(item) => item.egress_ip} className="data-table-egress" wrapClassName="egress-table-wrap" /> : null}
+        <OffsetPagination
+          page={page}
+          totalPages={totalPages}
+          totalItems={totalItems}
+          pageSize={pageSize}
+          pageSizeOptions={EGRESS_PAGE_SIZE_OPTIONS}
+          disabled={searchPending}
+          onPageChange={changePage}
+          onPageSizeChange={changePageSize}
+        />
       </Card>
       {batchResults.length ? <ResultPanel title={t("批量排空结果")} items={batchResults.map((item) => ({ key: item.egress_ip, ok: item.success, detail: item.error }))} /> : null}
       {rotationResults.length ? <ResultPanel title={t("租约轮换结果")} items={rotationResults.map((item) => ({ key: `${item.platform_id} / ${item.account}`, ok: !item.error, detail: item.error || routingLabel(item.status) }))} /> : null}

@@ -105,6 +105,92 @@ func newBlockingClosableBuilder() *blockingClosableBuilder {
 	}
 }
 
+type activeConnectionBuilder struct {
+	outbound *activeConnectionOutbound
+}
+
+func (b *activeConnectionBuilder) Build(_ json.RawMessage) (adapter.Outbound, error) {
+	b.outbound = &activeConnectionOutbound{}
+	return b.outbound, nil
+}
+
+type activeConnectionOutbound struct {
+	closableOnly
+
+	mu         sync.Mutex
+	streamPeer net.Conn
+	packetConn *testPacketConn
+}
+
+func (o *activeConnectionOutbound) DialContext(
+	context.Context,
+	string,
+	M.Socksaddr,
+) (net.Conn, error) {
+	conn, peer := net.Pipe()
+	o.mu.Lock()
+	o.streamPeer = peer
+	o.mu.Unlock()
+	return conn, nil
+}
+
+func (o *activeConnectionOutbound) ListenPacket(
+	context.Context,
+	M.Socksaddr,
+) (net.PacketConn, error) {
+	conn := &testPacketConn{}
+	o.mu.Lock()
+	o.packetConn = conn
+	o.mu.Unlock()
+	return conn, nil
+}
+
+func (o *activeConnectionOutbound) peer(t *testing.T) net.Conn {
+	t.Helper()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.streamPeer == nil {
+		t.Fatal("expected stream peer")
+	}
+	return o.streamPeer
+}
+
+type testPacketConn struct {
+	closed atomic.Bool
+}
+
+func (c *testPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, nil, net.ErrClosed
+}
+
+func (c *testPacketConn) WriteTo(payload []byte, _ net.Addr) (int, error) {
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	return len(payload), nil
+}
+
+func (c *testPacketConn) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+func (c *testPacketConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{}
+}
+
+func (c *testPacketConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (c *testPacketConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (c *testPacketConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
 func (b *blockingClosableBuilder) Build(_ json.RawMessage) (adapter.Outbound, error) {
 	select {
 	case <-b.started:
@@ -310,6 +396,102 @@ func TestRemoveNodeOutbound(t *testing.T) {
 	mgr.RemoveNodeOutbound(entry)
 	if entry.HasOutbound() {
 		t.Fatal("expected HasOutbound() == false after RemoveNodeOutbound")
+	}
+}
+
+func TestRemoveNodeOutbound_DefersCloseUntilActiveStreamEnds(t *testing.T) {
+	entry := newTestEntry(`{"type":"active-stream"}`)
+	pool := &mockPool{}
+	pool.addEntry(entry)
+	builder := &activeConnectionBuilder{}
+	mgr := NewOutboundManager(pool, builder)
+	mgr.EnsureNodeOutbound(entry.Hash)
+
+	outbound := *entry.Outbound.Load()
+	conn, err := outbound.DialContext(context.Background(), "tcp", M.Socksaddr{})
+	if err != nil {
+		t.Fatalf("dial active stream: %v", err)
+	}
+	peer := builder.outbound.peer(t)
+	defer peer.Close()
+
+	mgr.RemoveNodeOutbound(entry)
+	if builder.outbound.closed.Load() {
+		t.Fatal("underlying outbound closed while stream was active")
+	}
+	readDone := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1)
+		_, err := peer.Read(buffer)
+		readDone <- err
+	}()
+	if _, err := conn.Write([]byte("x")); err != nil {
+		t.Fatalf("active stream interrupted after removal: %v", err)
+	}
+	if err := <-readDone; err != nil {
+		t.Fatalf("read active stream after removal: %v", err)
+	}
+	if _, err := outbound.DialContext(context.Background(), "tcp", M.Socksaddr{}); !errors.Is(err, ErrOutboundRetired) {
+		t.Fatalf("expected retired outbound error, got %v", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close active stream: %v", err)
+	}
+	if !builder.outbound.closed.Load() {
+		t.Fatal("underlying outbound remained open after stream closed")
+	}
+}
+
+func TestRemoveNodeOutbound_DefersCloseUntilActivePacketConnEnds(t *testing.T) {
+	entry := newTestEntry(`{"type":"active-packet"}`)
+	pool := &mockPool{}
+	pool.addEntry(entry)
+	builder := &activeConnectionBuilder{}
+	mgr := NewOutboundManager(pool, builder)
+	mgr.EnsureNodeOutbound(entry.Hash)
+
+	outbound := *entry.Outbound.Load()
+	conn, err := outbound.ListenPacket(context.Background(), M.Socksaddr{})
+	if err != nil {
+		t.Fatalf("listen packet: %v", err)
+	}
+	mgr.RemoveNodeOutbound(entry)
+	if builder.outbound.closed.Load() {
+		t.Fatal("underlying outbound closed while packet connection was active")
+	}
+	if _, err := conn.WriteTo([]byte("x"), &net.UDPAddr{}); err != nil {
+		t.Fatalf("active packet connection interrupted after removal: %v", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close packet connection: %v", err)
+	}
+	if !builder.outbound.closed.Load() {
+		t.Fatal("underlying outbound remained open after packet connection closed")
+	}
+}
+
+func TestOutboundManagerClose_ForcesActiveOutboundClosed(t *testing.T) {
+	entry := newTestEntry(`{"type":"active-shutdown"}`)
+	pool := &mockPool{}
+	pool.addEntry(entry)
+	builder := &activeConnectionBuilder{}
+	mgr := NewOutboundManager(pool, builder)
+	mgr.EnsureNodeOutbound(entry.Hash)
+
+	outbound := *entry.Outbound.Load()
+	conn, err := outbound.DialContext(context.Background(), "tcp", M.Socksaddr{})
+	if err != nil {
+		t.Fatalf("dial active stream: %v", err)
+	}
+	defer conn.Close()
+
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("close manager: %v", err)
+	}
+	if !builder.outbound.closed.Load() {
+		t.Fatal("manager shutdown did not force-close active outbound")
 	}
 }
 

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -54,6 +55,102 @@ func TestSocks5UDPAssociationLogClearsMetadataForMultipleTargets(t *testing.T) {
 	}
 	if entry.UpstreamStage != "udp_upstream_read" || entry.UpstreamErrMsg == "" {
 		t.Fatalf("association failure summary was lost: %+v", entry)
+	}
+}
+
+func TestSocks5UDPAssociationLogMarksRecoveredTargetSuccessful(t *testing.T) {
+	association, emitter := newLoggedUDPAssociation(t)
+	association.recordAssociationSuccess()
+	association.recordFailure(
+		"udp_upstream_read",
+		errors.New("temporary upstream read failure"),
+		ErrUpstreamRequestFailed,
+	)
+	recoveryGeneration := association.beginRecoveryGeneration()
+	association.recordFlowSuccess(recoveryGeneration)
+	if err := association.Close(); err != nil {
+		t.Fatalf("close association: %v", err)
+	}
+
+	finished, entry := readUDPAssociationEvents(t, emitter)
+	if !finished.NetOK || !entry.NetOK {
+		t.Fatalf("recovered association remained failed: finished=%+v log=%+v", finished, entry)
+	}
+	if entry.UpstreamStage != "udp_upstream_read" || entry.UpstreamErrMsg == "" {
+		t.Fatalf("recovered association lost failure history: %+v", entry)
+	}
+}
+
+func TestSocks5UDPFlowSuccessfulWriteAfterFailureCanRecover(t *testing.T) {
+	association, emitter := newLoggedUDPAssociation(t)
+	association.recordFailure(
+		"udp_upstream_read",
+		errors.New("temporary upstream read failure"),
+		ErrUpstreamRequestFailed,
+	)
+	packetConn := newControlledPacketConn(nil, nil)
+	flow := &socks5UDPRelayFlow{
+		association: association,
+		target:      "127.0.0.1:5304",
+		packetConn:  packetConn,
+		upstream:    &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5304},
+		idleTimeout: time.Minute,
+	}
+	t.Cleanup(func() { _ = flow.Close() })
+
+	payload := []byte("recovery request")
+	if err := flow.writePayload(payload); err != nil {
+		t.Fatalf("write recovery payload: %v", err)
+	}
+	flow.recordResponse(len(payload))
+	if err := association.Close(); err != nil {
+		t.Fatalf("close association: %v", err)
+	}
+
+	finished, entry := readUDPAssociationEvents(t, emitter)
+	if !finished.NetOK || !entry.NetOK {
+		t.Fatalf("successful post-failure flow remained failed: finished=%+v log=%+v", finished, entry)
+	}
+}
+
+func TestSocks5UDPAssociationIgnoresResponsesFromPreFailureFlows(t *testing.T) {
+	association, emitter := newLoggedUDPAssociation(t)
+	firstGeneration := association.beginRecoveryGeneration()
+	secondGeneration := association.beginRecoveryGeneration()
+	association.recordFailure(
+		"udp_upstream_write",
+		errors.New("latest upstream write failure"),
+		ErrUpstreamRequestFailed,
+	)
+	association.recordFlowSuccess(firstGeneration)
+	association.recordFlowSuccess(secondGeneration)
+	if err := association.Close(); err != nil {
+		t.Fatalf("close association: %v", err)
+	}
+
+	finished, entry := readUDPAssociationEvents(t, emitter)
+	if finished.NetOK || entry.NetOK {
+		t.Fatalf("pre-failure flow response cleared latest failure: finished=%+v log=%+v", finished, entry)
+	}
+}
+
+func TestSocks5UDPAssociationFailureStateUsesConstantSpace(t *testing.T) {
+	association, _ := newLoggedUDPAssociation(t)
+	const failures = 1_000
+	for range failures {
+		association.recordFailure(
+			"udp_upstream_read",
+			errors.New("upstream failure"),
+			ErrUpstreamRequestFailed,
+		)
+	}
+
+	association.mu.Lock()
+	failureGeneration := association.failureGeneration
+	networkGeneration := association.networkGeneration
+	association.mu.Unlock()
+	if failureGeneration != failures || networkGeneration != failures {
+		t.Fatalf("failure generation=%d network generation=%d", failureGeneration, networkGeneration)
 	}
 }
 

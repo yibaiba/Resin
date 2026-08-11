@@ -63,15 +63,16 @@ type socks5UDPRelayFlow struct {
 	metricsSink MetricsEventSink
 	idleTimeout time.Duration
 
-	writeMu      sync.Mutex
-	idleMu       sync.Mutex
-	lastActivity time.Time
-	idleTimer    *time.Timer
-	retiring     bool
-	closeOnce    sync.Once
-	failureOnce  sync.Once
-	healthOKOnce sync.Once
-	closed       atomic.Bool
+	writeMu            sync.Mutex
+	recoveryGeneration uint64
+	idleMu             sync.Mutex
+	lastActivity       time.Time
+	idleTimer          *time.Timer
+	retiring           bool
+	closeOnce          sync.Once
+	failureOnce        sync.Once
+	healthOKOnce       sync.Once
+	closed             atomic.Bool
 }
 
 func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPFlowCreateResult {

@@ -52,6 +52,7 @@ type OutboundManager struct {
 
 	mu        sync.Mutex
 	closed    bool
+	managed   map[*managedOutbound]node.Hash
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -62,7 +63,11 @@ type detachedOutbound struct {
 }
 
 func NewOutboundManager(pool PoolAccessor, builder OutboundBuilder) *OutboundManager {
-	return &OutboundManager{pool: pool, builder: builder}
+	return &OutboundManager{
+		pool:    pool,
+		builder: builder,
+		managed: make(map[*managedOutbound]node.Hash),
+	}
 }
 
 func (m *OutboundManager) isLiveEntry(hash node.Hash, entry *node.NodeEntry) bool {
@@ -98,9 +103,11 @@ func (m *OutboundManager) EnsureNodeOutbound(hash node.Hash) {
 		return
 	}
 
+	managed := newManagedOutbound(ob, m.removeManaged)
+	var published adapter.Outbound = managed
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		_ = closeOutbound(ob)
 		return
 	}
@@ -108,22 +115,23 @@ func (m *OutboundManager) EnsureNodeOutbound(hash node.Hash) {
 	// Build can race with node deletion/replacement. If this entry is no longer
 	// the pool's live value for the hash, discard the build result.
 	if !m.isLiveEntry(hash, entry) {
+		m.mu.Unlock()
 		_ = closeOutbound(ob)
 		return
 	}
 
-	if !entry.Outbound.CompareAndSwap(nil, &ob) {
+	if !entry.Outbound.CompareAndSwap(nil, &published) {
+		m.mu.Unlock()
 		// Another goroutine won the race. Close the losing build result.
 		_ = closeOutbound(ob)
 		return
 	}
+	m.managed[managed] = hash
+	m.mu.Unlock()
 
 	// Close-and-clear if the node disappeared/replaced right after CAS.
 	if !m.isLiveEntry(hash, entry) {
-		old := entry.Outbound.Swap(nil)
-		if old != nil {
-			_ = closeOutbound(*old)
-		}
+		m.RemoveNodeOutbound(entry)
 	}
 }
 
@@ -135,9 +143,20 @@ func (m *OutboundManager) RemoveNodeOutbound(entry *node.NodeEntry) {
 		return
 	}
 	old := entry.Outbound.Swap(nil)
-	if old != nil {
-		_ = closeOutbound(*old)
+	if old == nil {
+		return
 	}
+	if managed, ok := (*old).(*managedOutbound); ok {
+		_ = managed.retire()
+		return
+	}
+	_ = closeOutbound(*old)
+}
+
+func (m *OutboundManager) removeManaged(outbound *managedOutbound) {
+	m.mu.Lock()
+	delete(m.managed, outbound)
+	m.mu.Unlock()
 }
 
 // Close prevents future builds, clears every published outbound, and closes
@@ -161,16 +180,26 @@ func (m *OutboundManager) detachAllOutbounds() []detachedOutbound {
 	defer m.mu.Unlock()
 
 	m.closed = true
-	var outbounds []detachedOutbound
+	outbounds := make([]detachedOutbound, 0, len(m.managed))
+	seen := make(map[*managedOutbound]struct{}, len(m.managed))
 	m.pool.RangeNodes(func(hash node.Hash, entry *node.NodeEntry) bool {
 		if entry == nil {
 			return true
 		}
 		if old := entry.Outbound.Swap(nil); old != nil {
 			outbounds = append(outbounds, detachedOutbound{hash: hash, outbound: *old})
+			if managed, ok := (*old).(*managedOutbound); ok {
+				seen[managed] = struct{}{}
+			}
 		}
 		return true
 	})
+	for managed, hash := range m.managed {
+		if _, ok := seen[managed]; !ok {
+			outbounds = append(outbounds, detachedOutbound{hash: hash, outbound: managed})
+		}
+	}
+	clear(m.managed)
 	sort.Slice(outbounds, func(i, j int) bool {
 		return bytes.Compare(outbounds[i].hash[:], outbounds[j].hash[:]) < 0
 	})

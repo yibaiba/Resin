@@ -4,11 +4,14 @@ import type { BatchDrainResponse, EgressIP, EgressPolicyInput, EgressRotationRes
 
 const basePath = "/api/v1/egress-ips";
 
-export async function listEgressIPs(keyword = ""): Promise<EgressIP[]> {
-  const query = new URLSearchParams({ limit: "1000", offset: "0" });
+export async function listEgressIPs(
+  keyword: string,
+  limit: number,
+  offset: number,
+): Promise<PageResponse<EgressIP>> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (keyword.trim()) query.set("keyword", keyword.trim());
-  const page = await apiRequest<PageResponse<EgressIP>>(`${basePath}?${query}`);
-  return page.items;
+  return apiRequest<PageResponse<EgressIP>>(basePath + "?" + query.toString());
 }
 
 export function updateEgressPolicy(ip: string, input: EgressPolicyInput): Promise<EgressIP> {

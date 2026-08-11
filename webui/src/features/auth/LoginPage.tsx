@@ -18,6 +18,38 @@ const formSchema = z.object({
 
 type LoginFormInput = z.infer<typeof formSchema>;
 
+const DEFAULT_NEXT_PATH = "/platforms";
+const ALLOWED_NEXT_PATHS = [
+  "/",
+  "/dashboard",
+  "/platforms",
+  "/subscriptions",
+  "/nodes",
+  "/endpoints",
+  "/rules",
+  "/routing-rules",
+  "/egress-ips",
+  "/routing-diagnostics",
+  "/request-logs",
+  "/resources",
+  "/system-config",
+] as const;
+
+function safeNextPath(search: string): string {
+  const raw = new URLSearchParams(search).get("next");
+  if (!raw || raw.includes("\\")) {
+    return DEFAULT_NEXT_PATH;
+  }
+  try {
+    const target = new URL(raw, window.location.origin);
+    const allowed = target.origin === window.location.origin &&
+      ALLOWED_NEXT_PATHS.some((path) => target.pathname === path || (path === "/platforms" && target.pathname.startsWith("/platforms/")));
+    return allowed ? target.pathname + target.search + target.hash : DEFAULT_NEXT_PATH;
+  } catch {
+    return DEFAULT_NEXT_PATH;
+  }
+}
+
 export function LoginPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -37,8 +69,7 @@ export function LoginPage() {
   });
 
   useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    const next = params.get("next") || "/platforms";
+    const next = safeNextPath(location.search);
 
     if (storedToken) {
       navigate(next, { replace: true });
@@ -50,16 +81,14 @@ export function LoginPage() {
 
     const checkAuthMode = async () => {
       try {
-        const response = await fetch("/api/v1/system/info", {
-          method: "GET",
+        await apiRequest("/api/v1/system/info", {
+          auth: false,
           signal: controller.signal,
         });
         if (!active) {
           return;
         }
-        if (response.ok) {
-          navigate(next, { replace: true });
-        }
+        navigate(next, { replace: true });
       } catch {
         // Keep login page for secured deployments or temporary network errors.
       }
@@ -91,9 +120,7 @@ export function LoginPage() {
 
     setToken(values.token);
 
-    const params = new URLSearchParams(location.search);
-    const next = params.get("next") || "/platforms";
-    navigate(next, { replace: true });
+    navigate(safeNextPath(location.search), { replace: true });
   });
 
   return (

@@ -17,10 +17,10 @@ import {
 } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { motion } from "framer-motion";
 import { Button } from "./ui/Button";
 import { cn } from "../lib/cn";
 import { apiRequest } from "../lib/api-client";
+import { queryClient } from "../lib/query-client";
 import { useAuthStore } from "../features/auth/auth-store";
 import { getEnvConfig } from "../features/systemConfig/api";
 import { useI18n } from "../i18n";
@@ -87,6 +87,7 @@ export function AppShell() {
   const showAuthWarning = authWarnings.length > 0;
 
   const logout = () => {
+    queryClient.clear();
     clearToken();
     navigate("/login", { replace: true });
   };
@@ -167,15 +168,9 @@ export function AppShell() {
       </aside>
 
       <main className="main">
-        <motion.div
-          key="content"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.24, ease: "easeOut" }}
-          className="content"
-        >
+        <div className="content">
           <Outlet />
-        </motion.div>
+        </div>
       </main>
     </div>
   );

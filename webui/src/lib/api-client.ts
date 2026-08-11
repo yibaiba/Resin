@@ -1,4 +1,5 @@
-import { getStoredAuthToken } from "../features/auth/auth-store";
+import { getStoredAuthToken, useAuthStore } from "../features/auth/auth-store";
+import { queryClient } from "./query-client";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() ?? "";
 
@@ -56,16 +57,14 @@ async function parseErrorBody(response: Response): Promise<ApiErrorBody | null> 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, auth = true, token, signal } = options;
   const headers = new Headers();
+  const requestToken = auth ? token?.trim() || getStoredAuthToken() : "";
 
   if (body !== undefined) {
     headers.set("Content-Type", "application/json; charset=utf-8");
   }
 
-  if (auth) {
-    const resolvedToken = token?.trim() || getStoredAuthToken();
-    if (resolvedToken) {
-      headers.set("Authorization", `Bearer ${resolvedToken}`);
-    }
+  if (requestToken) {
+    headers.set("Authorization", `Bearer ${requestToken}`);
   }
 
   const response = await fetch(buildURL(path), {
@@ -79,6 +78,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const parsed = await parseErrorBody(response);
     const code = parsed?.error?.code ?? "HTTP_ERROR";
     const message = parsed?.error?.message ?? response.statusText;
+    const tokenIsCurrent = getStoredAuthToken() === requestToken;
+    if (response.status === 401 && auth && token === undefined && tokenIsCurrent) {
+      queryClient.clear();
+      useAuthStore.getState().clearToken();
+    }
     throw new ApiError(response.status, code, message, parsed);
   }
 
