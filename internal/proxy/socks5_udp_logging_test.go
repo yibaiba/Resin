@@ -102,7 +102,7 @@ func TestSocks5UDPFlowSuccessfulWriteAfterFailureCanRecover(t *testing.T) {
 	if err := flow.writePayload(payload); err != nil {
 		t.Fatalf("write recovery payload: %v", err)
 	}
-	flow.recordResponse(len(payload))
+	flow.recordResponse(len(payload), flow.snapshotRecoveryGeneration())
 	if err := association.Close(); err != nil {
 		t.Fatalf("close association: %v", err)
 	}
@@ -110,6 +110,36 @@ func TestSocks5UDPFlowSuccessfulWriteAfterFailureCanRecover(t *testing.T) {
 	finished, entry := readUDPAssociationEvents(t, emitter)
 	if !finished.NetOK || !entry.NetOK {
 		t.Fatalf("successful post-failure flow remained failed: finished=%+v log=%+v", finished, entry)
+	}
+}
+
+func TestSocks5UDPFlowOldResponseCannotBorrowNewRecoveryGeneration(t *testing.T) {
+	association, emitter := newLoggedUDPAssociation(t)
+	packetConn := newControlledPacketConn(nil, nil)
+	flow := &socks5UDPRelayFlow{
+		association: association,
+		packetConn:  packetConn,
+		upstream:    &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5305},
+		idleTimeout: time.Minute,
+	}
+	t.Cleanup(func() { _ = flow.Close() })
+
+	if err := flow.writePayload([]byte("old request")); err != nil {
+		t.Fatalf("write old request: %v", err)
+	}
+	oldGeneration := flow.snapshotRecoveryGeneration()
+	association.recordFailure("udp_upstream_read", errors.New("newer failure"), ErrUpstreamRequestFailed)
+	if err := flow.writePayload([]byte("new request")); err != nil {
+		t.Fatalf("write new request: %v", err)
+	}
+	flow.recordResponse(len("old response"), oldGeneration)
+	if err := association.Close(); err != nil {
+		t.Fatalf("close association: %v", err)
+	}
+
+	finished, entry := readUDPAssociationEvents(t, emitter)
+	if finished.NetOK || entry.NetOK {
+		t.Fatalf("old response cleared newer failure: finished=%+v log=%+v", finished, entry)
 	}
 }
 

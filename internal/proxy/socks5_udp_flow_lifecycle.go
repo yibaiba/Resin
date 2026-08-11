@@ -69,7 +69,8 @@ func (f *socks5UDPRelayFlow) readResponses() {
 			}
 			return
 		}
-		if err := f.relayResponse(buffer[:n], source); err != nil {
+		recoveryGeneration := f.snapshotRecoveryGeneration()
+		if err := f.relayResponse(buffer[:n], source, recoveryGeneration); err != nil {
 			if f.isRetiringOrClosed() {
 				return
 			}
@@ -82,6 +83,7 @@ func (f *socks5UDPRelayFlow) readResponses() {
 func (f *socks5UDPRelayFlow) relayResponse(
 	payload []byte,
 	source net.Addr,
+	recoveryGeneration uint64,
 ) error {
 	if !f.touchIdleTimeout() {
 		return errSocks5UDPFlowClosed
@@ -104,15 +106,18 @@ func (f *socks5UDPRelayFlow) relayResponse(
 	if _, err := f.client.writeTo(packet, net.UDPAddrFromAddrPort(clientSource)); err != nil {
 		return err
 	}
-	f.recordResponse(len(payload))
+	f.recordResponse(len(payload), recoveryGeneration)
 	return nil
 }
 
-func (f *socks5UDPRelayFlow) recordResponse(payloadLength int) {
-	f.association.recordTraffic(int64(payloadLength), 0)
+func (f *socks5UDPRelayFlow) snapshotRecoveryGeneration() uint64 {
 	f.writeMu.Lock()
-	recoveryGeneration := f.recoveryGeneration
-	f.writeMu.Unlock()
+	defer f.writeMu.Unlock()
+	return f.recoveryGeneration
+}
+
+func (f *socks5UDPRelayFlow) recordResponse(payloadLength int, recoveryGeneration uint64) {
+	f.association.recordTraffic(int64(payloadLength), 0)
 	if recoveryGeneration != 0 {
 		f.association.recordFlowSuccess(recoveryGeneration)
 	}

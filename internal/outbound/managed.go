@@ -3,33 +3,39 @@ package outbound
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
-	"syscall"
 
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing/common/bufio"
 	M "github.com/sagernet/sing/common/metadata"
-	N "github.com/sagernet/sing/common/network"
 )
 
 var ErrOutboundRetired = errors.New("outbound retired")
 
-// managedOutbound defers closing the protocol outbound until active streams
-// finish. Retired outbounds reject new connections immediately.
+// managedOutbound lets retired connections drain, while Close force-closes
+// every registered connection. Both states reject new connections.
 type managedOutbound struct {
 	adapter.Outbound
 
-	mu        sync.Mutex
-	active    int
-	retired   bool
-	closeOnce sync.Once
-	closeErr  error
-	onDrained func(*managedOutbound)
+	mu          sync.Mutex
+	active      int
+	retired     bool
+	forceClosed bool
+	connections map[io.Closer]struct{}
+	forceOnce   sync.Once
+	forceErr    error
+	closeOnce   sync.Once
+	closeErr    error
+	onDrained   func(*managedOutbound)
 }
 
 func newManagedOutbound(outbound adapter.Outbound, onDrained func(*managedOutbound)) *managedOutbound {
-	return &managedOutbound{Outbound: outbound, onDrained: onDrained}
+	return &managedOutbound{
+		Outbound:    outbound,
+		connections: make(map[io.Closer]struct{}),
+		onDrained:   onDrained,
+	}
 }
 
 func (o *managedOutbound) DialContext(
@@ -45,7 +51,7 @@ func (o *managedOutbound) DialContext(
 		o.release()
 		return nil, err
 	}
-	return newTrackedConn(conn, o.release), nil
+	return o.trackConn(conn)
 }
 
 func (o *managedOutbound) ListenPacket(
@@ -60,7 +66,35 @@ func (o *managedOutbound) ListenPacket(
 		o.release()
 		return nil, err
 	}
-	return newTrackedPacketConn(conn, o.release), nil
+	return o.trackPacketConn(conn)
+}
+
+func (o *managedOutbound) trackConn(conn net.Conn) (net.Conn, error) {
+	var tracked net.Conn
+	tracked = newTrackedConn(conn, func() { o.releaseConnection(tracked) })
+	if o.registerConnection(tracked) {
+		return tracked, nil
+	}
+	return nil, errors.Join(ErrOutboundRetired, tracked.Close())
+}
+
+func (o *managedOutbound) trackPacketConn(conn net.PacketConn) (net.PacketConn, error) {
+	var tracked net.PacketConn
+	tracked = newTrackedPacketConn(conn, func() { o.releaseConnection(tracked) })
+	if o.registerConnection(tracked) {
+		return tracked, nil
+	}
+	return nil, errors.Join(ErrOutboundRetired, tracked.Close())
+}
+
+func (o *managedOutbound) registerConnection(conn io.Closer) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.forceClosed {
+		return false
+	}
+	o.connections[conn] = struct{}{}
+	return true
 }
 
 func (o *managedOutbound) acquire() bool {
@@ -74,7 +108,14 @@ func (o *managedOutbound) acquire() bool {
 }
 
 func (o *managedOutbound) release() {
+	o.releaseConnection(nil)
+}
+
+func (o *managedOutbound) releaseConnection(conn io.Closer) {
 	o.mu.Lock()
+	if conn != nil {
+		delete(o.connections, conn)
+	}
 	if o.active > 0 {
 		o.active--
 	}
@@ -97,10 +138,28 @@ func (o *managedOutbound) retire() error {
 }
 
 func (o *managedOutbound) Close() error {
+	o.forceOnce.Do(func() {
+		connections := o.beginForceClose()
+		errs := make([]error, 0, len(connections)+1)
+		for _, connection := range connections {
+			errs = append(errs, connection.Close())
+		}
+		errs = append(errs, o.closeUnderlying())
+		o.forceErr = errors.Join(errs...)
+	})
+	return o.forceErr
+}
+
+func (o *managedOutbound) beginForceClose() []io.Closer {
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.retired = true
-	o.mu.Unlock()
-	return o.closeUnderlying()
+	o.forceClosed = true
+	connections := make([]io.Closer, 0, len(o.connections))
+	for connection := range o.connections {
+		connections = append(connections, connection)
+	}
+	return connections
 }
 
 func (o *managedOutbound) closeUnderlying() error {
@@ -111,136 +170,4 @@ func (o *managedOutbound) closeUnderlying() error {
 		}
 	})
 	return o.closeErr
-}
-
-type trackedConn struct {
-	N.ExtendedConn
-	release   func()
-	closeOnce sync.Once
-	closeErr  error
-}
-
-func newTrackedConn(conn net.Conn, release func()) net.Conn {
-	tracked := &trackedConn{ExtendedConn: bufio.NewExtendedConn(conn), release: release}
-	syscallConn, ok := conn.(syscall.Conn)
-	if !ok {
-		return tracked
-	}
-	return &trackedSyscallConn{trackedConn: tracked, syscallConn: syscallConn}
-}
-
-var (
-	_ N.ReaderWithUpstream = (*trackedConn)(nil)
-	_ N.WriterWithUpstream = (*trackedConn)(nil)
-	_ N.WithUpstreamReader = (*trackedConn)(nil)
-	_ N.WithUpstreamWriter = (*trackedConn)(nil)
-)
-
-func (c *trackedConn) Close() error {
-	c.closeOnce.Do(func() {
-		c.closeErr = c.ExtendedConn.Close()
-		c.release()
-	})
-	return c.closeErr
-}
-
-func (c *trackedConn) CloseRead() error {
-	return N.CloseRead(c.ExtendedConn)
-}
-
-func (c *trackedConn) CloseWrite() error {
-	return N.CloseWrite(c.ExtendedConn)
-}
-
-func (c *trackedConn) Upstream() any {
-	return c.ExtendedConn
-}
-
-func (c *trackedConn) ReaderReplaceable() bool {
-	return true
-}
-
-func (c *trackedConn) WriterReplaceable() bool {
-	return true
-}
-
-func (c *trackedConn) UpstreamReader() any {
-	return c.ExtendedConn
-}
-
-func (c *trackedConn) UpstreamWriter() any {
-	return c.ExtendedConn
-}
-
-type trackedSyscallConn struct {
-	*trackedConn
-	syscallConn syscall.Conn
-}
-
-var _ syscall.Conn = (*trackedSyscallConn)(nil)
-
-func (c *trackedSyscallConn) SyscallConn() (syscall.RawConn, error) {
-	return c.syscallConn.SyscallConn()
-}
-
-type trackedPacketConn struct {
-	N.NetPacketConn
-	release   func()
-	closeOnce sync.Once
-	closeErr  error
-}
-
-func newTrackedPacketConn(conn net.PacketConn, release func()) net.PacketConn {
-	tracked := &trackedPacketConn{NetPacketConn: bufio.NewPacketConn(conn), release: release}
-	syscallConn, ok := conn.(syscall.Conn)
-	if !ok {
-		return tracked
-	}
-	return &trackedSyscallPacketConn{trackedPacketConn: tracked, syscallConn: syscallConn}
-}
-
-var (
-	_ N.ReaderWithUpstream = (*trackedPacketConn)(nil)
-	_ N.WriterWithUpstream = (*trackedPacketConn)(nil)
-	_ N.WithUpstreamReader = (*trackedPacketConn)(nil)
-	_ N.WithUpstreamWriter = (*trackedPacketConn)(nil)
-)
-
-func (c *trackedPacketConn) Close() error {
-	c.closeOnce.Do(func() {
-		c.closeErr = c.NetPacketConn.Close()
-		c.release()
-	})
-	return c.closeErr
-}
-
-func (c *trackedPacketConn) Upstream() any {
-	return c.NetPacketConn
-}
-
-func (c *trackedPacketConn) ReaderReplaceable() bool {
-	return true
-}
-
-func (c *trackedPacketConn) WriterReplaceable() bool {
-	return true
-}
-
-func (c *trackedPacketConn) UpstreamReader() any {
-	return c.NetPacketConn
-}
-
-func (c *trackedPacketConn) UpstreamWriter() any {
-	return c.NetPacketConn
-}
-
-type trackedSyscallPacketConn struct {
-	*trackedPacketConn
-	syscallConn syscall.Conn
-}
-
-var _ syscall.Conn = (*trackedSyscallPacketConn)(nil)
-
-func (c *trackedSyscallPacketConn) SyscallConn() (syscall.RawConn, error) {
-	return c.syscallConn.SyscallConn()
 }

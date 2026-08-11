@@ -51,5 +51,5 @@ export function RouteErrorBoundary({ children }: { children: ReactNode }) {
     </Card>
   );
 
-  return <RouteRenderBoundary key={location.key} renderError={renderError}>{children}</RouteRenderBoundary>;
+  return <RouteRenderBoundary key={location.pathname} renderError={renderError}>{children}</RouteRenderBoundary>;
 }

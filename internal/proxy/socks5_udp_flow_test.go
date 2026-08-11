@@ -279,6 +279,7 @@ func TestSocks5UDPFlowResponseRefreshesIdleTimeout(t *testing.T) {
 	if err := flow.relayResponse(
 		[]byte("response"),
 		&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5303},
+		flow.snapshotRecoveryGeneration(),
 	); err != nil {
 		t.Fatalf("relay response: %v", err)
 	}
