@@ -263,6 +263,11 @@ func TestTCPValidation_StopCancelsQueuedGeneration(t *testing.T) {
 
 func TestTCPValidation_RecoveryScanQueuesPersistedStates(t *testing.T) {
 	pool, circuitHash, circuitEntry := newValidationTestNode(t, 2)
+	unavailableHash := node.HashFromRawOptions([]byte(`{"type":"validation-unavailable"}`))
+	pool.AddNodeFromSub(unavailableHash, []byte(`{"type":"validation-unavailable"}`), "sub1")
+	unavailableEntry, _ := pool.GetEntry(unavailableHash)
+	unavailableOpenedAt := time.Now().Add(-2 * time.Minute).UnixNano()
+	unavailableEntry.RestoreTCPHealth(2, unavailableOpenedAt)
 	confirmationHash := node.HashFromRawOptions([]byte(`{"type":"validation-confirmation"}`))
 	pool.AddNodeFromSub(confirmationHash, []byte(`{"type":"validation-confirmation"}`), "sub1")
 	confirmationEntry, _ := pool.GetEntry(confirmationHash)
@@ -288,6 +293,11 @@ func TestTCPValidation_RecoveryScanQueuesPersistedStates(t *testing.T) {
 	if belowThresholdEntry.TCPHealth().ValidationPending != node.TCPValidationNone {
 		t.Fatalf("below-threshold node state: %+v", belowThresholdEntry.TCPHealth())
 	}
+	unavailableState := unavailableEntry.TCPHealth()
+	if unavailableState.CircuitOpenSince != unavailableOpenedAt ||
+		unavailableState.ValidationPending != node.TCPValidationNone {
+		t.Fatalf("unavailable node state: %+v", unavailableState)
+	}
 	runNextQueuedTask(t, manager)
 	runNextQueuedTask(t, manager)
 	for hash, entry := range map[node.Hash]*node.NodeEntry{
@@ -299,6 +309,37 @@ func TestTCPValidation_RecoveryScanQueuesPersistedStates(t *testing.T) {
 			t.Fatalf("node %s recovery state: %+v", hash.Hex(), state)
 		}
 	}
+}
+
+func TestTCPValidation_RecoveryScanReturnsSystemErrors(t *testing.T) {
+	t.Run("manager stopped", func(t *testing.T) {
+		pool, _, entry := newValidationTestNode(t, 1)
+		entry.RestoreTCPHealth(1, time.Now().Add(-time.Minute).UnixNano())
+		manager := NewProbeManager(ProbeConfig{Pool: pool, Fetcher: successfulValidationFetcher})
+		manager.Stop()
+
+		err := manager.EnqueueTCPRecoveryValidations()
+		if !errors.Is(err, ErrManagerStopped) {
+			t.Fatalf("error = %v, want ErrManagerStopped", err)
+		}
+	})
+
+	t.Run("queue full", func(t *testing.T) {
+		pool, hash, entry := newValidationTestNode(t, 1)
+		entry.RestoreTCPHealth(1, time.Now().Add(-time.Minute).UnixNano())
+		manager := NewProbeManager(ProbeConfig{
+			Pool: pool, QueueCapacity: 1, Fetcher: successfulValidationFetcher,
+		})
+		if !manager.enqueueProbe(hash, probeTaskKindEgress, probePriorityHigh) {
+			t.Fatal("failed to fill high-priority queue")
+		}
+
+		err := manager.EnqueueTCPRecoveryValidations()
+		if !errors.Is(err, ErrValidationQueue) {
+			t.Fatalf("error = %v, want ErrValidationQueue", err)
+		}
+		manager.Stop()
+	})
 }
 
 func successfulValidationFetcher(node.Hash, string) ([]byte, time.Duration, error) {

@@ -75,6 +75,9 @@ func (m *ProbeManager) EnqueueTCPRecoveryValidations() error {
 		case state.FailureCount > 0:
 			err = m.pool.BeginTCPValidation(hash, node.TCPValidationConfirmation, topology.HealthSourceConfirmation)
 		}
+		if errors.Is(err, ErrValidationTarget) {
+			return true
+		}
 		if err != nil {
 			scanErrors = append(scanErrors, fmt.Errorf("node %s: %w", hash.Hex(), err))
 		}
