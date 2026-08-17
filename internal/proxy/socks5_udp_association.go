@@ -15,6 +15,7 @@ var (
 	errSocks5UDPAssociationNotFound      = errors.New("SOCKS5 UDP association not found")
 	errSocks5UDPAssociationScopeClosed   = errors.New("SOCKS5 UDP association scope is closed")
 	errSocks5UDPInvalidAssociationSource = errors.New("invalid SOCKS5 UDP association source")
+	socks5UDPCGNATPrefix                 = netip.MustParsePrefix("100.64.0.0/10")
 )
 
 type socks5UDPAssociationOptions struct {
@@ -220,7 +221,11 @@ func validateSocks5UDPAssociationOptions(
 		return netip.Addr{}, netip.AddrPort{}, false, errSocks5UDPInvalidAssociationSource
 	}
 	requestedIP := requested.Addr()
-	// Clash may send the TCP peer IP with port zero until its UDP source port is known.
+	if requestedIP != clientIP && isSocks5UDPNATLocalAddress(requestedIP) {
+		// A client behind NAT cannot know the public UDP source selected by its gateway.
+		// Bind the association to the first datagram from the observed TCP peer IP.
+		return clientIP, netip.AddrPort{}, true, nil
+	}
 	if !requestedIP.IsUnspecified() && requestedIP != clientIP {
 		return netip.Addr{}, netip.AddrPort{}, false, fmt.Errorf(
 			"%w: requested IP does not match TCP client",
@@ -231,6 +236,13 @@ func validateSocks5UDPAssociationOptions(
 		return clientIP, netip.AddrPort{}, true, nil
 	}
 	return clientIP, netip.AddrPortFrom(clientIP, requested.Port()), false, nil
+}
+
+func isSocks5UDPNATLocalAddress(address netip.Addr) bool {
+	return address.IsPrivate() ||
+		address.IsLoopback() ||
+		address.IsLinkLocalUnicast() ||
+		socks5UDPCGNATPrefix.Contains(address)
 }
 
 func normalizeAddrPort(addrPort netip.AddrPort) netip.AddrPort {

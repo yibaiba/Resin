@@ -201,6 +201,56 @@ func TestSocks5UDPAssociationValidatesRequestedSource(t *testing.T) {
 	}
 }
 
+func TestSocks5UDPAssociationBindsNATLocalSourceFromFirstDatagram(t *testing.T) {
+	manager := newSocks5UDPAssociationManager(time.Minute)
+	defer manager.close()
+	clientIP := netip.MustParseAddr("198.51.100.6")
+	openUDPAssociationTestScope(t, manager, "endpoint")
+	association, err := manager.register(socks5UDPAssociationOptions{
+		endpointID:      "endpoint",
+		clientIP:        clientIP,
+		requestedSource: netip.MustParseAddrPort("192.168.11.179:43000"),
+	})
+	if err != nil {
+		t.Fatalf("register NAT-local source: %v", err)
+	}
+	if association.sourceAddr().IsValid() {
+		t.Fatalf("NAT-local association bound before first datagram: %s", association.sourceAddr())
+	}
+	if _, err := manager.match(
+		"endpoint",
+		netip.MustParseAddrPort("198.51.100.7:53000"),
+	); !errors.Is(err, errSocks5UDPAssociationNotFound) {
+		t.Fatalf("match different public client: %v", err)
+	}
+	actualSource := netip.MustParseAddrPort("198.51.100.6:53000")
+	matched, err := manager.match("endpoint", actualSource)
+	if err != nil || matched != association || association.sourceAddr() != actualSource {
+		t.Fatalf("first-packet NAT bind: matched=%p source=%s err=%v", matched, association.sourceAddr(), err)
+	}
+}
+
+func TestSocks5UDPNATLocalAddressClassification(t *testing.T) {
+	tests := []struct {
+		address string
+		want    bool
+	}{
+		{address: "10.0.0.1", want: true},
+		{address: "100.64.0.1", want: true},
+		{address: "169.254.1.1", want: true},
+		{address: "fd00::1", want: true},
+		{address: "fe80::1", want: true},
+		{address: "8.8.8.8", want: false},
+		{address: "2001:4860:4860::8888", want: false},
+	}
+	for _, testCase := range tests {
+		address := netip.MustParseAddr(testCase.address)
+		if got := isSocks5UDPNATLocalAddress(address); got != testCase.want {
+			t.Errorf("address %s: got %t, want %t", address, got, testCase.want)
+		}
+	}
+}
+
 func TestSocks5UDPAssociationAcceptsClientIPWithUnknownPort(t *testing.T) {
 	manager := newSocks5UDPAssociationManager(time.Minute)
 	defer manager.close()
