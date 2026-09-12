@@ -30,8 +30,9 @@ type Platform struct {
 	Name string
 
 	// Filter configuration.
-	RegexFilters  node.TagFilter
-	RegionFilters []string // lowercase ISO codes, supports negation "!xx"
+	RegexFilters    node.TagFilter
+	RegionFilters   []string // lowercase ISO codes, supports negation "!xx"
+	SubscriptionIDs []string // empty means all subscriptions; otherwise allowlist
 
 	// Other config fields.
 	StickyTTLNs                      int64
@@ -166,18 +167,23 @@ func (p *Platform) evaluateNode(
 		return false
 	}
 
-	// 2. Tag regex match.
+	// 2. Subscription allowlist (empty means all subscriptions).
+	if !entry.MatchesSubscriptionAllowlist(p.SubscriptionIDs, subLookup) {
+		return false
+	}
+
+	// 3. Tag regex match.
 	if !entry.MatchTagFilter(p.RegexFilters, subLookup) {
 		return false
 	}
 
-	// 3. Egress IP must be known.
+	// 4. Egress IP must be known.
 	egressIP := entry.GetEgressIP()
 	if !egressIP.IsValid() {
 		return false
 	}
 
-	// 4. Region filter (when configured).
+	// 5. Region filter (when configured).
 	if len(p.RegionFilters) > 0 {
 		region := entry.GetRegion(geoLookup)
 		if !MatchRegionFilter(region, p.RegionFilters) {
@@ -185,7 +191,7 @@ func (p *Platform) evaluateNode(
 		}
 	}
 
-	// 5. Has at least one latency record.
+	// 6. Has at least one latency record.
 	if !entry.HasLatency() {
 		return false
 	}

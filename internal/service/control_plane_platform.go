@@ -26,6 +26,7 @@ type PlatformResponse struct {
 	StickyTTL                        string   `json:"sticky_ttl"`
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
+	SubscriptionIDs                  []string `json:"subscription_ids"`
 	RoutableNodeCount                int      `json:"routable_node_count"`
 	ReverseProxyMissAction           string   `json:"reverse_proxy_miss_action"`
 	ReverseProxyEmptyAccountBehavior string   `json:"reverse_proxy_empty_account_behavior"`
@@ -45,8 +46,9 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		ID:                               p.ID,
 		Name:                             p.Name,
 		StickyTTL:                        time.Duration(p.StickyTTLNs).String(),
-		RegexFilters:                     append([]string(nil), p.RegexFilters...),
-		RegionFilters:                    append([]string(nil), p.RegionFilters...),
+		RegexFilters:                     append([]string{}, p.RegexFilters...),
+		RegionFilters:                    append([]string{}, p.RegionFilters...),
+		SubscriptionIDs:                  append([]string{}, p.SubscriptionIDs...),
 		RoutableNodeCount:                0,
 		ReverseProxyMissAction:           p.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: behavior,
@@ -77,6 +79,7 @@ type platformConfig struct {
 	StickyTTLNs                      int64
 	RegexFilters                     []string
 	RegionFilters                    []string
+	SubscriptionIDs                  []string
 	ReverseProxyMissAction           string
 	ReverseProxyEmptyAccountBehavior string
 	ReverseProxyFixedAccountHeader   string
@@ -108,6 +111,7 @@ func (s *ControlPlaneService) defaultPlatformConfig(name string) platformConfig 
 		StickyTTLNs:            int64(s.EnvCfg.DefaultPlatformStickyTTL),
 		RegexFilters:           append([]string(nil), s.EnvCfg.DefaultPlatformRegexFilters...),
 		RegionFilters:          append([]string(nil), s.EnvCfg.DefaultPlatformRegionFilters...),
+		SubscriptionIDs:        []string{},
 		ReverseProxyMissAction: s.EnvCfg.DefaultPlatformReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(
 			s.EnvCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
@@ -126,6 +130,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		StickyTTLNs:                      mp.StickyTTLNs,
 		RegexFilters:                     append([]string(nil), mp.RegexFilters...),
 		RegionFilters:                    append([]string(nil), mp.RegionFilters...),
+		SubscriptionIDs:                  append([]string{}, mp.SubscriptionIDs...),
 		ReverseProxyMissAction:           mp.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(mp.ReverseProxyEmptyAccountBehavior),
 		ReverseProxyFixedAccountHeader:   normalizeHeaderFieldName(mp.ReverseProxyFixedAccountHeader),
@@ -144,6 +149,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		StickyTTLNs:                      cfg.StickyTTLNs,
 		RegexFilters:                     append([]string(nil), cfg.RegexFilters...),
 		RegionFilters:                    append([]string(nil), cfg.RegionFilters...),
+		SubscriptionIDs:                  append([]string{}, cfg.SubscriptionIDs...),
 		ReverseProxyMissAction:           cfg.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: cfg.ReverseProxyEmptyAccountBehavior,
 		ReverseProxyFixedAccountHeader:   cfg.ReverseProxyFixedAccountHeader,
@@ -174,6 +180,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		cfg.PassiveCircuitBreakerDisabled,
 	)
 	configured.FallbackPlatformIDs = append([]string(nil), cfg.FallbackPlatformIDs...)
+	configured.SubscriptionIDs = append([]string{}, cfg.SubscriptionIDs...)
 	configured.RotationIntervalNs = cfg.RotationIntervalNs
 	configured.RotationStrategy = platform.ParseRotationStrategy(cfg.RotationStrategy)
 	return configured, nil
@@ -292,6 +299,22 @@ func setPlatformEmptyAccountBehavior(cfg *platformConfig, behavior string) *Serv
 	return nil
 }
 
+func (s *ControlPlaneService) normalizeAndValidateSubscriptionIDs(ids []string) ([]string, *ServiceError) {
+	normalized, err := platform.NormalizeSubscriptionIDs(ids)
+	if err != nil {
+		return nil, invalidArg(err.Error())
+	}
+	if s == nil {
+		return normalized, nil
+	}
+	for _, id := range normalized {
+		if s.SubMgr == nil || s.SubMgr.Lookup(id) == nil {
+			return nil, invalidArg(fmt.Sprintf("subscription_ids: subscription %q does not exist", id))
+		}
+	}
+	return normalized, nil
+}
+
 func setPlatformAllocationPolicy(cfg *platformConfig, policy string) *ServiceError {
 	if err := validatePlatformAllocationPolicy(policy); err != nil {
 		return err
@@ -386,6 +409,7 @@ type CreatePlatformRequest struct {
 	StickyTTL                        *string  `json:"sticky_ttl"`
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
+	SubscriptionIDs                  []string `json:"subscription_ids"`
 	ReverseProxyMissAction           *string  `json:"reverse_proxy_miss_action"`
 	ReverseProxyEmptyAccountBehavior *string  `json:"reverse_proxy_empty_account_behavior"`
 	ReverseProxyFixedAccountHeader   *string  `json:"reverse_proxy_fixed_account_header"`
@@ -433,6 +457,9 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	if req.RegionFilters != nil {
 		cfg.RegionFilters = req.RegionFilters
 	}
+	if req.SubscriptionIDs != nil {
+		cfg.SubscriptionIDs = req.SubscriptionIDs
+	}
 	if req.ReverseProxyMissAction != nil {
 		if err := setPlatformMissAction(&cfg, *req.ReverseProxyMissAction); err != nil {
 			return nil, err
@@ -473,6 +500,11 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	}
 	if err := validatePlatformConfig(&cfg, true); err != nil {
 		return nil, err
+	}
+	if ids, err := s.normalizeAndValidateSubscriptionIDs(cfg.SubscriptionIDs); err != nil {
+		return nil, err
+	} else {
+		cfg.SubscriptionIDs = ids
 	}
 
 	id := uuid.New().String()
@@ -558,6 +590,12 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 		cfg.RegionFilters = filters
 	}
 
+	if ids, ok, err := patch.optionalStringSlice("subscription_ids"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.SubscriptionIDs = ids
+	}
+
 	if ma, ok, err := patch.optionalString("reverse_proxy_miss_action"); err != nil {
 		return nil, err
 	} else if ok {
@@ -611,6 +649,11 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	}
 	if err := validatePlatformConfig(&cfg, regionFiltersPatched); err != nil {
 		return nil, err
+	}
+	if ids, err := s.normalizeAndValidateSubscriptionIDs(cfg.SubscriptionIDs); err != nil {
+		return nil, err
+	} else {
+		cfg.SubscriptionIDs = ids
 	}
 
 	mp, plat, svcErr := s.compileAndUpsertPlatform(id, cfg)
@@ -707,8 +750,9 @@ type PreviewFilterRequest struct {
 }
 
 type PlatformSpecFilter struct {
-	RegexFilters  []string `json:"regex_filters"`
-	RegionFilters []string `json:"region_filters"`
+	RegexFilters    []string `json:"regex_filters"`
+	RegionFilters   []string `json:"region_filters"`
+	SubscriptionIDs []string `json:"subscription_ids"`
 }
 
 // NodeSummary is the API response for a node.
@@ -852,6 +896,7 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 
 	var regexFilters node.TagFilter
 	var regionFilters []string
+	var subscriptionIDs []string
 
 	if hasPlatformID {
 		plat, ok := s.Pool.GetPlatform(*req.PlatformID)
@@ -860,6 +905,7 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 		}
 		regexFilters = plat.RegexFilters
 		regionFilters = plat.RegionFilters
+		subscriptionIDs = append([]string{}, plat.SubscriptionIDs...)
 	} else {
 		compiled, err := platform.CompileRegexFilters(req.PlatformSpec.RegexFilters)
 		if err != nil {
@@ -870,6 +916,11 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 		if err := platform.ValidateRegionFilters(regionFilters); err != nil {
 			return nil, invalidArg(err.Error())
 		}
+		ids, svcErr := s.normalizeAndValidateSubscriptionIDs(req.PlatformSpec.SubscriptionIDs)
+		if svcErr != nil {
+			return nil, svcErr
+		}
+		subscriptionIDs = ids
 	}
 
 	var subLookup node.SubLookupFunc
@@ -878,6 +929,9 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 	}
 	var result []NodeSummary
 	s.Pool.Range(func(h node.Hash, entry *node.NodeEntry) bool {
+		if !entry.MatchesSubscriptionAllowlist(subscriptionIDs, subLookup) {
+			return true
+		}
 		if !entry.MatchTagFilter(regexFilters, subLookup) {
 			return true
 		}

@@ -22,6 +22,7 @@ func TestBuildFromModel_Success(t *testing.T) {
 		PassiveCircuitBreakerDisabled:    true,
 		RotationIntervalNs:               1000,
 		RotationStrategy:                 "PREFER_NEW_IP",
+		SubscriptionIDs:                  []string{"sub-1", "sub-2"},
 	}
 
 	plat, err := BuildFromModel(mp)
@@ -66,6 +67,9 @@ func TestBuildFromModel_Success(t *testing.T) {
 	}
 	if len(plat.RegionFilters) != 2 || plat.RegionFilters[0] != "us" || plat.RegionFilters[1] != "jp" {
 		t.Fatalf("region filters mismatch: %+v", plat.RegionFilters)
+	}
+	if len(plat.SubscriptionIDs) != 2 || plat.SubscriptionIDs[0] != "sub-1" || plat.SubscriptionIDs[1] != "sub-2" {
+		t.Fatalf("subscription ids mismatch: %+v", plat.SubscriptionIDs)
 	}
 }
 

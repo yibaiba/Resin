@@ -234,6 +234,40 @@ func TestNodeEntry_MatchTagFilter_OnlyMustNot(t *testing.T) {
 	}
 }
 
+func TestNodeEntry_MatchesSubscriptionAllowlist(t *testing.T) {
+	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
+	e := NewNodeEntry(h, nil, time.Now(), 0)
+	e.AddSubscriptionID("sub-a")
+	e.AddSubscriptionID("sub-disabled")
+
+	lookup := func(subID string, hash Hash) (string, bool, []string, bool) {
+		switch subID {
+		case "sub-a":
+			return "A", true, []string{"node"}, true
+		case "sub-disabled":
+			return "Disabled", false, []string{"node"}, true
+		default:
+			return "", false, nil, false
+		}
+	}
+
+	if !e.MatchesSubscriptionAllowlist(nil, lookup) {
+		t.Fatal("empty allowlist should match")
+	}
+	if !e.MatchesSubscriptionAllowlist([]string{"sub-a"}, lookup) {
+		t.Fatal("enabled allowlisted subscription should match")
+	}
+	if e.MatchesSubscriptionAllowlist([]string{"sub-disabled"}, lookup) {
+		t.Fatal("disabled allowlisted subscription should not match")
+	}
+	if e.MatchesSubscriptionAllowlist([]string{"sub-missing"}, lookup) {
+		t.Fatal("unknown subscription should not match")
+	}
+	if !e.MatchesSubscriptionAllowlist([]string{"sub-missing", "sub-a"}, lookup) {
+		t.Fatal("any enabled allowlisted subscription should match")
+	}
+}
+
 func TestNodeEntry_HasEnabledSubscription(t *testing.T) {
 	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
 	e := NewNodeEntry(h, nil, time.Now(), 0)

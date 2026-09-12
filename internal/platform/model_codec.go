@@ -147,6 +147,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 		mp.PassiveCircuitBreakerDisabled,
 	)
 	configured.FallbackPlatformIDs = append([]string(nil), mp.FallbackPlatformIDs...)
+	configured.SubscriptionIDs = append([]string{}, mp.SubscriptionIDs...)
 	configured.RotationIntervalNs = mp.RotationIntervalNs
 	configured.RotationStrategy = ParseRotationStrategy(mp.RotationStrategy)
 	if configured.RotationStrategy == "" {

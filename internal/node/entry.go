@@ -191,6 +191,46 @@ func (e *NodeEntry) MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bo
 	return matchedPositive
 }
 
+// MatchesSubscriptionAllowlist reports whether the node belongs to at least one
+// enabled subscription in allowIDs. An empty allowlist matches every node.
+func (e *NodeEntry) MatchesSubscriptionAllowlist(allowIDs []string, subLookup SubLookupFunc) bool {
+	if len(allowIDs) == 0 {
+		return true
+	}
+	if e == nil {
+		return false
+	}
+
+	allow := make(map[string]struct{}, len(allowIDs))
+	for _, id := range allowIDs {
+		if id != "" {
+			allow[id] = struct{}{}
+		}
+	}
+	if len(allow) == 0 {
+		return true
+	}
+
+	e.mu.RLock()
+	subs := make([]string, len(e.subscriptionIDs))
+	copy(subs, e.subscriptionIDs)
+	e.mu.RUnlock()
+
+	for _, subID := range subs {
+		if _, ok := allow[subID]; !ok {
+			continue
+		}
+		if subLookup == nil {
+			return true
+		}
+		_, enabled, _, ok := subLookup(subID, e.Hash)
+		if ok && enabled {
+			return true
+		}
+	}
+	return false
+}
+
 // HasEnabledSubscription reports whether the node currently has at least one
 // enabled subscription reference, based on subLookup.
 //

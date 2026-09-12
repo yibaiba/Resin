@@ -11,6 +11,7 @@ import (
 
 	"github.com/Resinat/Resin/internal/model"
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/state"
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/topology"
@@ -417,6 +418,9 @@ func (s *ControlPlaneService) DeleteSubscription(id string) error {
 		deleteErr     error
 	)
 
+	s.platformMu.Lock()
+	defer s.platformMu.Unlock()
+
 	// Keep delete atomic across persistence + in-memory runtime state:
 	// if DB delete fails, do not mutate runtime subscription/node state.
 	sub.WithOpLock(func() {
@@ -448,8 +452,31 @@ func (s *ControlPlaneService) DeleteSubscription(id string) error {
 		}
 		s.SubMgr.Unregister(id)
 	})
+	if deleteErr != nil {
+		return deleteErr
+	}
 
-	return deleteErr
+	affected, err := s.Engine.RemoveSubscriptionIDFromPlatforms(id)
+	if err != nil {
+		return internal("remove subscription from platforms", err)
+	}
+	for _, platformID := range affected {
+		mp, getErr := s.Engine.GetPlatform(platformID)
+		if getErr != nil {
+			return internal("reload platform after subscription delete", getErr)
+		}
+		plat, buildErr := platform.BuildFromModel(*mp)
+		if buildErr != nil {
+			return internal("decode platform after subscription delete", buildErr)
+		}
+		if s.Pool != nil {
+			if replaceErr := s.Pool.ReplacePlatform(plat); replaceErr != nil {
+				return internal("replace platform after subscription delete", replaceErr)
+			}
+		}
+	}
+
+	return nil
 }
 
 // RefreshSubscription triggers an immediate subscription refresh (blocks).

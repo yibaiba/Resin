@@ -475,6 +475,7 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 		PassiveCircuitBreakerDisabled: true,
 		RotationIntervalNs:            500,
 		RotationStrategy:              "REQUIRE_NEW_IP",
+		SubscriptionIDs:               []string{"sub-a", "sub-b"},
 		UpdatedAtNs:                   now,
 	}
 	if err := repo.UpsertPlatform(p); err != nil {
@@ -500,6 +501,24 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	}
 	if got.RotationIntervalNs != 500 || got.RotationStrategy != "REQUIRE_NEW_IP" {
 		t.Fatalf("rotation config did not round-trip: %+v", got)
+	}
+	if len(got.SubscriptionIDs) != 2 || got.SubscriptionIDs[0] != "sub-a" || got.SubscriptionIDs[1] != "sub-b" {
+		t.Fatalf("subscription ids did not round-trip: %+v", got.SubscriptionIDs)
+	}
+
+	affected, err := repo.RemoveSubscriptionIDFromPlatforms("sub-a")
+	if err != nil {
+		t.Fatalf("RemoveSubscriptionIDFromPlatforms: %v", err)
+	}
+	if len(affected) != 1 || affected[0] != "plat-1" {
+		t.Fatalf("affected platforms = %v, want [plat-1]", affected)
+	}
+	got, err = repo.GetPlatform("plat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SubscriptionIDs) != 1 || got.SubscriptionIDs[0] != "sub-b" {
+		t.Fatalf("subscription ids after remove = %v, want [sub-b]", got.SubscriptionIDs)
 	}
 
 	// List.

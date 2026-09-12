@@ -17,6 +17,7 @@ import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
 import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatGoDuration, formatRelativeTime } from "../../lib/time";
+import { listSubscriptions } from "../subscriptions/api";
 import { createPlatform, listPlatforms } from "./api";
 import {
   allocationPolicies,
@@ -33,6 +34,7 @@ import {
   toPlatformCreateInput,
   type PlatformFormValues,
 } from "./formModel";
+import { PlatformSubscriptionPicker } from "./PlatformSubscriptionPicker";
 import type { Platform } from "./types";
 
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
@@ -82,6 +84,15 @@ export function PlatformPage() {
   const createEmptyAccountBehavior = useWatch({
     control: createForm.control,
     name: "reverse_proxy_empty_account_behavior",
+  });
+  const createSubscriptionIDs = useWatch({
+    control: createForm.control,
+    name: "subscription_ids",
+  }) ?? [];
+  const subscriptionsQuery = useQuery({
+    queryKey: ["subscriptions", "platform-picker"],
+    queryFn: () => listSubscriptions({ limit: 1000, offset: 0 }),
+    enabled: createModalOpen,
   });
 
   const createMutation = useMutation({
@@ -180,6 +191,7 @@ export function PlatformPage() {
           {platforms.map((platform) => {
             const regionCount = platform.region_filters.length;
             const regexCount = platform.regex_filters.length;
+            const subscriptionCount = platform.subscription_ids.length;
             const stickyTTL = formatGoDuration(platform.sticky_ttl, t("默认"));
 
             return (
@@ -203,6 +215,10 @@ export function PlatformPage() {
                   <span className="platform-fact">
                     <span>{t("正则")}</span>
                     <strong>{regexCount}</strong>
+                  </span>
+                  <span className="platform-fact">
+                    <span>{t("订阅")}</span>
+                    <strong>{subscriptionCount === 0 ? t("全部") : subscriptionCount}</strong>
                   </span>
                   <span className="platform-fact">
                     <span>{t("租约时长")}</span>
@@ -342,6 +358,18 @@ export function PlatformPage() {
                   ) : null}
                 </div>
               </div>
+
+              <PlatformSubscriptionPicker
+                create
+                selectedIDs={createSubscriptionIDs}
+                subscriptions={(subscriptionsQuery.data?.items ?? []).map((item) => ({
+                  id: item.id,
+                  name: item.name,
+                  enabled: item.enabled,
+                }))}
+                loading={subscriptionsQuery.isLoading}
+                onChange={(ids) => createForm.setValue("subscription_ids", ids, { shouldDirty: true })}
+              />
 
               <div className="field-group">
                 <label className="field-label" htmlFor="create-regex">

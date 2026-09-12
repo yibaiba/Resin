@@ -20,6 +20,7 @@ import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
 import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatDateTime, formatGoDuration, formatRelativeTime } from "../../lib/time";
+import { listSubscriptions } from "../subscriptions/api";
 import {
   clearAllPlatformLeases,
   deletePlatform,
@@ -50,6 +51,7 @@ import {
 import { PlatformAccessPanel } from "./PlatformAccessPanel";
 import { PlatformMonitorPanel } from "./PlatformMonitorPanel";
 import { PlatformRoutingSettings } from "./PlatformRoutingSettings";
+import { PlatformSubscriptionPicker } from "./PlatformSubscriptionPicker";
 import type { PlatformLease } from "./types";
 
 type PlatformDetailTab = "monitor" | "access" | "config" | "ops";
@@ -133,6 +135,7 @@ export function PlatformDetailPage() {
     defaultValues: defaultPlatformFormValues,
   });
   const detailEmptyAccountBehavior = useWatch({ control: editForm.control, name: "reverse_proxy_empty_account_behavior" });
+  const detailSubscriptionIDs = useWatch({ control: editForm.control, name: "subscription_ids" }) ?? [];
   const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" });
   const rotationInterval = useWatch({ control: editForm.control, name: "rotation_interval" });
   const rotationStrategy = useWatch({ control: editForm.control, name: "rotation_strategy" });
@@ -140,6 +143,11 @@ export function PlatformDetailPage() {
   const platformChoicesQuery = useQuery({
     queryKey: ["platforms", "fallback-choices"],
     queryFn: () => listPlatforms({ limit: 1000 }),
+    staleTime: 30_000,
+  });
+  const subscriptionsQuery = useQuery({
+    queryKey: ["subscriptions", "platform-picker"],
+    queryFn: () => listSubscriptions({ limit: 1000, offset: 0 }),
     staleTime: 30_000,
   });
 
@@ -433,6 +441,7 @@ export function PlatformDetailPage() {
   const stickyTTL = platform ? formatGoDuration(platform.sticky_ttl, t("默认")) : t("默认");
   const regionCount = platform?.region_filters.length ?? 0;
   const regexCount = platform?.regex_filters.length ?? 0;
+  const subscriptionCount = platform?.subscription_ids.length ?? 0;
   const deleteDisabled = !platform || platform.id === ZERO_UUID || deleteMutation.isPending;
 
   return (
@@ -500,6 +509,10 @@ export function PlatformDetailPage() {
                 <span className="platform-fact">
                   <span>{t("正则")}</span>
                   <strong>{regexCount}</strong>
+                </span>
+                <span className="platform-fact">
+                  <span>{t("订阅")}</span>
+                  <strong>{subscriptionCount === 0 ? t("全部") : subscriptionCount}</strong>
                 </span>
                 <span className="platform-fact">
                   <span>{t("租约时长")}</span>
@@ -698,6 +711,17 @@ export function PlatformDetailPage() {
                       ) : null}
                     </div>
                   </div>
+
+                  <PlatformSubscriptionPicker
+                    selectedIDs={detailSubscriptionIDs}
+                    subscriptions={(subscriptionsQuery.data?.items ?? []).map((item) => ({
+                      id: item.id,
+                      name: item.name,
+                      enabled: item.enabled,
+                    }))}
+                    loading={subscriptionsQuery.isLoading}
+                    onChange={(ids) => editForm.setValue("subscription_ids", ids, { shouldDirty: true })}
+                  />
 
                   <div className="field-group">
                     <label className="field-label" htmlFor="detail-edit-regex">

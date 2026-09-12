@@ -50,6 +50,54 @@ func decodeStringSliceJSON(raw string) ([]string, error) {
 	return out, nil
 }
 
+func decodePlatformJSONColumns(
+	p *model.Platform,
+	regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON, subscriptionIDsJSON string,
+	passiveCircuitBreakerDisabled int,
+) error {
+	p.PassiveCircuitBreakerDisabled = passiveCircuitBreakerDisabled != 0
+	regexFilters, err := decodeStringSliceJSON(regexFiltersJSON)
+	if err != nil {
+		return fmt.Errorf("decode platform %s regex_filters_json: %w", p.ID, err)
+	}
+	regionFilters, err := decodeStringSliceJSON(regionFiltersJSON)
+	if err != nil {
+		return fmt.Errorf("decode platform %s region_filters_json: %w", p.ID, err)
+	}
+	fallbackPlatformIDs, err := decodeStringSliceJSON(fallbackPlatformIDsJSON)
+	if err != nil {
+		return fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", p.ID, err)
+	}
+	subscriptionIDs, err := decodeStringSliceJSON(subscriptionIDsJSON)
+	if err != nil {
+		return fmt.Errorf("decode platform %s subscription_ids_json: %w", p.ID, err)
+	}
+	p.RegexFilters = regexFilters
+	p.RegionFilters = regionFilters
+	p.FallbackPlatformIDs = fallbackPlatformIDs
+	p.SubscriptionIDs = subscriptionIDs
+	return nil
+}
+
+func withoutString(values []string, target string) ([]string, bool) {
+	if target == "" || len(values) == 0 {
+		return values, false
+	}
+	out := make([]string, 0, len(values))
+	changed := false
+	for _, value := range values {
+		if value == target {
+			changed = true
+			continue
+		}
+		out = append(out, value)
+	}
+	if !changed {
+		return values, false
+	}
+	return out, true
+}
+
 // --- system_config ---
 
 // GetSystemConfig loads the runtime config and version from state.db.
@@ -160,6 +208,10 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 	if err != nil {
 		return fmt.Errorf("encode platform %s fallback_platform_ids: %w", p.ID, err)
 	}
+	subscriptionIDsJSON, err := encodeStringSliceJSON(p.SubscriptionIDs)
+	if err != nil {
+		return fmt.Errorf("encode platform %s subscription_ids: %w", p.ID, err)
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -169,8 +221,8 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 		                       reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 		                       reverse_proxy_fixed_account_header, allocation_policy,
 		                       passive_circuit_breaker_disabled, fallback_platform_ids_json,
-		                       rotation_interval_ns, rotation_strategy, updated_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                       subscription_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name                     = excluded.name,
 			sticky_ttl_ns            = excluded.sticky_ttl_ns,
@@ -182,12 +234,13 @@ func (r *StateRepo) UpsertPlatform(p model.Platform) error {
 			allocation_policy        = excluded.allocation_policy,
 			passive_circuit_breaker_disabled = excluded.passive_circuit_breaker_disabled,
 			fallback_platform_ids_json = excluded.fallback_platform_ids_json,
+			subscription_ids_json = excluded.subscription_ids_json,
 			rotation_interval_ns = excluded.rotation_interval_ns,
 			rotation_strategy = excluded.rotation_strategy,
 			updated_at_ns            = excluded.updated_at_ns
 	`, p.ID, p.Name, p.StickyTTLNs, regexFiltersJSON, regionFiltersJSON,
 		p.ReverseProxyMissAction, p.ReverseProxyEmptyAccountBehavior, p.ReverseProxyFixedAccountHeader,
-		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, fallbackPlatformIDsJSON,
+		p.AllocationPolicy, p.PassiveCircuitBreakerDisabled, fallbackPlatformIDsJSON, subscriptionIDsJSON,
 		p.RotationIntervalNs, p.RotationStrategy, p.UpdatedAtNs)
 	if err != nil {
 		if isSQLiteUniqueConstraint(err) {
@@ -289,38 +342,32 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 			reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
 			reverse_proxy_fixed_account_header, allocation_policy,
 			passive_circuit_breaker_disabled, fallback_platform_ids_json,
-			rotation_interval_ns, rotation_strategy, updated_at_ns
+			subscription_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns
 			FROM platforms WHERE id = ?`, id)
 
 	var p model.Platform
-	var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON string
+	var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON, subscriptionIDsJSON string
 	var passiveCircuitBreakerDisabled int
 	if err := row.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 		&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
 		&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled,
-		&fallbackPlatformIDsJSON, &p.RotationIntervalNs, &p.RotationStrategy,
+		&fallbackPlatformIDsJSON, &subscriptionIDsJSON, &p.RotationIntervalNs, &p.RotationStrategy,
 		&p.UpdatedAtNs); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
-	p.PassiveCircuitBreakerDisabled = passiveCircuitBreakerDisabled != 0
-	regexFilters, err := decodeStringSliceJSON(regexFiltersJSON)
-	if err != nil {
-		return nil, fmt.Errorf("decode platform %s regex_filters_json: %w", p.ID, err)
+	if err := decodePlatformJSONColumns(
+		&p,
+		regexFiltersJSON,
+		regionFiltersJSON,
+		fallbackPlatformIDsJSON,
+		subscriptionIDsJSON,
+		passiveCircuitBreakerDisabled,
+	); err != nil {
+		return nil, err
 	}
-	regionFilters, err := decodeStringSliceJSON(regionFiltersJSON)
-	if err != nil {
-		return nil, fmt.Errorf("decode platform %s region_filters_json: %w", p.ID, err)
-	}
-	p.RegexFilters = regexFilters
-	p.RegionFilters = regionFilters
-	fallbackPlatformIDs, err := decodeStringSliceJSON(fallbackPlatformIDsJSON)
-	if err != nil {
-		return nil, fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", p.ID, err)
-	}
-	p.FallbackPlatformIDs = fallbackPlatformIDs
 	return &p, nil
 }
 
@@ -330,8 +377,8 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 		region_filters_json, reverse_proxy_miss_action,
 		reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header,
 		allocation_policy, passive_circuit_breaker_disabled,
-		fallback_platform_ids_json, rotation_interval_ns, rotation_strategy,
-		updated_at_ns FROM platforms`)
+		fallback_platform_ids_json, subscription_ids_json, rotation_interval_ns,
+		rotation_strategy, updated_at_ns FROM platforms`)
 	if err != nil {
 		return nil, err
 	}
@@ -340,34 +387,55 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 	var result []model.Platform
 	for rows.Next() {
 		var p model.Platform
-		var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON string
+		var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON, subscriptionIDsJSON string
 		var passiveCircuitBreakerDisabled int
 		if err := rows.Scan(&p.ID, &p.Name, &p.StickyTTLNs, &regexFiltersJSON,
 			&regionFiltersJSON, &p.ReverseProxyMissAction, &p.ReverseProxyEmptyAccountBehavior,
 			&p.ReverseProxyFixedAccountHeader, &p.AllocationPolicy, &passiveCircuitBreakerDisabled,
-			&fallbackPlatformIDsJSON, &p.RotationIntervalNs, &p.RotationStrategy,
+			&fallbackPlatformIDsJSON, &subscriptionIDsJSON, &p.RotationIntervalNs, &p.RotationStrategy,
 			&p.UpdatedAtNs); err != nil {
 			return nil, err
 		}
-		p.PassiveCircuitBreakerDisabled = passiveCircuitBreakerDisabled != 0
-		regexFilters, err := decodeStringSliceJSON(regexFiltersJSON)
-		if err != nil {
-			return nil, fmt.Errorf("decode platform %s regex_filters_json: %w", p.ID, err)
+		if err := decodePlatformJSONColumns(
+			&p,
+			regexFiltersJSON,
+			regionFiltersJSON,
+			fallbackPlatformIDsJSON,
+			subscriptionIDsJSON,
+			passiveCircuitBreakerDisabled,
+		); err != nil {
+			return nil, err
 		}
-		regionFilters, err := decodeStringSliceJSON(regionFiltersJSON)
-		if err != nil {
-			return nil, fmt.Errorf("decode platform %s region_filters_json: %w", p.ID, err)
-		}
-		p.RegexFilters = regexFilters
-		p.RegionFilters = regionFilters
-		fallbackPlatformIDs, err := decodeStringSliceJSON(fallbackPlatformIDsJSON)
-		if err != nil {
-			return nil, fmt.Errorf("decode platform %s fallback_platform_ids_json: %w", p.ID, err)
-		}
-		p.FallbackPlatformIDs = fallbackPlatformIDs
 		result = append(result, p)
 	}
 	return result, rows.Err()
+}
+
+// RemoveSubscriptionIDFromPlatforms drops a subscription ID from every
+// platform allowlist. Platforms that did not reference it are left unchanged.
+func (r *StateRepo) RemoveSubscriptionIDFromPlatforms(subscriptionID string) ([]string, error) {
+	if subscriptionID == "" {
+		return nil, nil
+	}
+	platforms, err := r.ListPlatforms()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UnixNano()
+	var affected []string
+	for _, p := range platforms {
+		next, changed := withoutString(p.SubscriptionIDs, subscriptionID)
+		if !changed {
+			continue
+		}
+		p.SubscriptionIDs = next
+		p.UpdatedAtNs = now
+		if err := r.UpsertPlatform(p); err != nil {
+			return affected, err
+		}
+		affected = append(affected, p.ID)
+	}
+	return affected, nil
 }
 
 // --- subscriptions ---

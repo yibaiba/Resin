@@ -30,6 +30,7 @@
 * StickyTTL: time.Duration，该平台的粘性租约寿命。
 * RegexFilters：节点标签过滤规则列表，语法见“节点标签过滤规则”。
 * RegexFiltersCompiled：按规则类型分组的编译结果。随着 RegexFilters 更新。
+* SubscriptionIDs：允许进入该平台的订阅 ID 列表。空表示不限制订阅来源。非空时，节点必须属于其中至少一个 Enabled 订阅。与 RegexFilters、RegionFilters 同时生效（AND）。按订阅 ID 匹配，不随订阅改名失效。
 * RegionFilters：一个地区列表。小写 ISO codes (e.g., "hk", "us")。节点的出口 IP 地区属于该列表才符合条件。空表示不做地区筛选。
 * 反向代理 Account 为空时的行为：随机路由 / 固定 Header 提取 / 按 Account Header Rule 提取。
 * 反向代理匹配 Account 失败后的行为：随机路由 或 拒绝请求。默认是随机路由。
@@ -271,6 +272,7 @@ No available proxy nodes
 	* SubscriptionIDs：一个 slice。表示持有该节点的订阅 ID 集合。
   * --- 方法 ---
 	* MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bool：按“节点标签过滤规则”判断节点是否匹配。
+	* MatchesSubscriptionAllowlist(allowIDs []string, subLookup SubLookupFunc) bool：空 allowlist 匹配全部节点；非空时节点必须属于其中至少一个 Enabled 订阅。
 
 本项目不使用原生的 sing-box OutboundManager，而是实现上述高性能 Outbound Manager。
 
@@ -280,11 +282,12 @@ No available proxy nodes
 * 特质：支持 O(1) 的随机选取与 O(1) 的增删查。
 * 过滤条件：
     1. 节点状态正常（非 Circuit Break）。
-    2. 调用 `NodeEntry.MatchTagFilter(Platform.RegexFilters, subLookup)` 判断 Tag 是否匹配。
-    3. 节点必须有出口 IP（无论 Platform 是否配置 `RegionFilters`）。
-    4. 若 `RegionFilters` 非空，则节点出口 IP 地区必须符合 `RegionFilters`。
-    5. 有至少一条延迟信息。
-    6. Outbound 不为空
+    2. 调用 `NodeEntry.MatchesSubscriptionAllowlist(Platform.SubscriptionIDs, subLookup)` 判断订阅来源；空列表表示不限制。
+    3. 调用 `NodeEntry.MatchTagFilter(Platform.RegexFilters, subLookup)` 判断 Tag 是否匹配。
+    4. 节点必须有出口 IP（无论 Platform 是否配置 `RegionFilters`）。
+    5. 若 `RegionFilters` 非空，则节点出口 IP 地区必须符合 `RegionFilters`。
+    6. 有至少一条延迟信息。
+    7. Outbound 不为空
 * 过滤源：遍历全局节点池中的所有 `NodeEntry`。
 
 ##### Platform 节点视图动态更新
@@ -596,7 +599,7 @@ Resin 项目中所有的数据库都设计为单写，不会有多进程写入�
 ### SQLite 数据模型
 #### state.db
 * system_config(config_json, version, updated_at_ns)
-* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, updated_at_ns)
+* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, subscription_ids_json, updated_at_ns)
 * subscriptions(id PK, name, url, update_interval_ns, enabled, ephemeral, created_at_ns, updated_at_ns)
 * account_header_rules(url_prefix PK, headers_json, updated_at_ns)
 
@@ -1198,6 +1201,7 @@ Body（partial patch 示例）：
   "sticky_ttl": "30m",
   "regex_filters": ["*^sub1/.*", ".*hk.*", "!过期"],
   "region_filters": ["hk","us"],
+  "subscription_ids": ["uuid-of-exclusive-sub"],
   "routable_node_count": 123,
   "reverse_proxy_miss_action": "TREAT_AS_EMPTY|REJECT",
   "reverse_proxy_empty_account_behavior": "RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE",
@@ -1227,6 +1231,7 @@ Body：
   "sticky_ttl": "168h",
   "regex_filters": ["^sub1/.*"],
   "region_filters": ["hk", "us"],
+  "subscription_ids": ["uuid-of-exclusive-sub"],
   "reverse_proxy_miss_action": "TREAT_AS_EMPTY",
   "reverse_proxy_empty_account_behavior": "ACCOUNT_HEADER_RULE",
   "reverse_proxy_fixed_account_header": "Authorization\nX-Account-Id",
@@ -1238,7 +1243,7 @@ Body：
 字段要求：
 
 * 必填字段：`name`
-* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
+* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
 * 不可传字段：`id`、`updated_at`、`routable_node_count`
 * 省略可选字段时，平台策略字段使用当前环境变量默认平台设置（`RESIN_DEFAULT_PLATFORM_*`）对应值；`passive_circuit_breaker_disabled` 默认 `false`
 
@@ -1248,6 +1253,7 @@ Body：
 * `sticky_ttl`：合法 Go duration。
 * `regex_filters`：节点标签过滤规则列表，语义与校验见“节点标签过滤规则”。
 * `region_filters`：每项为 ISO 3166-1 alpha-2 小写代码。
+* `subscription_ids`：允许进入该平台的订阅 ID 列表。空数组或不传表示不限制订阅。非空时每项必须是已存在的订阅 ID，不能为空或重复。节点只要属于其中一个 Enabled 订阅即可进入，再与 `regex_filters`、`region_filters` 取交集。删除订阅时会从所有平台的该列表中移除对应 ID。
 * 枚举字段：`reverse_proxy_miss_action` 仅 `TREAT_AS_EMPTY|REJECT`；`reverse_proxy_empty_account_behavior` 仅 `RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE`；`allocation_policy` 仅 `BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。
 * `passive_circuit_breaker_disabled`：布尔值。设为 `true` 后，此 Platform 的用户代理请求失败不会增加节点熔断计数；主动探测不受影响。成功请求仍会清除节点连续失败计数并可恢复熔断节点。
 * 组合约束：当 `reverse_proxy_empty_account_behavior=FIXED_HEADER` 时，`reverse_proxy_fixed_account_header` 必填；其值支持多行，每行一个合法 HTTP Header 字段名（会按顺序尝试提取）。
@@ -1278,7 +1284,7 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：无
-* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
+* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
 * 不可改字段：`id`、`updated_at`、`routable_node_count`
 
 关键校验：与“创建平台”一致。
@@ -1337,7 +1343,8 @@ Body（partial patch 示例）：
 {
   "platform_spec": {
     "regex_filters": ["^subA/.*"],
-    "region_filters": ["hk", "us"]
+    "region_filters": ["hk", "us"],
+    "subscription_ids": ["uuid-of-exclusive-sub"]
   }
 }
 ```
@@ -1345,13 +1352,14 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：`platform_id` 与 `platform_spec` 二选一，且只能出现一个。
-* `platform_spec` 仅允许字段：`regex_filters`、`region_filters`。
+* `platform_spec` 仅允许字段：`regex_filters`、`region_filters`、`subscription_ids`。
 
 关键校验（最小集）：
 
 * `platform_id`：必须存在。
 * `platform_spec.regex_filters`：同 Platform 的 `regex_filters`。
 * `platform_spec.region_filters`：每项为 ISO 3166-1 alpha-2 小写代码。
+* `platform_spec.subscription_ids`：同 Platform 的 `subscription_ids`。
 
 错误码映射（最小集）：
 

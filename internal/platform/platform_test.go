@@ -33,7 +33,7 @@ func setEntryNetworks(entry *node.NodeEntry, networks ...string) {
 	}
 }
 
-// makeFullyRoutableEntry creates a NodeEntry that passes all 5 filter conditions.
+// makeFullyRoutableEntry creates a NodeEntry that passes all filter conditions.
 func makeFullyRoutableEntry(hash node.Hash, subIDs ...string) *node.NodeEntry {
 	e := node.NewNodeEntry(hash, nil, time.Now(), 16)
 	for _, id := range subIDs {
@@ -400,6 +400,35 @@ func TestPlatform_NotifyDirty_AddRemove(t *testing.T) {
 	p.NotifyDirty(h, getEntry, alwaysLookup, usGeoLookup)
 	if p.View().Size() != 0 {
 		t.Fatal("NotifyDirty should remove deleted node")
+	}
+}
+
+func TestPlatform_EvaluateNode_SubscriptionAllowlist(t *testing.T) {
+	p := NewPlatform("p-sub", "SubOnly", nil, nil)
+	p.SubscriptionIDs = []string{"sub-exclusive"}
+
+	keepHash := makeHash(`{"type":"ss","n":"keep"}`)
+	dropHash := makeHash(`{"type":"ss","n":"drop"}`)
+	keep := makeFullyRoutableEntry(keepHash, "sub-exclusive")
+	drop := makeFullyRoutableEntry(dropHash, "sub-other")
+
+	lookup := func(subID string, hash node.Hash) (string, bool, []string, bool) {
+		return subID, true, []string{"node"}, true
+	}
+
+	p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
+		fn(keepHash, keep)
+		fn(dropHash, drop)
+	}, lookup, usGeoLookup)
+
+	if p.View().Size() != 1 {
+		t.Fatalf("allowlist view size = %d, want 1", p.View().Size())
+	}
+	if !p.View().Contains(keepHash) {
+		t.Fatal("exclusive subscription node should remain routable")
+	}
+	if p.View().Contains(dropHash) {
+		t.Fatal("node from another subscription should be excluded")
 	}
 }
 

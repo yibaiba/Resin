@@ -174,6 +174,8 @@ curl http://127.0.0.1:2260/my-token/./https/api.ipify.org
 
 If your service needs specific nodes (for example by region, subscription source, or name regex), use Resin's Platform feature.
 
+To give a Platform an exclusive subscription, pick **Allowed Subscriptions** when creating or editing the platform. Leave it empty to accept every subscription. After you pick one or more subscriptions, only nodes from those subscriptions enter the platform; node-name regex and region filters still apply. A node that also appears in other subscriptions still qualifies if it belongs to a selected subscription.
+
 Open `http://127.0.0.1:2260/ui/platforms` and create a Platform. For example, to use only US and HK nodes, create `MyPlatform` and set region filters to:
 
 ```
