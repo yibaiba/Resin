@@ -17,7 +17,6 @@ import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
 import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatGoDuration, formatRelativeTime } from "../../lib/time";
-import { listSubscriptions } from "../subscriptions/api";
 import { createPlatform, listPlatforms } from "./api";
 import {
   allocationPolicies,
@@ -89,11 +88,6 @@ export function PlatformPage() {
     control: createForm.control,
     name: "subscription_ids",
   }) ?? [];
-  const subscriptionsQuery = useQuery({
-    queryKey: ["subscriptions", "platform-picker"],
-    queryFn: () => listSubscriptions({ limit: 1000, offset: 0 }),
-    enabled: createModalOpen,
-  });
 
   const createMutation = useMutation({
     mutationFn: createPlatform,
@@ -362,12 +356,6 @@ export function PlatformPage() {
               <PlatformSubscriptionPicker
                 create
                 selectedIDs={createSubscriptionIDs}
-                subscriptions={(subscriptionsQuery.data?.items ?? []).map((item) => ({
-                  id: item.id,
-                  name: item.name,
-                  enabled: item.enabled,
-                }))}
-                loading={subscriptionsQuery.isLoading}
                 onChange={(ids) => createForm.setValue("subscription_ids", ids, { shouldDirty: true })}
               />
 

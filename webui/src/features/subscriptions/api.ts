@@ -41,6 +41,25 @@ export type ListSubscriptionsInput = {
   keyword?: string;
 };
 
+export async function listAllSubscriptions(
+  input: Omit<ListSubscriptionsInput, "limit" | "offset"> = {},
+): Promise<Subscription[]> {
+  const pageSize = 1000;
+  const collected: Subscription[] = [];
+  let offset = 0;
+  let total = Number.POSITIVE_INFINITY;
+  while (offset < total) {
+    const page = await listSubscriptions({ ...input, limit: pageSize, offset });
+    collected.push(...page.items);
+    total = page.total;
+    if (page.items.length === 0) {
+      break;
+    }
+    offset += page.items.length;
+  }
+  return collected;
+}
+
 export async function listSubscriptions(input: ListSubscriptionsInput = {}): Promise<PageResponse<Subscription>> {
   const query = new URLSearchParams({
     limit: String(input.limit ?? 50),

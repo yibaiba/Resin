@@ -167,7 +167,6 @@ func (p *Platform) evaluateNode(
 		return false
 	}
 
-	// 2. Subscription allowlist (empty means all subscriptions).
 	if !entry.MatchesSubscriptionAllowlist(p.SubscriptionIDs, subLookup) {
 		return false
 	}

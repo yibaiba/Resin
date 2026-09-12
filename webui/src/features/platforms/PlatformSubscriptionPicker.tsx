@@ -1,19 +1,14 @@
+import { useQuery } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "../../components/ui/Button";
+import { Input } from "../../components/ui/Input";
 import { Select } from "../../components/ui/Select";
 import { useI18n } from "../../i18n";
-
-export type SubscriptionOption = {
-  id: string;
-  name: string;
-  enabled: boolean;
-};
+import { listAllSubscriptions } from "../subscriptions/api";
 
 type Props = {
   selectedIDs: string[];
-  subscriptions: SubscriptionOption[];
-  loading?: boolean;
   create?: boolean;
   onChange: (ids: string[]) => void;
 };
@@ -21,9 +16,20 @@ type Props = {
 export function PlatformSubscriptionPicker(props: Props) {
   const { t } = useI18n();
   const [candidate, setCandidate] = useState("");
-  const names = useMemo(() => new Map(props.subscriptions.map((item) => [item.id, item])), [props.subscriptions]);
-  const available = props.subscriptions
+  const [keyword, setKeyword] = useState("");
+  const fieldID = props.create ? "create-subscription-filter" : "detail-edit-subscription-filter";
+  const searchID = `${fieldID}-search`;
+
+  const subscriptionsQuery = useQuery({
+    queryKey: ["subscriptions", "platform-picker"],
+    queryFn: () => listAllSubscriptions(),
+  });
+  const subscriptions = subscriptionsQuery.data ?? [];
+  const names = useMemo(() => new Map(subscriptions.map((item) => [item.id, item])), [subscriptions]);
+  const needle = keyword.trim().toLowerCase();
+  const available = subscriptions
     .filter((item) => !props.selectedIDs.includes(item.id))
+    .filter((item) => !needle || item.name.toLowerCase().includes(needle) || item.id.toLowerCase().includes(needle))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   const add = () => {
@@ -37,23 +43,34 @@ export function PlatformSubscriptionPicker(props: Props) {
       <div className="routing-settings-heading field-span-2">
         <h5>{t("允许的订阅")}</h5>
         <p>
-          {t("不选择订阅时，所有订阅的节点都可以进入该平台。勾选后仅使用这些订阅里的节点，可再叠加节点名正则和地区过滤。")}
+          {t("不选择订阅时，所有订阅的节点都可以进入该平台。添加后仅使用这些订阅里的节点，可再叠加节点名正则和地区过滤。")}
         </p>
       </div>
       <div className="field-group">
-        <label className="field-label" htmlFor={props.create ? "create-subscription-filter" : "detail-edit-subscription-filter"}>
+        <label className="field-label" htmlFor={searchID}>
+          {t("搜索订阅")}
+        </label>
+        <Input
+          id={searchID}
+          value={keyword}
+          placeholder={t("按名称筛选订阅")}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+      </div>
+      <div className="field-group">
+        <label className="field-label" htmlFor={fieldID}>
           {t("添加订阅")}
         </label>
         <div className="fallback-add-row">
           <Select
-            id={props.create ? "create-subscription-filter" : "detail-edit-subscription-filter"}
+            id={fieldID}
             value={candidate}
             onChange={(event) => setCandidate(event.target.value)}
             aria-label={t("选择订阅")}
-            disabled={props.loading}
+            disabled={subscriptionsQuery.isLoading}
           >
             <option value="">
-              {props.loading ? t("正在加载订阅...") : available.length ? t("选择订阅") : t("没有可添加的订阅")}
+              {subscriptionsQuery.isLoading ? t("正在加载订阅...") : available.length ? t("选择订阅") : t("没有可添加的订阅")}
             </option>
             {available.map((item) => (
               <option key={item.id} value={item.id}>

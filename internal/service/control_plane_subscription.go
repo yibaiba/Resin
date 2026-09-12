@@ -408,75 +408,104 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 
 // DeleteSubscription deletes a subscription and evicts its nodes.
 func (s *ControlPlaneService) DeleteSubscription(id string) error {
-	sub := s.SubMgr.Lookup(id)
-	if sub == nil {
-		return notFound("subscription not found")
-	}
-
-	var (
-		managedHashes []node.Hash
-		deleteErr     error
-	)
-
 	s.platformMu.Lock()
 	defer s.platformMu.Unlock()
 
-	// Keep delete atomic across persistence + in-memory runtime state:
-	// if DB delete fails, do not mutate runtime subscription/node state.
-	sub.WithOpLock(func() {
-		// Re-check under lock in case another goroutine removed it between
-		// the initial Lookup and lock acquisition.
-		lockedSub := s.SubMgr.Lookup(id)
-		if lockedSub == nil {
-			deleteErr = notFound("subscription not found")
-			return
-		}
-
-		lockedSub.ManagedNodes().RangeNodes(func(h node.Hash, _ subscription.ManagedNode) bool {
-			managedHashes = append(managedHashes, h)
-			return true
-		})
-
-		if err := s.Engine.DeleteSubscription(id); err != nil {
-			if errors.Is(err, state.ErrNotFound) {
-				deleteErr = notFound("subscription not found")
-			} else {
-				deleteErr = internal("delete subscription", err)
-			}
-			return
-		}
-
-		// Persist succeeded; now apply in-memory cleanup.
-		for _, h := range managedHashes {
-			s.Pool.RemoveNodeFromSub(h, id)
-		}
-		s.SubMgr.Unregister(id)
-	})
-	if deleteErr != nil {
-		return deleteErr
-	}
-
-	affected, err := s.Engine.RemoveSubscriptionIDFromPlatforms(id)
+	runtimeIDs := s.platformIDsAllowingSubscription(id)
+	affected, deleted, err := s.Engine.DeleteSubscriptionAndStripAllowlists(id, true)
 	if err != nil {
-		return internal("remove subscription from platforms", err)
+		return internal("delete subscription", err)
 	}
-	for _, platformID := range affected {
-		mp, getErr := s.Engine.GetPlatform(platformID)
-		if getErr != nil {
-			return internal("reload platform after subscription delete", getErr)
-		}
-		plat, buildErr := platform.BuildFromModel(*mp)
-		if buildErr != nil {
-			return internal("decode platform after subscription delete", buildErr)
-		}
-		if s.Pool != nil {
-			if replaceErr := s.Pool.ReplacePlatform(plat); replaceErr != nil {
-				return internal("replace platform after subscription delete", replaceErr)
+
+	sub := s.SubMgr.Lookup(id)
+	if sub != nil {
+		sub.WithOpLock(func() {
+			lockedSub := s.SubMgr.Lookup(id)
+			if lockedSub == nil {
+				return
 			}
+			if s.Pool != nil {
+				lockedSub.ManagedNodes().RangeNodes(func(h node.Hash, _ subscription.ManagedNode) bool {
+					s.Pool.RemoveNodeFromSub(h, id)
+					return true
+				})
+			}
+			s.SubMgr.Unregister(id)
+		})
+	}
+
+	for _, platformID := range uniqueNonEmptyStrings(affected, runtimeIDs) {
+		if reloadErr := s.reloadPlatformRuntime(platformID); reloadErr != nil {
+			return reloadErr
 		}
 	}
 
+	if !deleted && sub == nil && len(affected) == 0 && len(runtimeIDs) == 0 {
+		return notFound("subscription not found")
+	}
 	return nil
+}
+
+func (s *ControlPlaneService) platformIDsAllowingSubscription(subscriptionID string) []string {
+	if s == nil || s.Pool == nil || subscriptionID == "" {
+		return nil
+	}
+	var ids []string
+	s.Pool.RangePlatforms(func(plat *platform.Platform) bool {
+		if plat == nil {
+			return true
+		}
+		for _, id := range plat.SubscriptionIDs {
+			if id == subscriptionID {
+				ids = append(ids, plat.ID)
+				return true
+			}
+		}
+		return true
+	})
+	return ids
+}
+
+func (s *ControlPlaneService) reloadPlatformRuntime(id string) *ServiceError {
+	if s == nil || s.Pool == nil {
+		return nil
+	}
+	if _, ok := s.Pool.GetPlatform(id); !ok {
+		return nil
+	}
+	mp, err := s.Engine.GetPlatform(id)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			return nil
+		}
+		return internal("reload platform after subscription delete", err)
+	}
+	plat, err := platform.BuildFromModel(*mp)
+	if err != nil {
+		return internal("decode platform after subscription delete", err)
+	}
+	if err := s.Pool.ReplacePlatform(plat); err != nil {
+		return internal("replace platform after subscription delete", err)
+	}
+	return nil
+}
+
+func uniqueNonEmptyStrings(groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, group := range groups {
+		for _, value := range group {
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // RefreshSubscription triggers an immediate subscription refresh (blocks).

@@ -20,7 +20,6 @@ import { useToast } from "../../hooks/useToast";
 import { useI18n } from "../../i18n";
 import { formatApiErrorMessage } from "../../lib/error-message";
 import { formatDateTime, formatGoDuration, formatRelativeTime } from "../../lib/time";
-import { listSubscriptions } from "../subscriptions/api";
 import {
   clearAllPlatformLeases,
   deletePlatform,
@@ -145,11 +144,7 @@ export function PlatformDetailPage() {
     queryFn: () => listPlatforms({ limit: 1000 }),
     staleTime: 30_000,
   });
-  const subscriptionsQuery = useQuery({
-    queryKey: ["subscriptions", "platform-picker"],
-    queryFn: () => listSubscriptions({ limit: 1000, offset: 0 }),
-    staleTime: 30_000,
-  });
+
 
   useEffect(() => {
     if (!platform) {
@@ -714,12 +709,6 @@ export function PlatformDetailPage() {
 
                   <PlatformSubscriptionPicker
                     selectedIDs={detailSubscriptionIDs}
-                    subscriptions={(subscriptionsQuery.data?.items ?? []).map((item) => ({
-                      id: item.id,
-                      name: item.name,
-                      enabled: item.enabled,
-                    }))}
-                    loading={subscriptionsQuery.isLoading}
                     onChange={(ids) => editForm.setValue("subscription_ids", ids, { shouldDirty: true })}
                   />
 

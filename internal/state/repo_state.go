@@ -338,12 +338,7 @@ func (r *StateRepo) PlatformFallbackReferences(platformID string) (bool, error) 
 
 // GetPlatform returns one platform by ID.
 func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
-	row := r.db.QueryRow(`SELECT id, name, sticky_ttl_ns, regex_filters_json, region_filters_json,
-			reverse_proxy_miss_action, reverse_proxy_empty_account_behavior,
-			reverse_proxy_fixed_account_header, allocation_policy,
-			passive_circuit_breaker_disabled, fallback_platform_ids_json,
-			subscription_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns
-			FROM platforms WHERE id = ?`, id)
+	row := r.db.QueryRow(platformListSQL+` WHERE id = ?`, id)
 
 	var p model.Platform
 	var regexFiltersJSON, regionFiltersJSON, fallbackPlatformIDsJSON, subscriptionIDsJSON string
@@ -371,14 +366,19 @@ func (r *StateRepo) GetPlatform(id string) (*model.Platform, error) {
 	return &p, nil
 }
 
-// ListPlatforms returns all platforms.
-func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
-	rows, err := r.db.Query(`SELECT id, name, sticky_ttl_ns, regex_filters_json,
+const platformListSQL = `SELECT id, name, sticky_ttl_ns, regex_filters_json,
 		region_filters_json, reverse_proxy_miss_action,
 		reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header,
 		allocation_policy, passive_circuit_breaker_disabled,
 		fallback_platform_ids_json, subscription_ids_json, rotation_interval_ns,
-		rotation_strategy, updated_at_ns FROM platforms`)
+		rotation_strategy, updated_at_ns FROM platforms`
+
+type platformQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func queryPlatforms(q platformQueryer) ([]model.Platform, error) {
+	rows, err := q.Query(platformListSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -411,31 +411,77 @@ func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
 	return result, rows.Err()
 }
 
+// ListPlatforms returns all platforms.
+func (r *StateRepo) ListPlatforms() ([]model.Platform, error) {
+	return queryPlatforms(r.db)
+}
+
 // RemoveSubscriptionIDFromPlatforms drops a subscription ID from every
 // platform allowlist. Platforms that did not reference it are left unchanged.
 func (r *StateRepo) RemoveSubscriptionIDFromPlatforms(subscriptionID string) ([]string, error) {
+	affected, _, err := r.DeleteSubscriptionAndStripAllowlists(subscriptionID, false)
+	return affected, err
+}
+
+// DeleteSubscriptionAndStripAllowlists removes subscriptionID from every
+// platform allowlist and, when deleteSubscription is true, deletes the
+// subscription row. Both steps run in one transaction. deleted reports whether
+// a subscription row was removed. A missing subscription row is not an error.
+func (r *StateRepo) DeleteSubscriptionAndStripAllowlists(
+	subscriptionID string,
+	deleteSubscription bool,
+) (affected []string, deleted bool, err error) {
 	if subscriptionID == "" {
-		return nil, nil
+		return nil, false, nil
 	}
-	platforms, err := r.ListPlatforms()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	tx, err := r.db.Begin()
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	defer tx.Rollback()
+
+	platforms, err := queryPlatforms(tx)
+	if err != nil {
+		return nil, false, err
 	}
 	now := time.Now().UnixNano()
-	var affected []string
 	for _, p := range platforms {
 		next, changed := withoutString(p.SubscriptionIDs, subscriptionID)
 		if !changed {
 			continue
 		}
-		p.SubscriptionIDs = next
-		p.UpdatedAtNs = now
-		if err := r.UpsertPlatform(p); err != nil {
-			return affected, err
+		payload, encErr := encodeStringSliceJSON(next)
+		if encErr != nil {
+			return nil, false, fmt.Errorf("encode platform %s subscription_ids: %w", p.ID, encErr)
+		}
+		if _, execErr := tx.Exec(
+			`UPDATE platforms SET subscription_ids_json = ?, updated_at_ns = ? WHERE id = ?`,
+			payload,
+			now,
+			p.ID,
+		); execErr != nil {
+			return nil, false, execErr
 		}
 		affected = append(affected, p.ID)
 	}
-	return affected, nil
+
+	if deleteSubscription {
+		result, delErr := tx.Exec("DELETE FROM subscriptions WHERE id = ?", subscriptionID)
+		if delErr != nil {
+			return nil, false, delErr
+		}
+		n, _ := result.RowsAffected()
+		deleted = n > 0
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return affected, deleted, nil
 }
 
 // --- subscriptions ---

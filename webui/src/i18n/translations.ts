@@ -662,8 +662,9 @@ Note: Once enabled, requests without authentication information are rejected ins
   "没有可添加的订阅": "No subscriptions available to add",
   "已选订阅": "Selected Subscriptions",
   "未限制订阅": "No subscription restriction",
-  "不选择订阅时，所有订阅的节点都可以进入该平台。勾选后仅使用这些订阅里的节点，可再叠加节点名正则和地区过滤。":
-    "Leave this empty to accept nodes from every subscription. After you pick subscriptions, only their nodes enter this platform; node-name regex and region filters still apply.",
+  "不选择订阅时，所有订阅的节点都可以进入该平台。添加后仅使用这些订阅里的节点，可再叠加节点名正则和地区过滤。":
+    "Leave this empty to accept nodes from every subscription. After you add subscriptions, only their nodes enter this platform; node-name regex and region filters still apply.",
+  "按名称筛选订阅": "Filter subscriptions by name",
   "当前平台会接收所有订阅中符合其他过滤规则的节点。":
     "This platform currently accepts nodes from every subscription that also match the other filters.",
   "已删除的订阅": "Deleted subscription",

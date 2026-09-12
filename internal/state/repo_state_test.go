@@ -521,6 +521,48 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 		t.Fatalf("subscription ids after remove = %v, want [sub-b]", got.SubscriptionIDs)
 	}
 
+	if err := repo.UpsertSubscription(model.Subscription{
+		ID: "sub-b", Name: "SubB", URL: "https://example.com/b",
+		UpdateIntervalNs: int64(30 * time.Second), Enabled: true,
+		EphemeralNodeEvictDelayNs: int64(time.Hour), CreatedAtNs: now, UpdatedAtNs: now,
+	}); err != nil {
+		t.Fatalf("UpsertSubscription: %v", err)
+	}
+	affected, deleted, err := repo.DeleteSubscriptionAndStripAllowlists("sub-b", true)
+	if err != nil {
+		t.Fatalf("DeleteSubscriptionAndStripAllowlists: %v", err)
+	}
+	if !deleted {
+		t.Fatal("expected subscription row to be deleted")
+	}
+	if len(affected) != 1 || affected[0] != "plat-1" {
+		t.Fatalf("affected after transactional delete = %v, want [plat-1]", affected)
+	}
+	got, err = repo.GetPlatform("plat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SubscriptionIDs) != 0 {
+		t.Fatalf("subscription ids after transactional delete = %v, want empty", got.SubscriptionIDs)
+	}
+	subs, err := repo.ListSubscriptions()
+	if err != nil {
+		t.Fatalf("ListSubscriptions: %v", err)
+	}
+	if len(subs) != 0 {
+		t.Fatalf("subscriptions after transactional delete = %+v, want empty", subs)
+	}
+	affected, deleted, err = repo.DeleteSubscriptionAndStripAllowlists("sub-b", true)
+	if err != nil {
+		t.Fatalf("idempotent DeleteSubscriptionAndStripAllowlists: %v", err)
+	}
+	if deleted {
+		t.Fatal("second delete should not remove another subscription row")
+	}
+	if len(affected) != 0 {
+		t.Fatalf("second delete affected = %v, want empty", affected)
+	}
+
 	// List.
 	list, err := repo.ListPlatforms()
 	if err != nil {

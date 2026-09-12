@@ -154,7 +154,7 @@ func TestUpdatePlatform_ClearsSubscriptionAllowlist(t *testing.T) {
 }
 
 func TestDeleteSubscription_RemovesPlatformSubscriptionIDs(t *testing.T) {
-	cp, exclusive, _, _, _ := newPlatformSubscriptionFixture(t)
+	cp, exclusive, _, exclusiveHash, sharedHash := newPlatformSubscriptionFixture(t)
 	name := "cleanup-sub-platform"
 	created, err := cp.CreatePlatform(CreatePlatformRequest{
 		Name:            &name,
@@ -187,6 +187,79 @@ func TestDeleteSubscription_RemovesPlatformSubscriptionIDs(t *testing.T) {
 	}
 	if len(got.SubscriptionIDs) != 0 {
 		t.Fatalf("subscription_ids after delete = %v, want empty", got.SubscriptionIDs)
+	}
+
+	plat, ok := cp.Pool.GetPlatform(created.ID)
+	if !ok {
+		t.Fatal("platform missing from pool")
+	}
+	if len(plat.SubscriptionIDs) != 0 {
+		t.Fatalf("runtime subscription_ids = %v, want empty", plat.SubscriptionIDs)
+	}
+	if plat.View().Contains(exclusiveHash) {
+		t.Fatal("deleted subscription node should leave the view")
+	}
+	if !plat.View().Contains(sharedHash) {
+		t.Fatal("empty allowlist should make remaining subscription nodes routable")
+	}
+
+	err = cp.DeleteSubscription(exclusive.ID)
+	if err == nil {
+		t.Fatal("expected second delete to return not found")
+	}
+	if svcErr, ok := err.(*ServiceError); !ok || svcErr.Code != "NOT_FOUND" {
+		t.Fatalf("second delete error = %v, want NOT_FOUND", err)
+	}
+}
+
+func TestDeleteSubscription_StripsStaleAllowlistWhenSubscriptionAlreadyGone(t *testing.T) {
+	cp, exclusive, _, exclusiveHash, sharedHash := newPlatformSubscriptionFixture(t)
+	name := "stale-allowlist-platform"
+	created, err := cp.CreatePlatform(CreatePlatformRequest{
+		Name:            &name,
+		SubscriptionIDs: []string{exclusive.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	exclusive.ManagedNodes().RangeNodes(func(h node.Hash, _ subscription.ManagedNode) bool {
+		cp.Pool.RemoveNodeFromSub(h, exclusive.ID)
+		return true
+	})
+	cp.SubMgr.Unregister(exclusive.ID)
+
+	got, err := cp.GetPlatform(created.ID)
+	if err != nil {
+		t.Fatalf("GetPlatform: %v", err)
+	}
+	if len(got.SubscriptionIDs) != 1 || got.SubscriptionIDs[0] != exclusive.ID {
+		t.Fatalf("stale subscription_ids = %v, want [%s]", got.SubscriptionIDs, exclusive.ID)
+	}
+
+	if err := cp.DeleteSubscription(exclusive.ID); err != nil {
+		t.Fatalf("DeleteSubscription should strip leftover allowlist IDs: %v", err)
+	}
+
+	got, err = cp.GetPlatform(created.ID)
+	if err != nil {
+		t.Fatalf("GetPlatform after strip: %v", err)
+	}
+	if len(got.SubscriptionIDs) != 0 {
+		t.Fatalf("subscription_ids after stale cleanup = %v, want empty", got.SubscriptionIDs)
+	}
+	plat, ok := cp.Pool.GetPlatform(created.ID)
+	if !ok {
+		t.Fatal("platform missing from pool")
+	}
+	if len(plat.SubscriptionIDs) != 0 {
+		t.Fatalf("runtime subscription_ids after stale cleanup = %v, want empty", plat.SubscriptionIDs)
+	}
+	if plat.View().Contains(exclusiveHash) {
+		t.Fatal("exclusive node should remain gone")
+	}
+	if !plat.View().Contains(sharedHash) {
+		t.Fatal("stripped allowlist should include remaining subscription nodes")
 	}
 }
 
