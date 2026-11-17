@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"net"
 	"time"
 
@@ -55,7 +56,11 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 		},
 	)
 	if routeErr != nil {
-		return tunnelPrepareResult{proxyErr: routeErr}
+		return tunnelPrepareResult{
+			proxyErr:      routeErr,
+			upstreamStage: "route",
+			upstreamErr:   errors.New(routeErr.ResinError),
+		}
 	}
 	if plan.IsDirect() {
 		return prepareDirectConnectTunnel(request.ctx, request.deps, request.target)

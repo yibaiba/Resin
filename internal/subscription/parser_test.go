@@ -851,9 +851,8 @@ func TestParseGeneralSubscription_ClashJSON_HysteriaAdvancedFields(t *testing.T)
 	if !containsAnyString(certificates, "-----BEGIN CERTIFICATE-----ABC") {
 		t.Fatalf("tls.certificate: got %v", certificates)
 	}
-	utls := mustMapField(t, tls, "utls")
-	if got := utls["fingerprint"]; got != "chrome" {
-		t.Fatalf("tls.utls.fingerprint: got %v", got)
+	if _, hasUTLS := tls["utls"]; hasUTLS {
+		t.Fatalf("tls.utls should be absent for hysteria even with fingerprint: got %v", tls["utls"])
 	}
 }
 
@@ -1035,9 +1034,8 @@ func TestParseGeneralSubscription_ClashJSON_Hysteria2AdvancedFields(t *testing.T
 	if !containsAnyString(certificates, "-----BEGIN CERTIFICATE-----XYZ") {
 		t.Fatalf("tls.certificate: got %v", certificates)
 	}
-	utls := mustMapField(t, tls, "utls")
-	if got := utls["fingerprint"]; got != "firefox" {
-		t.Fatalf("tls.utls.fingerprint: got %v", got)
+	if _, hasUTLS := tls["utls"]; hasUTLS {
+		t.Fatalf("tls.utls should be absent for hysteria2 even with fingerprint: got %v", tls["utls"])
 	}
 }
 
@@ -1739,9 +1737,8 @@ func TestParseGeneralSubscription_HY2URIAliasAndQueryPassword(t *testing.T) {
 	if got := tls["certificate_path"]; got != "/etc/ssl/certs/hy2.pem" {
 		t.Fatalf("tls.certificate_path: got %v", got)
 	}
-	utls := mustMapField(t, tls, "utls")
-	if got := utls["fingerprint"]; got != "chrome" {
-		t.Fatalf("tls.utls.fingerprint: got %v", got)
+	if _, hasUTLS := tls["utls"]; hasUTLS {
+		t.Fatalf("tls.utls should be absent for hy2 URI even with fp=chrome: got %v", tls["utls"])
 	}
 }
 
@@ -1799,6 +1796,19 @@ func TestParseGeneralSubscription_HY2URIPinSHA256MapsToTLSCertPublicKeyPin(t *te
 	}
 	if _, hasUTLS := tls["utls"]; hasUTLS {
 		t.Fatalf("tls.utls should be absent when only pinSHA256 is provided: got %v", tls["utls"])
+	}
+}
+
+func TestIsQUICOutboundType(t *testing.T) {
+	for _, outboundType := range []string{"hysteria", "Hysteria2", " tuic "} {
+		if !isQUICOutboundType(outboundType) {
+			t.Fatalf("isQUICOutboundType(%q) = false, want true", outboundType)
+		}
+	}
+	for _, outboundType := range []string{"vless", "trojan", "anytls", ""} {
+		if isQUICOutboundType(outboundType) {
+			t.Fatalf("isQUICOutboundType(%q) = true, want false", outboundType)
+		}
 	}
 }
 

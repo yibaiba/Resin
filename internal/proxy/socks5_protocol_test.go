@@ -159,7 +159,13 @@ func TestWriteSocks5ReplyEncodesTCPAndUDPAddresses(t *testing.T) {
 		{name: "TCP IPv4", addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.3"), Port: 8080}, target: "192.0.2.3:8080"},
 		{name: "TCP IPv6", addr: &net.TCPAddr{IP: net.ParseIP("2001:db8::3"), Port: 8081}, target: "[2001:db8::3]:8081"},
 		{name: "UDP IPv4", addr: &net.UDPAddr{IP: net.IPv4zero, Port: 2260}, target: "0.0.0.0:2260"},
+		{name: "IPv6 unspecified", addr: &net.UDPAddr{IP: net.IPv6unspecified, Port: 2260}, target: "[::]:2260"},
 		{name: "unspecified", addr: nil, target: "0.0.0.0:0"},
+		{name: "QUIC empty UDP host", addr: &net.UDPAddr{Port: 58802}, target: "0.0.0.0:58802"},
+		{name: "QUIC empty TCP host", addr: &net.TCPAddr{Port: 443}, target: "0.0.0.0:443"},
+		{name: "colon port string", addr: stubAddr(":58802"), target: "0.0.0.0:58802"},
+		{name: "unparseable", addr: stubAddr("not-a-host-port"), target: "0.0.0.0:0"},
+		{name: "empty string", addr: stubAddr(""), target: "0.0.0.0:0"},
 	}
 
 	for _, test := range tests {
@@ -176,5 +182,14 @@ func TestWriteSocks5ReplyEncodesTCPAndUDPAddresses(t *testing.T) {
 				t.Fatalf("reply target: got %q, want %q", request.target, test.target)
 			}
 		})
+	}
+}
+
+func TestSocks5ReplyBindTargetFallsBackForEmptyHost(t *testing.T) {
+	if got := socks5ReplyBindTarget(&net.UDPAddr{Port: 58802}); got != "0.0.0.0:58802" {
+		t.Fatalf("empty UDP host: got %q", got)
+	}
+	if got := socks5ReplyBindTarget(nil); got != "0.0.0.0:0" {
+		t.Fatalf("nil addr: got %q", got)
 	}
 }

@@ -85,7 +85,7 @@ func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPF
 	})
 	if routeErr != nil {
 		return socks5UDPFlowCreateResult{
-			stage: "udp_route", proxyErr: routeErr, err: errors.New(routeErr.Message),
+			stage: "udp_route", proxyErr: routeErr, err: errors.New(routeErr.ResinError),
 		}
 	}
 	if plan.IsDirect() {

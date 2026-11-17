@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
@@ -332,29 +333,52 @@ func (t *secureDNSFailoverTransport) Exchange(ctx context.Context, message *mDNS
 		queryName = message.Question[0].Name
 	}
 
+	type attempt struct {
+		response *mDNS.Msg
+		err      error
+	}
+	results := make([]attempt, len(t.upstreamTags))
+	var wg sync.WaitGroup
+	for i, upstreamTag := range t.upstreamTags {
+		wg.Add(1)
+		go func(i int, upstreamTag string) {
+			defer wg.Done()
+			upstream, ok := t.manager.Transport(upstreamTag)
+			if !ok || upstream == nil {
+				results[i].err = fmt.Errorf("%s: transport not found", upstreamTag)
+				return
+			}
+
+			response, err := upstream.Exchange(ctx, message.Copy())
+			if err == nil && shouldAcceptSecureDNSResponse(response) {
+				results[i].response = response
+				return
+			}
+			if err == nil {
+				if response == nil {
+					err = errors.New("empty response")
+				} else {
+					err = dns.RcodeError(response.Rcode)
+				}
+			}
+			results[i].err = fmt.Errorf("%s: %w", upstreamTag, err)
+		}(i, upstreamTag)
+	}
+	wg.Wait()
+
+	var successes []*mDNS.Msg
 	var attemptErrs []error
-	for _, upstreamTag := range t.upstreamTags {
-		upstream, ok := t.manager.Transport(upstreamTag)
-		if !ok || upstream == nil {
-			attemptErrs = append(attemptErrs, fmt.Errorf("%s: transport not found", upstreamTag))
+	for _, result := range results {
+		if result.response != nil {
+			successes = append(successes, result.response)
 			continue
 		}
-
-		response, err := upstream.Exchange(ctx, message.Copy())
-		if err == nil && shouldAcceptSecureDNSResponse(response) {
-			return response, nil
-		}
-		if err == nil {
-			if response == nil {
-				err = errors.New("empty response")
-			} else {
-				err = dns.RcodeError(response.Rcode)
-			}
-		}
-		attemptErrs = append(attemptErrs, fmt.Errorf("%s: %w", upstreamTag, err))
+		attemptErrs = append(attemptErrs, result.err)
 	}
-
-	return nil, fmt.Errorf("secure DNS exchange failed for %s: %w", queryName, errors.Join(attemptErrs...))
+	if len(successes) == 0 {
+		return nil, fmt.Errorf("secure DNS exchange failed for %s: %w", queryName, errors.Join(attemptErrs...))
+	}
+	return mergeSecureDNSResponses(successes[0], successes[1:]...), nil
 }
 
 func shouldAcceptSecureDNSResponse(response *mDNS.Msg) bool {
@@ -362,4 +386,83 @@ func shouldAcceptSecureDNSResponse(response *mDNS.Msg) bool {
 		return false
 	}
 	return response.Rcode == mDNS.RcodeSuccess
+}
+
+func mergeSecureDNSResponses(primary *mDNS.Msg, extras ...*mDNS.Msg) *mDNS.Msg {
+	if primary == nil {
+		return nil
+	}
+	merged := primary.Copy()
+	seen := make(map[string]int, len(merged.Answer))
+	for i, rr := range merged.Answer {
+		if key, ok := addressRecordKey(rr); ok {
+			seen[key] = i
+		}
+	}
+	for _, extra := range extras {
+		if extra == nil {
+			continue
+		}
+		for _, rr := range extra.Answer {
+			key, ok := addressRecordKey(rr)
+			if !ok {
+				continue
+			}
+			if idx, exists := seen[key]; exists {
+				if extraTTL := rr.Header().Ttl; merged.Answer[idx].Header().Ttl > extraTTL {
+					merged.Answer[idx].Header().Ttl = extraTTL
+				}
+				continue
+			}
+			copied := mDNS.Copy(rr)
+			merged.Answer = append(merged.Answer, copied)
+			seen[key] = len(merged.Answer) - 1
+		}
+	}
+	applyMinAddressTTL(merged)
+	return merged
+}
+
+func applyMinAddressTTL(msg *mDNS.Msg) {
+	if msg == nil {
+		return
+	}
+	var minTTL uint32
+	found := false
+	for _, rr := range msg.Answer {
+		if _, ok := addressRecordKey(rr); !ok {
+			continue
+		}
+		ttl := rr.Header().Ttl
+		if !found || ttl < minTTL {
+			minTTL = ttl
+			found = true
+		}
+	}
+	if !found {
+		return
+	}
+	for _, rr := range msg.Answer {
+		if _, ok := addressRecordKey(rr); ok {
+			rr.Header().Ttl = minTTL
+		}
+	}
+}
+
+func addressRecordKey(rr mDNS.RR) (string, bool) {
+	switch rec := rr.(type) {
+	case *mDNS.A:
+		ip := rec.A.To4()
+		if ip == nil {
+			return "", false
+		}
+		return "A:" + ip.String(), true
+	case *mDNS.AAAA:
+		if rec.AAAA == nil {
+			return "", false
+		}
+		return "AAAA:" + rec.AAAA.String(), true
+	default:
+		return "", false
+	}
 }

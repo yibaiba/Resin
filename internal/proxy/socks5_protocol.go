@@ -184,14 +184,35 @@ func appendSocks5Host(dst []byte, host string) ([]byte, error) {
 }
 
 func writeSocks5Reply(writer io.Writer, replyCode byte, addr net.Addr) error {
-	target := "0.0.0.0:0"
-	if addr != nil {
-		target = addr.String()
-	}
-	response, err := appendSocks5AddrPort([]byte{socks5Version, replyCode, 0}, target)
+	header := []byte{socks5Version, replyCode, 0}
+	response, err := appendSocks5AddrPort(header, socks5ReplyBindTarget(addr))
 	if err != nil {
-		return err
+		response, err = appendSocks5AddrPort([]byte{socks5Version, replyCode, 0}, "0.0.0.0:0")
+		if err != nil {
+			return err
+		}
 	}
 	_, err = writer.Write(response)
 	return err
+}
+
+// socks5ReplyBindTarget encodes BND.ADDR for a SOCKS5 command reply.
+// Hysteria2/QUIC connections often expose LocalAddr as ":port" with an empty
+// host; CONNECT already succeeded, so fall back to 0.0.0.0 rather than failing
+// the client handshake.
+func socks5ReplyBindTarget(addr net.Addr) string {
+	if addr == nil {
+		return "0.0.0.0:0"
+	}
+	host, portText, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return "0.0.0.0:0"
+	}
+	if _, err := strconv.ParseUint(portText, 10, 16); err != nil {
+		return "0.0.0.0:0"
+	}
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return net.JoinHostPort(host, portText)
 }

@@ -33,6 +33,7 @@ func proxyFailureLine(lifecycle *requestLifecycle) string {
 		diagnosticlog.F("egress_bytes", strconv.FormatInt(entry.EgressBytes, 10)),
 		diagnosticlog.F("health_attribution", healthOutcomeLabel(lifecycle.healthFeedback.outcome())),
 		diagnosticlog.F("stage", entry.UpstreamStage),
+		diagnosticlog.F("resin_error", entry.ResinError),
 		diagnosticlog.F("error_kind", entry.UpstreamErrKind),
 		diagnosticlog.F("errno", entry.UpstreamErrno),
 		diagnosticlog.F("error", entry.UpstreamErrMsg),

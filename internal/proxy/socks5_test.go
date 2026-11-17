@@ -500,6 +500,101 @@ func TestSocks5Inbound_CONNECTOneWayTrafficStillLogsSuccess(t *testing.T) {
 	t.Fatal("expected RecordResult call for one-way SOCKS5 CONNECT success")
 }
 
+func TestSocks5Inbound_CONNECTSucceedsWhenUpstreamLocalAddrHasEmptyHost(t *testing.T) {
+	env := newProxyE2EEnv(t)
+	emitter := newMockEventEmitter()
+	health := &mockHealthRecorder{}
+
+	targetLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen target: %v", err)
+	}
+	defer targetLn.Close()
+
+	const payload = "hy2-empty-localaddr"
+	targetDone := make(chan struct{})
+	go func() {
+		defer close(targetDone)
+		conn, err := targetLn.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn)
+	}()
+
+	setProxyE2EOutboundDialFunc(t, env, func(ctx context.Context, network string, _ M.Socksaddr) (net.Conn, error) {
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, network, targetLn.Addr().String())
+		if err != nil {
+			return nil, err
+		}
+		return &socks5AddressConn{
+			Conn:      conn,
+			localAddr: &net.UDPAddr{Port: 58802},
+		}, nil
+	})
+
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		ProxyToken: "tok",
+		Router:     env.router,
+		Pool:       env.pool,
+		Health:     health,
+		Events:     emitter,
+	})
+
+	clientConn, reader, done := startSocks5Session(t, inbound)
+	defer clientConn.Close()
+
+	writeAll(t, clientConn, []byte{socks5Version, 1, socks5MethodUserPass})
+	if got := readExactly(t, reader, 2); got[1] != socks5MethodUserPass {
+		t.Fatalf("selected method: got %d, want %d", got[1], socks5MethodUserPass)
+	}
+
+	writeAll(t, clientConn, socks5UserPassPacket("plat.acct", "tok"))
+	if got := readExactly(t, reader, 2); got[1] != socks5UserPassStatusSuccess {
+		t.Fatalf("auth status: got %d, want %d", got[1], socks5UserPassStatusSuccess)
+	}
+
+	targetAddr := targetLn.Addr().String()
+	writeAll(t, clientConn, socks5ConnectIPv4Packet(targetAddr))
+	reply := readExactly(t, reader, 10)
+	if reply[0] != socks5Version || reply[1] != socks5ReplySucceeded || reply[3] != socks5AddressTypeIPv4 {
+		t.Fatalf("connect reply: got %v, want IPv4 success", reply)
+	}
+	if ip := net.IPv4(reply[4], reply[5], reply[6], reply[7]); !ip.Equal(net.IPv4zero) {
+		t.Fatalf("BND.ADDR: got %s, want 0.0.0.0", ip)
+	}
+	if port := binary.BigEndian.Uint16(reply[8:10]); port != 58802 {
+		t.Fatalf("BND.PORT: got %d, want 58802", port)
+	}
+
+	writeAll(t, clientConn, []byte(payload))
+	echo := readExactly(t, reader, len(payload))
+	if string(echo) != payload {
+		t.Fatalf("echo payload: got %q, want %q", string(echo), payload)
+	}
+
+	_ = clientConn.Close()
+	<-done
+	<-targetDone
+
+	select {
+	case logEv := <-emitter.logCh:
+		if !logEv.NetOK {
+			t.Fatal("empty-host LocalAddr SOCKS5 CONNECT should log net_ok=true")
+		}
+		if logEv.ResinError != "" {
+			t.Fatalf("ResinError: got %q, want empty", logEv.ResinError)
+		}
+		if logEv.UpstreamStage != "" {
+			t.Fatalf("UpstreamStage: got %q, want empty", logEv.UpstreamStage)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected SOCKS5 request log event")
+	}
+}
+
 func TestSocks5Inbound_CONNECTResponseWriteFailureDoesNotPenalizeNode(t *testing.T) {
 	env := newProxyE2EEnv(t)
 	emitter := newMockEventEmitter()

@@ -60,6 +60,30 @@ func TestProxyFailureLineIncludesCorrelationAndTunnelDetails(t *testing.T) {
 	}
 }
 
+func TestProxyFailureLineIncludesNoAvailableNodes(t *testing.T) {
+	lifecycle := &requestLifecycle{
+		finished: RequestFinishedEvent{IsConnect: true},
+		log: RequestLogEntry{
+			ID:         "request-empty-node",
+			ProxyType:  ProxyTypeSocks5Forward,
+			TargetHost: "example.com:443",
+		},
+	}
+	lifecycle.setRouteFailure(ErrNoAvailableNodes)
+
+	line := proxyFailureLine(lifecycle)
+	for _, expected := range []string{
+		`[proxy-connect]`,
+		`resin_error="NO_AVAILABLE_NODES"`,
+		`error="NO_AVAILABLE_NODES"`,
+		`stage="route"`,
+	} {
+		if !strings.Contains(line, expected) {
+			t.Fatalf("line missing %q: %s", expected, line)
+		}
+	}
+}
+
 func TestRequestLifecycleGeneratesStableUUID(t *testing.T) {
 	emitter := newMockEventEmitter()
 	lifecycle := newRequestLifecycleFromMetadata(emitter, "192.0.2.1:1234", "GET", ProxyTypeForward, false)

@@ -1300,7 +1300,7 @@ func convertClashProxyToNode(proxy map[string]any) (ParsedNode, bool) {
 		if alpn := getStringSlice(proxy, "alpn"); len(alpn) > 0 {
 			tls["alpn"] = alpn
 		}
-		applyUTLSFromValue(tls, firstNonEmpty(
+		applyUTLSFromValueForOutbound("hysteria2", tls, firstNonEmpty(
 			getString(proxy, "fingerprint"),
 			getString(proxy, "client-fingerprint"),
 			getString(proxy, "client_fingerprint"),
@@ -1460,7 +1460,7 @@ func convertClashProxyToNode(proxy map[string]any) (ParsedNode, bool) {
 		))
 		insecure, _ := getBool(proxy, "skip-cert-verify", "allowInsecure", "insecure")
 		tls := newClashEnabledTLS(sni, insecure, getStringSlice(proxy, "alpn"))
-		applyUTLSFromValue(tls, firstNonEmpty(
+		applyUTLSFromValueForOutbound("hysteria", tls, firstNonEmpty(
 			getString(proxy, "fingerprint"),
 			getString(proxy, "client-fingerprint"),
 			getString(proxy, "client_fingerprint"),
@@ -3360,7 +3360,7 @@ func parseHysteria2URI(uri string) (ParsedNode, bool) {
 	if alpn := splitALPN(query.Get("alpn")); len(alpn) > 0 {
 		tls["alpn"] = alpn
 	}
-	applyUTLSFromValue(tls, firstNonEmpty(
+	applyUTLSFromValueForOutbound("hysteria2", tls, firstNonEmpty(
 		query.Get("fp"),
 		query.Get("fingerprint"),
 		query.Get("client-fingerprint"),
@@ -3913,6 +3913,22 @@ func applyUTLSFromValue(tls map[string]any, rawFingerprint string) {
 	tls["utls"] = map[string]any{
 		"enabled":     true,
 		"fingerprint": fingerprint,
+	}
+}
+
+func applyUTLSFromValueForOutbound(outboundType string, tls map[string]any, rawFingerprint string) {
+	if isQUICOutboundType(outboundType) {
+		return
+	}
+	applyUTLSFromValue(tls, rawFingerprint)
+}
+
+func isQUICOutboundType(outboundType string) bool {
+	switch strings.ToLower(strings.TrimSpace(outboundType)) {
+	case "hysteria", "hysteria2", "tuic":
+		return true
+	default:
+		return false
 	}
 }
 

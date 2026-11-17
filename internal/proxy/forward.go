@@ -239,8 +239,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		PlatformName: platName, Account: account, Target: r.URL.String(),
 	})
 	if routeErr != nil {
-		lifecycle.setProxyError(routeErr)
-		lifecycle.setHTTPStatus(routeErr.HTTPCode)
+		lifecycle.setRouteFailure(routeErr)
 		writeProxyError(w, routeErr)
 		return
 	}

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -113,6 +114,18 @@ func (l *requestLifecycle) setProxyError(pe *ProxyError) {
 		return
 	}
 	l.log.ResinError = pe.ResinError
+}
+
+func (l *requestLifecycle) setRouteFailure(pe *ProxyError) {
+	if l == nil || pe == nil {
+		return
+	}
+	l.setProxyError(pe)
+	l.setUpstreamError("route", errors.New(pe.ResinError))
+	if pe.HTTPCode != 0 {
+		l.setHTTPStatus(pe.HTTPCode)
+	}
+	l.setNetOK(false)
 }
 
 func (l *requestLifecycle) setUpstreamError(stage string, err error) {

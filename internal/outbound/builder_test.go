@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/testutil"
@@ -281,9 +282,9 @@ func TestSecureDNSTransportSpecsForUpstreams_InvalidURI(t *testing.T) {
 	}
 }
 
-func TestSecureDNSFailoverTransport_FirstSuccessSkipsFallbacks(t *testing.T) {
-	first := newStaticDNSTransport("first", successDNSResponse("first.example."))
-	second := newStaticDNSTransport("second", successDNSResponse("second.example."))
+func TestSecureDNSFailoverTransport_MergesSuccessfulAnswers(t *testing.T) {
+	first := newStaticDNSTransport("first", successDNSResponseWithA("node.example.", net.IPv4(132, 226, 73, 28), 300))
+	second := newStaticDNSTransport("second", successDNSResponseWithA("node.example.", net.IPv4(161, 153, 92, 18), 5))
 	manager := &stubDNSTransportManager{
 		transports: map[string]adapter.DNSTransport{
 			"first":  first,
@@ -300,14 +301,115 @@ func TestSecureDNSFailoverTransport_FirstSuccessSkipsFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exchange() error: %v", err)
 	}
-	if len(resp.Answer) == 0 {
-		t.Fatal("expected DNS answer")
+	got := ipv4Answers(resp)
+	if !containsAllStrings(got, "132.226.73.28", "161.153.92.18") {
+		t.Fatalf("merged A records: got %v", got)
+	}
+	if ttl := resp.Answer[0].Header().Ttl; ttl != 5 {
+		t.Fatalf("merged TTL: got %d, want 5", ttl)
 	}
 	if first.calls.Load() != 1 {
 		t.Fatalf("first transport calls: got %d, want 1", first.calls.Load())
 	}
-	if second.calls.Load() != 0 {
-		t.Fatalf("second transport calls: got %d, want 0", second.calls.Load())
+	if second.calls.Load() != 1 {
+		t.Fatalf("second transport calls: got %d, want 1", second.calls.Load())
+	}
+}
+
+func TestSecureDNSFailoverTransport_DedupsMergedAddressRecords(t *testing.T) {
+	first := newStaticDNSTransport("first", successDNSResponseWithA("node.example.", net.IPv4(132, 226, 73, 28), 300))
+	second := newStaticDNSTransport("second", successDNSResponseWithA("node.example.", net.IPv4(132, 226, 73, 28), 5))
+	transport := &secureDNSFailoverTransport{
+		manager: &stubDNSTransportManager{
+			transports: map[string]adapter.DNSTransport{
+				"first":  first,
+				"second": second,
+			},
+		},
+		tag:          secureDNSFailoverTransportTag,
+		upstreamTags: []string{"first", "second"},
+	}
+
+	resp, err := transport.Exchange(context.Background(), dnsQuestion("example.com."))
+	if err != nil {
+		t.Fatalf("Exchange() error: %v", err)
+	}
+	got := ipv4Answers(resp)
+	if len(got) != 1 || got[0] != "132.226.73.28" {
+		t.Fatalf("deduped A records: got %v", got)
+	}
+	if ttl := resp.Answer[0].Header().Ttl; ttl != 5 {
+		t.Fatalf("deduped TTL: got %d, want 5", ttl)
+	}
+}
+
+func TestSecureDNSFailoverTransport_TimeoutKeepsSuccessfulAnswers(t *testing.T) {
+	first := newStaticDNSTransport("first", successDNSResponseWithA("node.example.", net.IPv4(132, 226, 73, 28), 60))
+	second := newDelayedDNSTransport("second", time.Second, errors.New("slow upstream"))
+	transport := &secureDNSFailoverTransport{
+		manager: &stubDNSTransportManager{
+			transports: map[string]adapter.DNSTransport{
+				"first":  first,
+				"second": second,
+			},
+		},
+		tag:          secureDNSFailoverTransportTag,
+		upstreamTags: []string{"first", "second"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	resp, err := transport.Exchange(ctx, dnsQuestion("example.com."))
+	if err != nil {
+		t.Fatalf("Exchange() error: %v", err)
+	}
+	got := ipv4Answers(resp)
+	if len(got) != 1 || got[0] != "132.226.73.28" {
+		t.Fatalf("partial success A records: got %v", got)
+	}
+	if first.calls.Load() != 1 {
+		t.Fatalf("first transport calls: got %d, want 1", first.calls.Load())
+	}
+	if second.calls.Load() != 1 {
+		t.Fatalf("second transport calls: got %d, want 1", second.calls.Load())
+	}
+}
+
+func TestMergeSecureDNSResponses_IncludesAAAA(t *testing.T) {
+	primary := successDNSResponseWithA("node.example.", net.IPv4(132, 226, 73, 28), 300)
+	extra := &mDNS.Msg{
+		MsgHdr: mDNS.MsgHdr{Response: true, Rcode: mDNS.RcodeSuccess},
+		Answer: []mDNS.RR{
+			&mDNS.AAAA{
+				Hdr: mDNS.RR_Header{
+					Name:   "node.example.",
+					Rrtype: mDNS.TypeAAAA,
+					Class:  mDNS.ClassINET,
+					Ttl:    10,
+				},
+				AAAA: net.ParseIP("2001:db8::1"),
+			},
+		},
+	}
+
+	merged := mergeSecureDNSResponses(primary, extra)
+	gotA := ipv4Answers(merged)
+	if len(gotA) != 1 || gotA[0] != "132.226.73.28" {
+		t.Fatalf("merged A records: got %v", gotA)
+	}
+	var gotAAAA string
+	for _, rr := range merged.Answer {
+		aaaa, ok := rr.(*mDNS.AAAA)
+		if !ok || aaaa.AAAA == nil {
+			continue
+		}
+		gotAAAA = aaaa.AAAA.String()
+	}
+	if gotAAAA != "2001:db8::1" {
+		t.Fatalf("merged AAAA: got %q", gotAAAA)
+	}
+	if ttl := merged.Answer[0].Header().Ttl; ttl != 10 {
+		t.Fatalf("merged min TTL: got %d, want 10", ttl)
 	}
 }
 
@@ -673,6 +775,7 @@ type staticDNSTransport struct {
 	tag      string
 	response *mDNS.Msg
 	err      error
+	delay    time.Duration
 	calls    atomic.Int32
 }
 
@@ -682,6 +785,10 @@ func newStaticDNSTransport(tag string, response *mDNS.Msg) *staticDNSTransport {
 
 func newErrorDNSTransport(tag string, err error) *staticDNSTransport {
 	return &staticDNSTransport{tag: tag, err: err}
+}
+
+func newDelayedDNSTransport(tag string, delay time.Duration, err error) *staticDNSTransport {
+	return &staticDNSTransport{tag: tag, err: err, delay: delay}
 }
 
 func (t *staticDNSTransport) Type() string {
@@ -706,8 +813,23 @@ func (t *staticDNSTransport) Close() error {
 
 func (t *staticDNSTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
 	t.calls.Add(1)
+	if t.delay > 0 {
+		timer := time.NewTimer(t.delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			if t.err != nil {
+				return nil, t.err
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if t.err != nil {
 		return nil, t.err
+	}
+	if t.response == nil {
+		return nil, errors.New("empty response")
 	}
 	return t.response.Copy(), nil
 }
@@ -755,9 +877,14 @@ func (m *stubDNSTransportManager) Create(ctx context.Context, logger log.Context
 }
 
 func successDNSResponse(answerName string) *mDNS.Msg {
+	return successDNSResponseWithA(answerName, net.IPv4(1, 1, 1, 1), 60)
+}
+
+func successDNSResponseWithA(answerName string, ip net.IP, ttl uint32) *mDNS.Msg {
 	return &mDNS.Msg{
 		MsgHdr: mDNS.MsgHdr{
 			Response: true,
+			Rcode:    mDNS.RcodeSuccess,
 		},
 		Answer: []mDNS.RR{
 			&mDNS.A{
@@ -765,12 +892,40 @@ func successDNSResponse(answerName string) *mDNS.Msg {
 					Name:   answerName,
 					Rrtype: mDNS.TypeA,
 					Class:  mDNS.ClassINET,
-					Ttl:    60,
+					Ttl:    ttl,
 				},
-				A: net.IPv4(1, 1, 1, 1),
+				A: ip.To4(),
 			},
 		},
 	}
+}
+
+func ipv4Answers(msg *mDNS.Msg) []string {
+	if msg == nil {
+		return nil
+	}
+	var out []string
+	for _, rr := range msg.Answer {
+		a, ok := rr.(*mDNS.A)
+		if !ok || a.A == nil {
+			continue
+		}
+		out = append(out, a.A.String())
+	}
+	return out
+}
+
+func containsAllStrings(got []string, want ...string) bool {
+	have := make(map[string]struct{}, len(got))
+	for _, value := range got {
+		have[value] = struct{}{}
+	}
+	for _, value := range want {
+		if _, ok := have[value]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func rcodeDNSResponse(rcode int) *mDNS.Msg {

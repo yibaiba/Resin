@@ -315,8 +315,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		PlatformName: parsed.PlatformName, Account: account, Target: target.String(),
 	})
 	if routeErr != nil {
-		lifecycle.setProxyError(routeErr)
-		lifecycle.setHTTPStatus(routeErr.HTTPCode)
+		lifecycle.setRouteFailure(routeErr)
 		writeProxyError(w, routeErr)
 		return
 	}
