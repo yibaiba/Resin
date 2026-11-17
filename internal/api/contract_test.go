@@ -1378,6 +1378,7 @@ func TestAPIContract_SystemConfigPatchSemantics(t *testing.T) {
 		{name: "hostname UDP target", body: map[string]any{"udp_probe_target": "dns.example:53"}},
 		{name: "zero UDP target port", body: map[string]any{"udp_probe_target": "127.0.0.1:0"}},
 		{name: "short UDP interval", body: map[string]any{"max_udp_test_interval": "29s"}},
+		{name: "empty node DNS", body: map[string]any{"node_dns_upstreams": []string{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

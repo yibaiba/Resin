@@ -16,6 +16,12 @@ const DEFAULT_CONFIG: RuntimeConfig = {
   max_egress_test_interval: "",
   latency_test_url: "",
   latency_authorities: [],
+  node_dns_upstreams: [
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
+    "tls://223.5.5.5?sni=dns.alidns.com",
+    "local",
+  ],
   p2c_latency_window: "",
   latency_decay_window: "",
   cache_flush_interval: "",
@@ -72,6 +78,9 @@ function normalizeRuntimeConfig(raw: Partial<RuntimeConfig> | null | undefined):
     latency_authorities: Array.isArray(raw.latency_authorities)
       ? raw.latency_authorities.filter((item): item is string => typeof item === "string")
       : DEFAULT_CONFIG.latency_authorities,
+    node_dns_upstreams: Array.isArray(raw.node_dns_upstreams)
+      ? raw.node_dns_upstreams.filter((item): item is string => typeof item === "string")
+      : DEFAULT_CONFIG.node_dns_upstreams,
     p2c_latency_window: asString(raw.p2c_latency_window, DEFAULT_CONFIG.p2c_latency_window),
     latency_decay_window: asString(raw.latency_decay_window, DEFAULT_CONFIG.latency_decay_window),
     cache_flush_interval: asString(raw.cache_flush_interval, DEFAULT_CONFIG.cache_flush_interval),

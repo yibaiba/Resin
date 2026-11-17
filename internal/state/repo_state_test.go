@@ -460,6 +460,15 @@ func TestStateRepo_SystemConfig_MergesNewDefaultsIntoLegacyJSON(t *testing.T) {
 		time.Duration(cfg.MaxUDPTestInterval) != config.DefaultMaxUDPTestInterval {
 		t.Fatalf("new defaults not merged into legacy config: %+v", cfg)
 	}
+	wantDNS := config.DefaultNodeDNSUpstreams()
+	if len(cfg.NodeDNSUpstreams) != len(wantDNS) {
+		t.Fatalf("legacy JSON did not pick up default node DNS: %+v", cfg.NodeDNSUpstreams)
+	}
+	for i, upstream := range wantDNS {
+		if cfg.NodeDNSUpstreams[i] != upstream {
+			t.Fatalf("legacy node DNS[%d]=%q, want %q", i, cfg.NodeDNSUpstreams[i], upstream)
+		}
+	}
 }
 
 // --- platforms ---

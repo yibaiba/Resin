@@ -48,6 +48,11 @@ type SingboxBuilder struct {
 	logFactory          log.Factory
 	dnsTransportManager *dns.TransportManager
 	dnsRouter           *dns.Router
+	dnsLogger           log.ContextLogger
+	dnsMu               sync.Mutex
+	dnsURIToTag         map[string]string
+	dnsNextIndex        int
+	dnsFailover         *secureDNSFailoverTransport
 	closeOnce           sync.Once
 	closeErr            error
 }
@@ -111,10 +116,15 @@ func (b *SingboxBuilder) initialize(dnsUpstreams []string) error {
 	// DNS Router
 	dnsRouter := dns.NewRouter(b.ctx, b.logFactory, option.DNSOptions{})
 	service.MustRegister[adapter.DNSRouter](b.ctx, dnsRouter)
+	b.dnsLogger = logger
 	b.dnsTransportManager = dnsTransportMgr
 	b.dnsRouter = dnsRouter
 
-	dnsTransportSpecs, err := secureDNSTransportSpecsForUpstreams(dnsUpstreams)
+	normalizedUpstreams, err := NormalizeDNSUpstreams(dnsUpstreams)
+	if err != nil {
+		return fmt.Errorf("singbox builder: configure DNS transports: %w", err)
+	}
+	dnsTransportSpecs, err := secureDNSTransportSpecsForUpstreams(normalizedUpstreams)
 	if err != nil {
 		return fmt.Errorf("singbox builder: configure DNS transports: %w", err)
 	}
@@ -140,8 +150,107 @@ func (b *SingboxBuilder) initialize(dnsUpstreams []string) error {
 		return fmt.Errorf("singbox builder: start DNS router: %w", err)
 	}
 
+	if err := b.captureDNSRuntime(normalizedUpstreams); err != nil {
+		return err
+	}
+
 	b.registry = service.FromContext[adapter.OutboundRegistry](b.ctx).(*sbOutbound.Registry)
 	return nil
+}
+
+func (b *SingboxBuilder) captureDNSRuntime(upstreams []string) error {
+	b.dnsMu.Lock()
+	defer b.dnsMu.Unlock()
+
+	b.dnsURIToTag = make(map[string]string, len(upstreams)+1)
+	b.dnsNextIndex = len(upstreams)
+	for i, raw := range upstreams {
+		id := dnsUpstreamIdentity(raw)
+		if id == localDNSTransportTag {
+			b.dnsURIToTag[id] = localDNSTransportTag
+			continue
+		}
+		b.dnsURIToTag[id] = customDNSUpstreamTransportTag(i)
+	}
+	if _, ok := b.dnsTransportManager.Transport(localDNSTransportTag); ok {
+		b.dnsURIToTag[localDNSTransportTag] = localDNSTransportTag
+	}
+
+	transport, ok := b.dnsTransportManager.Transport(secureDNSFailoverTransportTag)
+	if !ok || transport == nil {
+		return fmt.Errorf("singbox builder: missing secure DNS failover transport")
+	}
+	failover, ok := transport.(*secureDNSFailoverTransport)
+	if !ok {
+		return fmt.Errorf("singbox builder: unexpected failover transport type %T", transport)
+	}
+	b.dnsFailover = failover
+	return nil
+}
+
+// SetDNSUpstreams hot-swaps the selected node DNS upstreams without rebuilding
+// the sing-box service graph. Previously registered transports are kept so
+// toggling a catalog upstream back on does not recreate it.
+func (b *SingboxBuilder) SetDNSUpstreams(upstreams []string) error {
+	normalized, err := NormalizeDNSUpstreams(upstreams)
+	if err != nil {
+		return err
+	}
+
+	b.dnsMu.Lock()
+	defer b.dnsMu.Unlock()
+	if b.dnsFailover == nil || b.dnsTransportManager == nil {
+		return fmt.Errorf("singbox builder: DNS runtime is not initialized")
+	}
+
+	tags := make([]string, 0, len(normalized))
+	for _, uri := range normalized {
+		tag, err := b.ensureDNSTransportLocked(uri)
+		if err != nil {
+			return err
+		}
+		tags = append(tags, tag)
+	}
+	b.dnsFailover.SetUpstreamTags(tags)
+	if b.dnsRouter != nil {
+		b.dnsRouter.ClearCache()
+	}
+	return nil
+}
+
+func (b *SingboxBuilder) ensureDNSTransportLocked(uri string) (string, error) {
+	id := dnsUpstreamIdentity(uri)
+	if tag, ok := b.dnsURIToTag[id]; ok {
+		return tag, nil
+	}
+	if b.dnsLogger == nil {
+		return "", fmt.Errorf("singbox builder: missing DNS logger")
+	}
+	if id == localDNSTransportTag {
+		spec := localDNSTransportSpec()
+		if err := b.dnsTransportManager.Create(b.ctx, b.dnsLogger, spec.tag, spec.transportType, spec.options); err != nil {
+			return "", fmt.Errorf("create DNS transport %s[%s]: %w", spec.transportType, spec.tag, err)
+		}
+		b.dnsURIToTag[id] = localDNSTransportTag
+		return localDNSTransportTag, nil
+	}
+
+	tag := customDNSUpstreamTransportTag(b.dnsNextIndex)
+	spec, needsLocal, err := parseCustomDNSUpstream(uri, tag)
+	if err != nil {
+		return "", err
+	}
+	if needsLocal {
+		if _, err := b.ensureDNSTransportLocked(localDNSTransportTag); err != nil {
+			return "", err
+		}
+	}
+	if err := b.dnsTransportManager.Create(b.ctx, b.dnsLogger, spec.tag, spec.transportType, spec.options); err != nil {
+		return "", fmt.Errorf("create DNS transport %s[%s]: %w", spec.transportType, spec.tag, err)
+	}
+	b.dnsNextIndex++
+	b.dnsURIToTag[id] = tag
+	return tag, nil
 }
 
 // Build parses rawOptions (a complete sing-box outbound JSON object with

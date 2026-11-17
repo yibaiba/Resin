@@ -27,6 +27,15 @@ func TestNewDefaultRuntimeConfig(t *testing.T) {
 	if time.Duration(cfg.MaxUDPTestInterval) != DefaultMaxUDPTestInterval {
 		t.Errorf("MaxUDPTestInterval: got %v, want %v", cfg.MaxUDPTestInterval, DefaultMaxUDPTestInterval)
 	}
+	wantDNS := DefaultNodeDNSUpstreams()
+	if len(cfg.NodeDNSUpstreams) != len(wantDNS) {
+		t.Fatalf("NodeDNSUpstreams: got %d items, want %d", len(cfg.NodeDNSUpstreams), len(wantDNS))
+	}
+	for i, upstream := range wantDNS {
+		if cfg.NodeDNSUpstreams[i] != upstream {
+			t.Errorf("NodeDNSUpstreams[%d]: got %q, want %q", i, cfg.NodeDNSUpstreams[i], upstream)
+		}
+	}
 }
 
 func TestRuntimeConfig_JSONRoundTrip(t *testing.T) {
@@ -109,6 +118,7 @@ func TestRuntimeConfig_JSONFieldNames(t *testing.T) {
 		"latency_test_url",
 		"latency_authorities",
 		"udp_probe_target",
+		"node_dns_upstreams",
 		"p2c_latency_window",
 		"latency_decay_window",
 		"cache_flush_interval",

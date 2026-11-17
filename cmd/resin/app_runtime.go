@@ -433,6 +433,12 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 			pool: a.topoRuntime.pool,
 		},
 		OnUDPProbeConfigChanged: a.topoRuntime.probeMgr.TriggerImmediateUDPProbes,
+		OnNodeDNSConfigChanged: func(upstreams []string) error {
+			if a.topoRuntime == nil || a.topoRuntime.singboxBuilder == nil {
+				return nil
+			}
+			return a.topoRuntime.singboxBuilder.SetDNSUpstreams(upstreams)
+		},
 	}
 	if err := cpService.InitializeRoutingDecisions(); err != nil {
 		return fmt.Errorf("initialize routing decisions: %w", err)

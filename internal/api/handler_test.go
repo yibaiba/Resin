@@ -241,6 +241,16 @@ func TestSystemConfig_OK(t *testing.T) {
 	if body["max_udp_test_interval"] != "5m0s" {
 		t.Errorf("max_udp_test_interval: got %v, want 5m0s", body["max_udp_test_interval"])
 	}
+	dnsRaw, ok := body["node_dns_upstreams"].([]any)
+	if !ok {
+		t.Fatalf("node_dns_upstreams type: got %T", body["node_dns_upstreams"])
+	}
+	if len(dnsRaw) != 4 {
+		t.Fatalf("node_dns_upstreams length: got %d, want 4", len(dnsRaw))
+	}
+	if dnsRaw[1] != "https://dns.alidns.com/dns-query" {
+		t.Errorf("node_dns_upstreams[1]: got %v, want AliDNS DoH", dnsRaw[1])
+	}
 
 	if _, ok := body["default_platform_config"]; ok {
 		t.Error("default_platform_config should not be exposed in /system/config")

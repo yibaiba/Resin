@@ -124,6 +124,80 @@ func TestNewSingboxBuilderWithConfig_ConfiguresCustomDNSChain(t *testing.T) {
 	}
 }
 
+func TestNormalizeDNSUpstreams(t *testing.T) {
+	got, err := NormalizeDNSUpstreams([]string{
+		" https://doh.pub/dns-query ",
+		"LOCAL",
+		"https://doh.pub/dns-query",
+		"tls://223.5.5.5?sni=dns.alidns.com",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeDNSUpstreams() error: %v", err)
+	}
+	want := []string{
+		"https://doh.pub/dns-query",
+		"local",
+		"tls://223.5.5.5?sni=dns.alidns.com",
+	}
+	if !equalStrings(got, want) {
+		t.Fatalf("normalized: got %v, want %v", got, want)
+	}
+
+	if _, err := NormalizeDNSUpstreams(nil); err == nil {
+		t.Fatal("expected error for empty upstream list")
+	}
+	if _, err := NormalizeDNSUpstreams([]string{"https://dns.example.com/dns-query?headers=x"}); err == nil {
+		t.Fatal("expected error for unsupported query parameter")
+	}
+}
+
+func TestSingboxBuilder_SetDNSUpstreams_SwapsSelectedTags(t *testing.T) {
+	b := newTestSingboxBuilder(t)
+	defer b.Close()
+
+	selected := []string{"https://doh.pub/dns-query", "local"}
+	if err := b.SetDNSUpstreams(selected); err != nil {
+		t.Fatalf("SetDNSUpstreams() error: %v", err)
+	}
+
+	failover, ok := b.dnsTransportManager.Transport(secureDNSFailoverTransportTag)
+	if !ok || failover == nil {
+		t.Fatal("expected failover transport")
+	}
+	want := []string{customDNSUpstreamTransportTag(0), localDNSTransportTag}
+	if got := failover.Dependencies(); !equalStrings(got, want) {
+		t.Fatalf("selected DNS tags: got %v, want %v", got, want)
+	}
+
+	for _, tag := range []string{
+		customDNSUpstreamTransportTag(1),
+		customDNSUpstreamTransportTag(2),
+	} {
+		if transport, exists := b.dnsTransportManager.Transport(tag); !exists || transport == nil {
+			t.Fatalf("catalog transport %q should stay registered after unselect", tag)
+		}
+	}
+
+	if err := b.SetDNSUpstreams([]string{"udp://127.0.0.1", "local"}); err != nil {
+		t.Fatalf("SetDNSUpstreams(custom) error: %v", err)
+	}
+	customTag := customDNSUpstreamTransportTag(4)
+	custom, exists := b.dnsTransportManager.Transport(customTag)
+	if !exists || custom == nil {
+		t.Fatalf("expected newly selected custom transport %q", customTag)
+	}
+	if custom.Type() != C.DNSTypeUDP {
+		t.Fatalf("custom transport type: got %q, want %q", custom.Type(), C.DNSTypeUDP)
+	}
+	if got := failover.Dependencies(); !equalStrings(got, []string{customTag, localDNSTransportTag}) {
+		t.Fatalf("custom selected tags: got %v", failover.Dependencies())
+	}
+
+	if err := b.SetDNSUpstreams(nil); err == nil {
+		t.Fatal("expected error for empty upstream list")
+	}
+}
+
 func TestSecureDNSTransportSpecs(t *testing.T) {
 	specs, err := secureDNSTransportSpecsForUpstreams(config.DefaultNodeDNSUpstreams())
 	if err != nil {

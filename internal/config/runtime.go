@@ -35,6 +35,9 @@ type RuntimeConfig struct {
 	LatencyAuthorities []string `json:"latency_authorities"`
 	UDPProbeTarget     string   `json:"udp_probe_target"`
 
+	// Node DNS: selected upstream URIs queried in parallel by the sing-box builder.
+	NodeDNSUpstreams []string `json:"node_dns_upstreams"`
+
 	// P2C
 	P2CLatencyWindow   Duration `json:"p2c_latency_window"`
 	LatencyDecayWindow Duration `json:"latency_decay_window"`
@@ -64,6 +67,7 @@ func NewDefaultRuntimeConfig() *RuntimeConfig {
 		LatencyTestURL:     "https://www.gstatic.com/generate_204",
 		LatencyAuthorities: []string{"gstatic.com", "google.com", "cloudflare.com", "github.com"},
 		UDPProbeTarget:     DefaultUDPProbeTarget,
+		NodeDNSUpstreams:   DefaultNodeDNSUpstreams(),
 
 		P2CLatencyWindow:   Duration(10 * time.Minute),
 		LatencyDecayWindow: Duration(10 * time.Minute),

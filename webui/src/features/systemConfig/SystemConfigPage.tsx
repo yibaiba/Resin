@@ -27,11 +27,22 @@ type RuntimeConfigForm = {
   max_egress_test_interval: string;
   latency_test_url: string;
   latency_authorities_raw: string;
+  node_dns_presets: Record<string, boolean>;
+  node_dns_custom_raw: string;
   p2c_latency_window: string;
   latency_decay_window: string;
   cache_flush_interval: string;
   cache_flush_dirty_threshold: string;
 };
+
+const NODE_DNS_PRESETS: Array<{ uri: string; label: string }> = [
+  { uri: "https://doh.pub/dns-query", label: "doh.pub DoH" },
+  { uri: "https://dns.alidns.com/dns-query", label: "AliDNS DoH" },
+  { uri: "tls://223.5.5.5?sni=dns.alidns.com", label: "AliDNS DoT" },
+  { uri: "local", label: "本机 DNS" },
+];
+
+const NODE_DNS_PRESET_URIS = new Set(NODE_DNS_PRESETS.map((preset) => preset.uri));
 
 const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
   "request_log_enabled",
@@ -46,6 +57,7 @@ const EDITABLE_FIELDS: Array<keyof RuntimeConfig> = [
   "max_egress_test_interval",
   "latency_test_url",
   "latency_authorities",
+  "node_dns_upstreams",
   "p2c_latency_window",
   "latency_decay_window",
   "cache_flush_interval",
@@ -65,6 +77,7 @@ const FIELD_LABELS: Record<keyof RuntimeConfig, string> = {
   max_egress_test_interval: "出口 IP 更新检查间隔",
   latency_test_url: "延迟测试目标 URL",
   latency_authorities: "延迟测试权威域名列表",
+  node_dns_upstreams: "节点 DNS 上游",
   p2c_latency_window: "P2C 延迟衰减窗口",
   latency_decay_window: "历史延迟衰减窗口",
   cache_flush_interval: "缓存异步刷盘间隔",
@@ -102,6 +115,8 @@ function configToForm(config: RuntimeConfig): RuntimeConfigForm {
     max_egress_test_interval: config.max_egress_test_interval,
     latency_test_url: config.latency_test_url,
     latency_authorities_raw: config.latency_authorities.join("\n"),
+    node_dns_presets: nodeDNSPresetState(config.node_dns_upstreams ?? []),
+    node_dns_custom_raw: nodeDNSCustomRaw(config.node_dns_upstreams ?? []),
     p2c_latency_window: config.p2c_latency_window,
     latency_decay_window: config.latency_decay_window,
     cache_flush_interval: config.cache_flush_interval,
@@ -142,6 +157,59 @@ function parseAuthorities(raw: string): string[] {
   return Array.from(new Set(items));
 }
 
+function dnsUpstreamIdentity(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.toLowerCase() === "local") {
+    return "local";
+  }
+  return trimmed;
+}
+
+function nodeDNSPresetState(upstreams: string[]): Record<string, boolean> {
+  const selected = new Set(upstreams.map(dnsUpstreamIdentity));
+  const state: Record<string, boolean> = {};
+  for (const preset of NODE_DNS_PRESETS) {
+    state[preset.uri] = selected.has(preset.uri);
+  }
+  return state;
+}
+
+function nodeDNSCustomRaw(upstreams: string[]): string {
+  return upstreams
+    .map((item) => item.trim())
+    .filter((item) => item && !NODE_DNS_PRESET_URIS.has(dnsUpstreamIdentity(item)))
+    .join("\n");
+}
+
+function parseNodeDNSUpstreams(presets: Record<string, boolean>, customRaw: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const id = dnsUpstreamIdentity(raw);
+    if (!id || seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+    out.push(id === "local" ? "local" : raw.trim());
+  };
+
+  for (const preset of NODE_DNS_PRESETS) {
+    if (presets[preset.uri]) {
+      push(preset.uri);
+    }
+  }
+  for (const line of customRaw.split(/[\n,]/)) {
+    const item = line.trim();
+    if (item) {
+      push(item);
+    }
+  }
+  if (out.length === 0) {
+    throw new Error(i18next.t("至少选择一个节点 DNS 上游"));
+  }
+  return out;
+}
+
 function parseForm(form: RuntimeConfigForm): RuntimeConfig {
   const latencyURL = form.latency_test_url.trim();
   if (!latencyURL) {
@@ -176,6 +244,7 @@ function parseForm(form: RuntimeConfigForm): RuntimeConfig {
     max_egress_test_interval: parseDurationField("出口 IP 更新检查间隔", form.max_egress_test_interval),
     latency_test_url: latencyURL,
     latency_authorities: parseAuthorities(form.latency_authorities_raw),
+    node_dns_upstreams: parseNodeDNSUpstreams(form.node_dns_presets, form.node_dns_custom_raw),
     p2c_latency_window: parseDurationField("P2C 延迟衰减窗口", form.p2c_latency_window),
     latency_decay_window: parseDurationField("历史延迟衰减窗口", form.latency_decay_window),
     cache_flush_interval: parseDurationField("缓存异步刷盘间隔", form.cache_flush_interval),
@@ -345,6 +414,23 @@ export function SystemConfigPage() {
     setDraftForm((prev) => {
       const source = prev ?? configToForm(baseline);
       return { ...source, [key]: value };
+    });
+  };
+
+  const handleRestoreNodeDNS = () => {
+    if (!defaultBaseline || !baseline) {
+      showToast("error", "默认配置尚未加载");
+      return;
+    }
+
+    const defaultForm = configToForm(defaultBaseline);
+    setDraftForm((prev) => {
+      const source = prev ?? configToForm(baseline);
+      return {
+        ...source,
+        node_dns_presets: { ...defaultForm.node_dns_presets },
+        node_dns_custom_raw: defaultForm.node_dns_custom_raw,
+      };
     });
   };
 
@@ -676,6 +762,69 @@ export function SystemConfigPage() {
               </section>
 
               <section className="syscfg-section">
+                <div style={{ display: "flex", alignItems: "center" }}>
+                  <h4 style={{ margin: 0 }}>{t("节点 DNS")}</h4>
+                  <button
+                    type="button"
+                    title={t("恢复为默认值")}
+                    onClick={handleRestoreNodeDNS}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      color: "var(--text-muted, #888)",
+                      padding: "4px",
+                      marginLeft: "4px",
+                      opacity: 0.6,
+                      transition: "opacity 0.2s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = "1")}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = "0.6")}
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                </div>
+                <p className="syscfg-section-hint">
+                  {t("勾选要查询的上游。解析节点域名时会并行查询已选上游并合并 A/AAAA。")}
+                </p>
+                <div className="syscfg-dns-preset-list">
+                  {NODE_DNS_PRESETS.map((preset) => (
+                    <label key={preset.uri} className="syscfg-dns-preset">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(form.node_dns_presets[preset.uri])}
+                        onChange={(event) =>
+                          setFormField("node_dns_presets", {
+                            ...form.node_dns_presets,
+                            [preset.uri]: event.target.checked,
+                          })
+                        }
+                      />
+                      <span className="syscfg-dns-preset-meta">
+                        <span className="syscfg-dns-preset-label">{t(preset.label)}</span>
+                        <span className="syscfg-dns-preset-uri">{preset.uri}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <div className="field-group field-span-2" style={{ marginTop: "12px" }}>
+                  <label className="field-label" htmlFor="sys-node-dns-custom">
+                    {t("自定义 DNS 上游")}
+                  </label>
+                  <Textarea
+                    id="sys-node-dns-custom"
+                    rows={3}
+                    placeholder={t("每行一个 URI，例如 udp://10.0.0.53")}
+                    value={form.node_dns_custom_raw}
+                    onChange={(event) => setFormField("node_dns_custom_raw", event.target.value)}
+                  />
+                </div>
+              </section>
+
+              <section className="syscfg-section">
                 <h4>{t("持久化策略")}</h4>
                 <div className="form-grid">
                   <div className="field-group">
@@ -783,13 +932,16 @@ export function SystemConfigPage() {
                       <Input readOnly disabled value={envBaseline.resource_fetch_timeout} />
                     </div>
                     <div className="field-group field-span-2">
-                      <label className="field-label" style={{ margin: 0 }}>{t("节点 DNS 上游")}</label>
+                      <label className="field-label" style={{ margin: 0 }}>{t("节点 DNS 启动默认")}</label>
                       <Textarea
                         readOnly
                         disabled
                         rows={3}
                         value={envBaseline.node_dns_upstreams?.join("\n") || t("无")}
                       />
+                      <p className="syscfg-section-hint">
+                        {t("来自环境变量的启动默认链，当前生效的选择在上方节点 DNS。")}
+                      </p>
                     </div>
                     <div className="field-group">
                       <label className="field-label" style={{ margin: 0 }}>{t("GeoIP 更新计划")}</label>

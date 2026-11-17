@@ -43,6 +43,7 @@ type secureDNSFailoverOptions struct {
 type secureDNSFailoverTransport struct {
 	manager      adapter.DNSTransportManager
 	tag          string
+	mu           sync.RWMutex
 	upstreamTags []string
 }
 
@@ -50,11 +51,58 @@ func registerSecureDNSTransport(registry *dns.TransportRegistry) {
 	dns.RegisterTransport[secureDNSFailoverOptions](registry, secureDNSFailoverTransportType, newSecureDNSFailoverTransport)
 }
 
-func secureDNSTransportSpecsForUpstreams(upstreams []string) ([]secureDNSTransportSpec, error) {
+func dnsUpstreamIdentity(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.EqualFold(raw, localDNSTransportTag) {
+		return localDNSTransportTag
+	}
+	return raw
+}
+
+// NormalizeDNSUpstreams trims, canonicalizes `local`, deduplicates, and validates URIs.
+func NormalizeDNSUpstreams(upstreams []string) ([]string, error) {
 	if len(upstreams) == 0 {
 		return nil, fmt.Errorf("no DNS upstreams configured")
 	}
-	return customSecureDNSTransportSpecs(upstreams)
+	seen := make(map[string]struct{}, len(upstreams))
+	out := make([]string, 0, len(upstreams))
+	for i, raw := range upstreams {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, fmt.Errorf("DNS upstream %d: empty URI", i+1)
+		}
+		id := dnsUpstreamIdentity(raw)
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		if id != localDNSTransportTag {
+			if _, _, err := parseCustomDNSUpstream(raw, "validate"); err != nil {
+				return nil, fmt.Errorf("DNS upstream %d %q: %w", i+1, raw, err)
+			}
+		} else {
+			raw = localDNSTransportTag
+		}
+		seen[id] = struct{}{}
+		out = append(out, raw)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no DNS upstreams configured")
+	}
+	return out, nil
+}
+
+// ValidateDNSUpstreams reports whether the URI list can be used as node DNS upstreams.
+func ValidateDNSUpstreams(upstreams []string) error {
+	_, err := NormalizeDNSUpstreams(upstreams)
+	return err
+}
+
+func secureDNSTransportSpecsForUpstreams(upstreams []string) ([]secureDNSTransportSpec, error) {
+	normalized, err := NormalizeDNSUpstreams(upstreams)
+	if err != nil {
+		return nil, err
+	}
+	return customSecureDNSTransportSpecs(normalized)
 }
 
 func customSecureDNSTransportSpecs(upstreams []string) ([]secureDNSTransportSpec, error) {
@@ -312,6 +360,19 @@ func (t *secureDNSFailoverTransport) Tag() string {
 }
 
 func (t *secureDNSFailoverTransport) Dependencies() []string {
+	return t.snapshotUpstreamTags()
+}
+
+func (t *secureDNSFailoverTransport) SetUpstreamTags(tags []string) {
+	copied := append([]string(nil), tags...)
+	t.mu.Lock()
+	t.upstreamTags = copied
+	t.mu.Unlock()
+}
+
+func (t *secureDNSFailoverTransport) snapshotUpstreamTags() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return append([]string(nil), t.upstreamTags...)
 }
 
@@ -324,7 +385,8 @@ func (t *secureDNSFailoverTransport) Close() error {
 }
 
 func (t *secureDNSFailoverTransport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
-	if len(t.upstreamTags) == 0 {
+	upstreamTags := t.snapshotUpstreamTags()
+	if len(upstreamTags) == 0 {
 		return nil, fmt.Errorf("secure dns transport: no upstreams configured")
 	}
 
@@ -337,9 +399,9 @@ func (t *secureDNSFailoverTransport) Exchange(ctx context.Context, message *mDNS
 		response *mDNS.Msg
 		err      error
 	}
-	results := make([]attempt, len(t.upstreamTags))
+	results := make([]attempt, len(upstreamTags))
 	var wg sync.WaitGroup
-	for i, upstreamTag := range t.upstreamTags {
+	for i, upstreamTag := range upstreamTags {
 		wg.Add(1)
 		go func(i int, upstreamTag string) {
 			defer wg.Done()

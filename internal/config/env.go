@@ -72,7 +72,8 @@ type EnvConfig struct {
 	MetricLatencyBinOverflowMS        int
 }
 
-// DefaultNodeDNSUpstreams returns the default node DNS upstream URI list.
+// DefaultNodeDNSUpstreams returns the default node DNS catalog and selection.
+// AliDNS entries stay in this list; runtime config chooses which URIs to query.
 func DefaultNodeDNSUpstreams() []string {
 	return []string{
 		"https://doh.pub/dns-query",

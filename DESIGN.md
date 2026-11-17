@@ -1081,6 +1081,12 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "latency_test_url": "https://www.gstatic.com/generate_204",
   "latency_authorities": ["gstatic.com", "google.com", "cloudflare.com", "github.com"],
   "udp_probe_target": "1.1.1.1:53",
+  "node_dns_upstreams": [
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
+    "tls://223.5.5.5?sni=dns.alidns.com",
+    "local"
+  ],
   "p2c_latency_window": "10m",
   "latency_decay_window": "10m",
   "cache_flush_interval": "5m",
@@ -1110,6 +1116,12 @@ Resin 需要做实事与历史的统计数据，用于 Dashboard 展示。
   "latency_test_url": "https://www.gstatic.com/generate_204",
   "latency_authorities": ["gstatic.com", "google.com", "cloudflare.com", "github.com"],
   "udp_probe_target": "1.1.1.1:53",
+  "node_dns_upstreams": [
+    "https://doh.pub/dns-query",
+    "https://dns.alidns.com/dns-query",
+    "tls://223.5.5.5?sni=dns.alidns.com",
+    "local"
+  ],
   "p2c_latency_window": "10m",
   "latency_decay_window": "10m",
   "cache_flush_interval": "5m",
@@ -1151,6 +1163,7 @@ Body（partial patch 示例）：
 * `latency_test_url` 必须是 `http/https` 绝对 URL。
 * `udp_probe_target` 必须是带非零端口的 IPv4 或方括号 IPv6 地址，不接受域名。
 * `max_udp_test_interval` 最小为 30 秒。
+* `node_dns_upstreams` 至少包含一个合法 URI；支持 `local`、`udp://`、`tcp://`、`tls://`、`quic://`、`https://`、`h3://`；空列表或非法 URI 返回 400。热更新后立即切换实际查询的上游并清空节点 DNS 缓存。
 
 错误码映射（最小集）：
 
@@ -2352,7 +2365,7 @@ GeoIP 与订阅的下载都有错误重试的需求。
 * `RESIN_DEFAULT_PLATFORM_ALLOCATION_POLICY`：默认平台分配策略。枚举：`BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。默认 `BALANCED`。
 * `RESIN_PROBE_TIMEOUT`：单次探测请求超时。默认 "15s"。
 * `RESIN_RESOURCE_FETCH_TIMEOUT`：资源下载（订阅/GeoIP）单次尝试超时。默认 "30s"。
-* `RESIN_NODE_DNS_UPSTREAMS`：Resin 托管节点域名解析上游，JSON 字符串数组。默认值为 `["https://doh.pub/dns-query","https://dns.alidns.com/dns-query","tls://223.5.5.5?sni=dns.alidns.com","local"]`；设置后完全按数组顺序作为 failover 链。仅作用于内部 sing-box builder 解析节点域名，不影响订阅下载、GeoIP 下载等其他资源下载路径。
+* `RESIN_NODE_DNS_UPSTREAMS`：进程启动时的节点 DNS 目录与默认选择，JSON 字符串数组。默认值为 `["https://doh.pub/dns-query","https://dns.alidns.com/dns-query","tls://223.5.5.5?sni=dns.alidns.com","local"]`。运行时实际查询哪些上游由 `PATCH /system/config` 的 `node_dns_upstreams` 选择；环境变量本身不因 PATCH 改变。仅作用于内部 sing-box builder 解析节点域名，不影响订阅下载、GeoIP 下载等其他资源下载路径。
   * 支持：`local`、`udp://host[:port]`、`tcp://host[:port]`、`tls://host[:port]?sni=name`、`quic://host[:port]?sni=name`、`https://host[:port][/path]?sni=name&bootstrap=local`、`h3://host[:port][/path]?sni=name&bootstrap=local`。
   * 默认端口由传输类型决定：UDP/TCP 为 53，DoT/DoQ 为 853，DoH/H3 为 443；DoH/H3 默认路径为 `/dns-query`。
 * `RESIN_SOCKS5_UDP_IDLE_TIMEOUT`：SOCKS5 UDP association 及其每目标出站 flow 的空闲超时，使用 Go duration 格式且必须大于 0，默认 `5m`。客户端到上游或上游到客户端的活动会刷新对应 flow 和 association；单个 flow 超时只回收该目标资源，association 超时会结束 TCP 控制连接并关闭其全部 flow。
@@ -2385,18 +2398,20 @@ GeoIP 与订阅的下载都有错误重试的需求。
 * `RESIN_METRIC_LATENCY_BIN_OVERFLOW_MS`：延迟统计溢出值，默认 3000ms。
 
 ### 节点默认 DNS 解析链
-Resin 托管节点的默认域名解析使用 `RESIN_NODE_DNS_UPSTREAMS` 的环境变量默认值：
+Resin 托管节点的默认域名解析目录为：
 1. `https://doh.pub/dns-query`
 2. `https://dns.alidns.com/dns-query`
 3. `tls://223.5.5.5?sni=dns.alidns.com`
 4. `local`
 
 说明：
-* 正常情况下，优先使用前 3 个安全 DNS 上游。
-* 当前 3 个安全 DNS 上游全部失败时，降级回退到 `local`，保证节点仍可解析和连通。
+* 默认四项全部可选、全部默认勾选。AliDNS 仍保留在目录中，可在运行时取消勾选，而不是从产品里删除。
+* 当前选中的上游由运行时配置 `node_dns_upstreams` 决定；WebUI 系统配置提供勾选与自定义 URI。
+* 选中的上游并行查询，合并去重后的 A/AAAA，TTL 取最小值。
+* 未选中的目录上游仍保留在进程内，再次勾选时无需重建 transport。
 * `doh.pub` 与 `dns.alidns.com` 这两个 DoH 域名自身的 bootstrap 解析继续使用 `local`。
-* 此默认 DNS 链仅作用于 Resin 内部 sing-box builder 上下文中的默认域名解析；订阅下载、GeoIP 下载等其他下载路径仍保持原有行为。
-* 如需私有 DNS，可通过 `RESIN_NODE_DNS_UPSTREAMS` 覆盖默认链。该变量只接受 URI 字符串数组，例如 `["udp://10.0.0.53","local"]`；不支持对象格式，也不透传完整 sing-box DNS 配置。
+* 此 DNS 链仅作用于 Resin 内部 sing-box builder 上下文中的节点域名解析；订阅下载、GeoIP 下载等其他下载路径仍保持原有行为。
+* 启动默认可通过 `RESIN_NODE_DNS_UPSTREAMS` 覆盖。该变量只接受 URI 字符串数组，例如 `["udp://10.0.0.53","local"]`；不支持对象格式，也不透传完整 sing-box DNS 配置。运行时选择请用 `PATCH /system/config`，不必改环境变量。
 
 ### 运行时全局设置项（支持热更新）
 Resin 支持通过 API (`PATCH /system/config`) 动态调整大部分全局运行参数。配置文件存储于数据库。
@@ -2426,6 +2441,7 @@ Resin 支持通过 API (`PATCH /system/config`) 动态调整大部分全局运�
 * `LatencyTestURL`: 主动延迟探测的目标 URL。默认 `https://www.gstatic.com/generate_204`。一定属于 LatencyAuthorities 之一。如果不属于就加入。
 * `LatencyAuthorities`: 权威域名列表。默认 `["gstatic.com", "google.com", "cloudflare.com", "github.com"]`。
 * `UDPProbeTarget`: UDP DNS 探测目标，仅接受带非零端口的 IP 地址。默认 `1.1.1.1:53`。
+* `NodeDNSUpstreams`: 当前选中的节点域名解析上游 URI 列表。默认与 `DefaultNodeDNSUpstreams()` 相同（doh.pub DoH、AliDNS DoH、Ali DoT、local）。热更新后立即切换查询集合并清空 DNS 缓存。空列表非法。
 
 #### P2C 选路设置
 * `P2CLatencyWindow`: 在 P2C 选路时，仅考虑该时间窗口内更新过的延迟数据。默认 10 分钟。
@@ -2530,7 +2546,7 @@ WebUI 分为登录态与控制台态。未登录时进入登录页；登录后�
 
 ## 系统配置
 页面采用左右布局：
-* 左侧主区：运行时配置表单（基础/健康检查、请求日志、探测与路由、持久化）与静态配置只读信息。
+* 左侧主区：运行时配置表单（基础/健康检查、请求日志、探测与路由、节点 DNS、持久化）与静态配置只读信息。节点 DNS 以勾选默认上游加自定义 URI 的方式选择，不从目录中删除 AliDNS。
 * 右侧侧栏：变更摘要、字段变更列表、Patch JSON 预览（可手动编辑）、保存与重置草稿按钮。
 
 ## 登录页

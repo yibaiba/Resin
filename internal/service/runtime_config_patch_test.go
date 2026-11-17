@@ -61,6 +61,7 @@ func cloneRuntimeConfig(cfg *config.RuntimeConfig) *config.RuntimeConfig {
 	}
 	out := *cfg
 	out.LatencyAuthorities = append([]string(nil), cfg.LatencyAuthorities...)
+	out.NodeDNSUpstreams = append([]string(nil), cfg.NodeDNSUpstreams...)
 	return &out
 }
 
@@ -457,6 +458,69 @@ func TestPatchRuntimeConfig_DistributesToConfigAwareEventEmitter(t *testing.T) {
 	}
 	if base.last.RespBodyTruncated || string(base.last.RespBody) != "ok!" {
 		t.Fatalf("RespBody after threshold up = %q, truncated=%v", string(base.last.RespBody), base.last.RespBodyTruncated)
+	}
+}
+
+func TestPatchRuntimeConfig_NodeDNSUpstreamsSelectionAndCallback(t *testing.T) {
+	h := newPatchHarness(t)
+	var (
+		callbackCount atomic.Int32
+		lastApplied   []string
+	)
+	h.cp.OnNodeDNSConfigChanged = func(upstreams []string) error {
+		callbackCount.Add(1)
+		lastApplied = append([]string(nil), upstreams...)
+		return nil
+	}
+
+	updated, err := h.cp.PatchRuntimeConfig([]byte(`{
+		"node_dns_upstreams": ["https://doh.pub/dns-query", "local", "https://doh.pub/dns-query"]
+	}`))
+	if err != nil {
+		t.Fatalf("PatchRuntimeConfig: %v", err)
+	}
+	want := []string{"https://doh.pub/dns-query", "local"}
+	if !reflect.DeepEqual(updated.NodeDNSUpstreams, want) {
+		t.Fatalf("updated DNS: got %v, want %v", updated.NodeDNSUpstreams, want)
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("callback count: got %d, want 1", callbackCount.Load())
+	}
+	if !reflect.DeepEqual(lastApplied, want) {
+		t.Fatalf("callback DNS: got %v, want %v", lastApplied, want)
+	}
+
+	if _, err := h.cp.PatchRuntimeConfig([]byte(`{"request_log_enabled":false}`)); err != nil {
+		t.Fatal(err)
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("unrelated patch triggered DNS callback: %d", callbackCount.Load())
+	}
+
+	invalidPatches := []string{
+		`{"node_dns_upstreams":[]}`,
+		`{"node_dns_upstreams":["https://dns.example.com/dns-query?headers=x"]}`,
+		`{"node_dns_upstreams":[""]}`,
+	}
+	for _, patch := range invalidPatches {
+		if _, err := h.cp.PatchRuntimeConfig([]byte(patch)); err == nil {
+			t.Fatalf("invalid DNS patch succeeded: %s", patch)
+		}
+	}
+	if callbackCount.Load() != 1 {
+		t.Fatalf("invalid DNS patch triggered callback: %d", callbackCount.Load())
+	}
+
+	before := append([]string(nil), h.runtimeCfg.Load().NodeDNSUpstreams...)
+	_, err = h.cp.PatchRuntimeConfig([]byte(`{"node_dns_upstreams":["udp://10.0.0.53","local"]}`))
+	if err != nil {
+		t.Fatalf("PatchRuntimeConfig custom DNS: %v", err)
+	}
+	if reflect.DeepEqual(before, h.runtimeCfg.Load().NodeDNSUpstreams) {
+		t.Fatal("runtime DNS slice did not change")
+	}
+	if !reflect.DeepEqual(before, want) {
+		t.Fatalf("old DNS snapshot mutated: %v", before)
 	}
 }
 

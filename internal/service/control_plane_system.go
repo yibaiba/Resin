@@ -12,6 +12,7 @@ import (
 	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/geoip"
 	"github.com/Resinat/Resin/internal/netutil"
+	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/probe"
 	"github.com/Resinat/Resin/internal/proxy"
 	"github.com/Resinat/Resin/internal/routing"
@@ -63,7 +64,8 @@ type ControlPlaneService struct {
 	EnvCfg                  *config.EnvConfig
 	EndpointRuntime         EndpointRuntime
 	DiagnosticTCPProber     DiagnosticTCPProber
-	OnUDPProbeConfigChanged func()
+	OnUDPProbeConfigChanged  func()
+	OnNodeDNSConfigChanged   func([]string) error
 
 	configMu       sync.Mutex
 	configVersion  int
@@ -93,6 +95,7 @@ var runtimeConfigAllowedFields = map[string]bool{
 	"latency_test_url":                         true,
 	"latency_authorities":                      true,
 	"udp_probe_target":                         true,
+	"node_dns_upstreams":                       true,
 	"p2c_latency_window":                       true,
 	"latency_decay_window":                     true,
 	"cache_flush_interval":                     true,
@@ -157,6 +160,7 @@ func copyRuntimeConfig(cfg *config.RuntimeConfig) *config.RuntimeConfig {
 	}
 	out := *cfg
 	out.LatencyAuthorities = append([]string(nil), cfg.LatencyAuthorities...)
+	out.NodeDNSUpstreams = append([]string(nil), cfg.NodeDNSUpstreams...)
 	return &out
 }
 
@@ -204,6 +208,11 @@ func (s *ControlPlaneService) PatchRuntimeConfig(patchJSON json.RawMessage) (*co
 	if udpProbeConfigChanged(previousCfg, newCfg) && s.OnUDPProbeConfigChanged != nil {
 		s.OnUDPProbeConfigChanged()
 	}
+	if nodeDNSConfigChanged(previousCfg, newCfg) && s.OnNodeDNSConfigChanged != nil {
+		if err := s.OnNodeDNSConfigChanged(append([]string(nil), newCfg.NodeDNSUpstreams...)); err != nil {
+			return newCfg, internal("apply node_dns_upstreams", err)
+		}
+	}
 
 	return newCfg, nil
 }
@@ -214,6 +223,25 @@ func udpProbeConfigChanged(previous, next *config.RuntimeConfig) bool {
 	}
 	return previous.UDPProbeTarget != next.UDPProbeTarget ||
 		previous.MaxUDPTestInterval != next.MaxUDPTestInterval
+}
+
+func nodeDNSConfigChanged(previous, next *config.RuntimeConfig) bool {
+	if previous == nil || next == nil {
+		return previous != next
+	}
+	return !stringSlicesEqual(previous.NodeDNSUpstreams, next.NodeDNSUpstreams)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
@@ -286,5 +314,11 @@ func validateRuntimeConfig(cfg *config.RuntimeConfig) *ServiceError {
 			cfg.LatencyAuthorities = append(cfg.LatencyAuthorities, latencyDomain)
 		}
 	}
+
+	normalizedDNS, err := outbound.NormalizeDNSUpstreams(cfg.NodeDNSUpstreams)
+	if err != nil {
+		return invalidArg("node_dns_upstreams: " + err.Error())
+	}
+	cfg.NodeDNSUpstreams = normalizedDNS
 	return nil
 }

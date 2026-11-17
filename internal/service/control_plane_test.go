@@ -139,6 +139,29 @@ func TestValidateRuntimeConfig_ProbeIntervalsMinimum30s(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeConfig_NodeDNSUpstreams(t *testing.T) {
+	cfg := newDefaultCfg()
+	cfg.NodeDNSUpstreams = nil
+	if err := validateRuntimeConfig(cfg); err == nil {
+		t.Fatal("expected error for empty node_dns_upstreams")
+	}
+
+	cfg = newDefaultCfg()
+	cfg.NodeDNSUpstreams = []string{"https://doh.pub/dns-query", "LOCAL", "https://doh.pub/dns-query"}
+	if err := validateRuntimeConfig(cfg); err != nil {
+		t.Fatalf("validateRuntimeConfig returned error: %v", err)
+	}
+	if got, want := cfg.NodeDNSUpstreams, []string{"https://doh.pub/dns-query", "local"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalized DNS: got %v, want %v", got, want)
+	}
+
+	cfg = newDefaultCfg()
+	cfg.NodeDNSUpstreams = []string{"https://dns.example.com/dns-query?headers=x"}
+	if err := validateRuntimeConfig(cfg); err == nil {
+		t.Fatal("expected error for unsupported DNS query parameter")
+	}
+}
+
 func TestValidateRuntimeConfig_LatencyURLAutoAddsAuthority(t *testing.T) {
 	cfg := newDefaultCfg()
 	cfg.LatencyAuthorities = []string{"cloudflare.com"}
