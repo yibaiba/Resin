@@ -9,3 +9,8 @@ start-instance.sh
 .claude/
 .omc/
 .local/
+.mission/
+
+# Local SQLite/cache and release binaries (keep webui/dist/.gitkeep tracked)
+/data/
+/dist/
