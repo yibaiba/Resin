@@ -77,9 +77,30 @@ type SubscriptionEditForm = z.infer<typeof subscriptionEditSchema>;
 const EMPTY_SUBSCRIPTIONS: Subscription[] = [];
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 const LOCAL_SOURCE_UPDATE_INTERVAL = "12h";
+const CREATE_FORM_DEFAULTS: SubscriptionCreateForm = {
+  name: "",
+  source_type: "remote",
+  url: "",
+  content: "",
+  update_interval: "12h",
+  ephemeral_node_evict_delay: "72h",
+  enabled: true,
+  ephemeral: false,
+  incremental_alive_nodes: false,
+};
 const SUBSCRIPTION_DISABLE_HINT = "禁用订阅后，相关节点不会参与平台路由、健康统计或自动探测。";
 const SUBSCRIPTION_EPHEMERAL_HINT = "临时订阅的非健康节点会在一段时间后被自动删除。订阅本身不会被删除。";
 const SUBSCRIPTION_INCREMENTAL_HINT = "开启后刷新时保留当前仍存活的旧节点，仅清理失效旧节点，并合并新订阅内容；关闭后仅保留刷新后的订阅内容。";
+const SUBSCRIPTION_SOURCE_HINT =
+  "远程填写 HTTP/HTTPS 订阅 URL。vless://、hy2:// 等节点分享链接请选本地并粘贴内容。";
+
+function looksLikeRemoteSubscriptionURL(raw: string): boolean {
+  const value = raw.trim();
+  if (!value || /[\r\n]/.test(value)) {
+    return false;
+  }
+  return value.startsWith("http://") || value.startsWith("https://");
+}
 
 function extractHostname(url: string): string {
   try {
@@ -183,18 +204,9 @@ export function SubscriptionPage() {
 
   const createForm = useForm<SubscriptionCreateForm>({
     resolver: zodResolver(subscriptionCreateSchema),
-    defaultValues: {
-      name: "",
-      source_type: "remote",
-      url: "",
-      content: "",
-      update_interval: "12h",
-      ephemeral_node_evict_delay: "72h",
-      enabled: true,
-      ephemeral: false,
-      incremental_alive_nodes: false,
-    },
+    defaultValues: CREATE_FORM_DEFAULTS,
   });
+  const createUrlField = createForm.register("url");
 
   const createEphemeral = createForm.watch("ephemeral");
   const createSourceType = createForm.watch("source_type");
@@ -256,17 +268,7 @@ export function SubscriptionPage() {
     onSuccess: async (created) => {
       await invalidateSubscriptions();
       setCreateModalOpen(false);
-      createForm.reset({
-        name: "",
-        source_type: "remote",
-        url: "",
-        content: "",
-        update_interval: LOCAL_SOURCE_UPDATE_INTERVAL,
-        ephemeral_node_evict_delay: "72h",
-        enabled: true,
-        ephemeral: false,
-        incremental_alive_nodes: false,
-      });
+      createForm.reset(CREATE_FORM_DEFAULTS);
       showToast("success", t("订阅 {{name}} 创建成功", { name: created.name }));
     },
     onError: (error) => {
@@ -690,7 +692,10 @@ export function SubscriptionPage() {
             <Button
               variant="secondary"
               size="sm"
-              onClick={() => setCreateModalOpen(true)}
+              onClick={() => {
+                createForm.reset(CREATE_FORM_DEFAULTS);
+                setCreateModalOpen(true);
+              }}
             >
               <Plus size={16} />
               {t("新建")}
@@ -932,21 +937,22 @@ export function SubscriptionPage() {
                     </div>
                   </div>
 
-                  <div className="field-group">
-                    <label className="field-label" htmlFor="edit-sub-ephemeral-evict-delay">
-                      {t("临时节点驱逐延迟")}
-                    </label>
-                    <Input
-                      id="edit-sub-ephemeral-evict-delay"
-                      placeholder={t("例如 72h")}
-                      invalid={Boolean(editForm.formState.errors.ephemeral_node_evict_delay)}
-                      disabled={!editEphemeral}
-                      {...editForm.register("ephemeral_node_evict_delay")}
-                    />
-                    {editForm.formState.errors.ephemeral_node_evict_delay?.message ? (
-                      <p className="field-error">{t(editForm.formState.errors.ephemeral_node_evict_delay.message)}</p>
-                    ) : null}
-                  </div>
+                  {editEphemeral ? (
+                    <div className="field-group field-span-2">
+                      <label className="field-label" htmlFor="edit-sub-ephemeral-evict-delay">
+                        {t("临时节点驱逐延迟")}
+                      </label>
+                      <Input
+                        id="edit-sub-ephemeral-evict-delay"
+                        placeholder={t("例如 72h")}
+                        invalid={Boolean(editForm.formState.errors.ephemeral_node_evict_delay)}
+                        {...editForm.register("ephemeral_node_evict_delay")}
+                      />
+                      {editForm.formState.errors.ephemeral_node_evict_delay?.message ? (
+                        <p className="field-error">{t(editForm.formState.errors.ephemeral_node_evict_delay.message)}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="platform-config-actions">
                     <Button type="submit" disabled={updateMutation.isPending}>
@@ -1011,32 +1017,17 @@ export function SubscriptionPage() {
       ) : null}
 
       {createModalOpen ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <Card className="modal-card">
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-sub-title">
+          <Card className="modal-card modal-card-stack">
             <div className="modal-header">
-              <h3>{t("新建订阅")}</h3>
-              <Button variant="ghost" size="sm" onClick={() => setCreateModalOpen(false)}>
+              <h3 id="create-sub-title">{t("新建订阅")}</h3>
+              <Button variant="ghost" size="sm" aria-label={t("关闭")} onClick={() => setCreateModalOpen(false)}>
                 <X size={16} />
               </Button>
             </div>
 
-            <form className="form-grid" onSubmit={onCreateSubmit}>
-              <input type="hidden" {...createForm.register("source_type")} />
-
-              <div className="subscription-switch-item field-span-2">
-                <label className="subscription-switch-label" htmlFor="create-sub-enabled">
-                  <span>{t("启用")}</span>
-                  <span
-                    className="subscription-info-icon"
-                    title={t(SUBSCRIPTION_DISABLE_HINT)}
-                    aria-label={t(SUBSCRIPTION_DISABLE_HINT)}
-                    tabIndex={0}
-                  >
-                    <Info size={13} />
-                  </span>
-                </label>
-                <Switch id="create-sub-enabled" {...createForm.register("enabled")} />
-              </div>
+            <form className="form-grid modal-body" onSubmit={onCreateSubmit}>
+              <input type="hidden" {...createForm.register("source_type")} style={{ display: "none" }} />
 
               <div className="field-group field-span-2">
                 <label className="field-label" htmlFor="create-sub-name">
@@ -1044,6 +1035,7 @@ export function SubscriptionPage() {
                 </label>
                 <Input
                   id="create-sub-name"
+                  placeholder={t("给这个订阅起个名字")}
                   invalid={Boolean(createForm.formState.errors.name)}
                   {...createForm.register("name")}
                 />
@@ -1072,6 +1064,7 @@ export function SubscriptionPage() {
                     );
                   })}
                 </div>
+                <p className="syscfg-section-hint">{t(SUBSCRIPTION_SOURCE_HINT)}</p>
               </div>
 
               {createSourceType === "remote" ? (
@@ -1097,8 +1090,19 @@ export function SubscriptionPage() {
                     </label>
                     <Input
                       id="create-sub-url"
+                      placeholder={t("https:// 开头的订阅地址")}
                       invalid={Boolean(createForm.formState.errors.url)}
-                      {...createForm.register("url")}
+                      {...createUrlField}
+                      onChange={(event) => {
+                        void createUrlField.onChange(event);
+                        const value = event.target.value;
+                        if (!value.trim() || looksLikeRemoteSubscriptionURL(value)) {
+                          return;
+                        }
+                        createForm.setValue("source_type", "local", { shouldDirty: true, shouldValidate: true });
+                        createForm.setValue("content", value, { shouldDirty: true, shouldValidate: true });
+                        createForm.setValue("url", "", { shouldDirty: true, shouldValidate: false });
+                      }}
                     />
                     {createForm.formState.errors.url?.message ? (
                       <p className="field-error">{t(createForm.formState.errors.url.message)}</p>
@@ -1123,10 +1127,21 @@ export function SubscriptionPage() {
                 </div>
               )}
 
-              <div className="field-group">
-                <label className="field-label" htmlFor="create-sub-ephemeral" style={{ visibility: "hidden" }}>
-                  {t("临时订阅")}
-                </label>
+              <div className="subscription-switch-group field-span-2">
+                <div className="subscription-switch-item">
+                  <label className="subscription-switch-label" htmlFor="create-sub-enabled">
+                    <span>{t("启用")}</span>
+                    <span
+                      className="subscription-info-icon"
+                      title={t(SUBSCRIPTION_DISABLE_HINT)}
+                      aria-label={t(SUBSCRIPTION_DISABLE_HINT)}
+                      tabIndex={0}
+                    >
+                      <Info size={13} />
+                    </span>
+                  </label>
+                  <Switch id="create-sub-enabled" {...createForm.register("enabled")} />
+                </div>
                 <div className="subscription-switch-item">
                   <label className="subscription-switch-label" htmlFor="create-sub-ephemeral">
                     <span>{t("临时订阅")}</span>
@@ -1141,12 +1156,6 @@ export function SubscriptionPage() {
                   </label>
                   <Switch id="create-sub-ephemeral" {...createForm.register("ephemeral")} />
                 </div>
-              </div>
-
-              <div className="field-group">
-                <label className="field-label" htmlFor="create-sub-incremental-alive-nodes" style={{ visibility: "hidden" }}>
-                  {t("存活节点增量模式")}
-                </label>
                 <div className="subscription-switch-item">
                   <label className="subscription-switch-label" htmlFor="create-sub-incremental-alive-nodes">
                     <span>{t("存活节点增量模式")}</span>
@@ -1163,21 +1172,22 @@ export function SubscriptionPage() {
                 </div>
               </div>
 
-              <div className="field-group">
-                <label className="field-label" htmlFor="create-sub-ephemeral-evict-delay">
-                  {t("临时节点驱逐延迟")}
-                </label>
-                <Input
-                  id="create-sub-ephemeral-evict-delay"
-                  placeholder={t("例如 72h")}
-                  invalid={Boolean(createForm.formState.errors.ephemeral_node_evict_delay)}
-                  disabled={!createEphemeral}
-                  {...createForm.register("ephemeral_node_evict_delay")}
-                />
-                {createForm.formState.errors.ephemeral_node_evict_delay?.message ? (
-                  <p className="field-error">{t(createForm.formState.errors.ephemeral_node_evict_delay.message)}</p>
-                ) : null}
-              </div>
+              {createEphemeral ? (
+                <div className="field-group field-span-2">
+                  <label className="field-label" htmlFor="create-sub-ephemeral-evict-delay">
+                    {t("临时节点驱逐延迟")}
+                  </label>
+                  <Input
+                    id="create-sub-ephemeral-evict-delay"
+                    placeholder={t("例如 72h")}
+                    invalid={Boolean(createForm.formState.errors.ephemeral_node_evict_delay)}
+                    {...createForm.register("ephemeral_node_evict_delay")}
+                  />
+                  {createForm.formState.errors.ephemeral_node_evict_delay?.message ? (
+                    <p className="field-error">{t(createForm.formState.errors.ephemeral_node_evict_delay.message)}</p>
+                  ) : null}
+                </div>
+              ) : null}
 
               <div className="detail-actions" style={{ justifyContent: "flex-end" }}>
                 <Button type="submit" disabled={createMutation.isPending}>

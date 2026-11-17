@@ -56,7 +56,22 @@ curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<owner-platform-id> \
   -d '{"fallback_platform_ids":["<fallback-a-id>","<fallback-b-id>"]}'
 ```
 
-## 3. 出口 IP 池
+## 3. Platform 链式代理
+
+`chain_platform_ids` 是落地 Platform 的有序前置 Platform 列表。空数组表示直连。填一个 ID 就是 A→C。在 C 上填 `[A, B]` 就是 A→B→C。前置 Platform 自己的 chain 不会再展开。
+
+真链式是 sing-box `detour`：用前置 outbound 去拨落地服务器，再在隧道上做落地协议。前置 Platform 沿用自己的粘性、过滤、熔断和 fallback。前置没有节点时整次请求失败，错误码仍是 `NO_AVAILABLE_NODES`。被引用的前置 Platform 不能删除。
+
+前置节点直连探测。落地节点只在属于恰好一条非空 chain 时，探针才走这条链。落地订阅应单独放在链式平台里。
+
+```bash
+curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<landing-id> \
+  -H "Authorization: Bearer $RESIN_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"chain_platform_ids":["<hop-a-id>","<hop-b-id>"]}'
+```
+
+## 4. 出口 IP 池
 
 每个探测到的出口 IP 都可以设置全局策略，跨 Platform 共同生效：
 
@@ -77,7 +92,7 @@ curl -X PATCH http://127.0.0.1:2260/api/v1/egress-ips/203.0.113.7 \
 
 批量排空使用 `POST /api/v1/egress-ips/actions/batch-drain`，返回每个 IP 的独立成功或失败结果。IPv6 地址作为路径参数时应进行 URL 编码。
 
-## 4. 粘性轮换
+## 5. 粘性轮换
 
 Platform 的 `rotation_interval` 使用 Go duration；`0s` 表示禁用定时轮换，正值必须小于 `sticky_ttl`。`rotation_strategy` 支持：
 
@@ -98,7 +113,7 @@ POST /api/v1/egress-ips/{ip}/actions/rotate-leases
 {"strategy":"PREFER_NEW_IP"}
 ```
 
-## 5. 路由诊断
+## 6. 路由诊断
 
 `DRY_RUN` 使用真实规则、fallback、出口策略、容量、现有租约和 P2C 评分，但不创建或更新租约，也不修改容量、健康或延迟状态。指定相同 `seed` 和相同状态时可复现选择结果。
 

@@ -21,7 +21,7 @@ const (
 
 type DiagnosticTCPProber interface {
 	ProbeDirect(ctx context.Context, target string) error
-	ProbeRouted(ctx context.Context, hash node.Hash, target string) error
+	ProbeRouted(ctx context.Context, hash node.Hash, hops []node.Hash, target string) error
 }
 
 type RouteDiagnosticRequest struct {
@@ -170,12 +170,46 @@ func (s *ControlPlaneService) probeDiagnosticTarget(
 	if response.Decision.Action == routing.DecisionDirect {
 		return s.DiagnosticTCPProber.ProbeDirect(ctx, target)
 	}
-	if response.Route == nil || response.Route.Selection == nil {
+	if !liveTCPSelectionReady(response.Route) {
 		return errors.New("no routed candidate selected")
 	}
 	hash, err := node.ParseHex(response.Route.Selection.NodeHash)
 	if err != nil {
 		return err
 	}
-	return s.DiagnosticTCPProber.ProbeRouted(ctx, hash, target)
+	hops, err := diagnosticSelectionHops(response.Route.Selection)
+	if err != nil {
+		return err
+	}
+	return s.DiagnosticTCPProber.ProbeRouted(ctx, hash, hops, target)
+}
+
+func liveTCPSelectionReady(route *routing.RouteDiagnostic) bool {
+	if route == nil || route.Selection == nil {
+		return false
+	}
+	if route.Outcome == "no_available_nodes" || route.Outcome == "error" {
+		return false
+	}
+	for _, hop := range route.Selection.Chain {
+		if strings.TrimSpace(hop.NodeHash) == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func diagnosticSelectionHops(selection *routing.DiagnosticSelection) ([]node.Hash, error) {
+	if selection == nil || len(selection.Chain) == 0 {
+		return nil, nil
+	}
+	hops := make([]node.Hash, 0, len(selection.Chain))
+	for _, hop := range selection.Chain {
+		hash, err := node.ParseHex(hop.NodeHash)
+		if err != nil {
+			return nil, err
+		}
+		hops = append(hops, hash)
+	}
+	return hops, nil
 }

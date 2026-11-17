@@ -15,6 +15,9 @@ const DefaultPlatformID = "00000000-0000-0000-0000-000000000000"
 // DefaultPlatformName is the built-in platform name.
 const DefaultPlatformName = "Default"
 
+// MaxChainPlatformIDs is the safety cap on a platform's ordered hop list.
+const MaxChainPlatformIDs = 8
+
 // GeoLookupFunc resolves an IP address to a lowercase ISO country code.
 type GeoLookupFunc func(netip.Addr) string
 
@@ -43,6 +46,7 @@ type Platform struct {
 	AllocationPolicy                 AllocationPolicy
 	PassiveCircuitBreakerDisabled    bool
 	FallbackPlatformIDs              []string
+	ChainPlatformIDs                 []string
 	RotationIntervalNs               int64
 	RotationStrategy                 RotationStrategy
 
@@ -196,6 +200,47 @@ func (p *Platform) evaluateNode(
 	}
 
 	return true
+}
+
+// MatchesLandingFilters reports whether the node could belong to this
+// platform as a landing node, ignoring live health, egress IP, and latency.
+// Region filters apply only after egress is known so a chained landing can
+// still be probed through hops.
+func (p *Platform) MatchesLandingFilters(
+	entry *node.NodeEntry,
+	subLookup node.SubLookupFunc,
+	geoLookup GeoLookupFunc,
+) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.IsDisabledBySubscriptions(subLookup) {
+		return false
+	}
+	if !entry.MatchesSubscriptionAllowlist(p.SubscriptionIDs, subLookup) {
+		return false
+	}
+	if !entry.MatchTagFilter(p.RegexFilters, subLookup) {
+		return false
+	}
+	if len(p.RegionFilters) == 0 {
+		return true
+	}
+	egressIP := entry.GetEgressIP()
+	if !egressIP.IsValid() {
+		return true
+	}
+	return MatchRegionFilter(entry.GetRegion(geoLookup), p.RegionFilters)
+}
+
+// HasRestrictiveLandingFilters reports whether this platform uses an explicit
+// membership filter. Catch-all platforms such as Default do not compete with
+// a unique landing chain.
+func (p *Platform) HasRestrictiveLandingFilters() bool {
+	if p == nil {
+		return false
+	}
+	return len(p.SubscriptionIDs) > 0 || len(p.RegionFilters) > 0 || !p.RegexFilters.Empty()
 }
 
 // MatchRegionFilter applies include/exclude region filters.

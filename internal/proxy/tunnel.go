@@ -15,6 +15,7 @@ import (
 type tunnelDeps struct {
 	router      *routing.Router
 	pool        outbound.PoolAccessor
+	chain       chainOutboundResolver
 	decisioner  RouteDecisioner
 	health      HealthRecorder
 	metricsSink MetricsEventSink
@@ -49,6 +50,7 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 		request.deps.decisioner,
 		request.deps.router,
 		request.deps.pool,
+		request.deps.chain,
 		routing.RouteOptions{
 			PlatformName: request.platformName,
 			Account:      request.account,

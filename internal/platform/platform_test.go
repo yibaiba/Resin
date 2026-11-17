@@ -461,3 +461,42 @@ func TestPlatform_FullRebuild_ClearsOld(t *testing.T) {
 		t.Fatal("h2 should have been removed by rebuild")
 	}
 }
+
+func TestPlatform_MatchesLandingFilters_IgnoresLiveHealth(t *testing.T) {
+	p := NewPlatform("landing", "Landing", nil, nil)
+	p.SubscriptionIDs = []string{"land-sub"}
+	h := makeHash(`{"type":"ss","role":"landing"}`)
+	entry := makeFullyRoutableEntry(h, "land-sub")
+	entry.RestoreTCPHealth(3, time.Now().UnixNano())
+	entry.SetEgressIP(netip.Addr{})
+
+	if p.evaluateNode(entry, alwaysLookup, usGeoLookup) {
+		t.Fatal("circuit-open landing without egress must stay out of the routable view")
+	}
+	if !p.MatchesLandingFilters(entry, alwaysLookup, usGeoLookup) {
+		t.Fatal("unique-chain membership should ignore live health and missing egress")
+	}
+
+	p.RegionFilters = []string{"us"}
+	entry.SetEgressIP(netip.MustParseAddr("1.2.3.4"))
+	if !p.MatchesLandingFilters(entry, alwaysLookup, usGeoLookup) {
+		t.Fatal("known us egress should match us region filter")
+	}
+	entry.SetEgressIP(netip.MustParseAddr("8.8.8.8"))
+	jpLookup := func(netip.Addr) string { return "jp" }
+	if p.MatchesLandingFilters(entry, alwaysLookup, jpLookup) {
+		t.Fatal("jp egress should not match us region filter")
+	}
+}
+
+func TestPlatform_HasRestrictiveLandingFilters(t *testing.T) {
+	catchAll := NewPlatform("default", "Default", nil, nil)
+	if catchAll.HasRestrictiveLandingFilters() {
+		t.Fatal("empty Default-style platform should not compete with a unique chain")
+	}
+	allowlist := NewPlatform("land", "Land", nil, nil)
+	allowlist.SubscriptionIDs = []string{"land-sub"}
+	if !allowlist.HasRestrictiveLandingFilters() {
+		t.Fatal("subscription allowlist is a restrictive landing filter")
+	}
+}

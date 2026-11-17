@@ -74,6 +74,12 @@ func NewRouter(cfg RouterConfig) *Router {
 	}
 }
 
+type RouteChainHop struct {
+	PlatformID   string
+	PlatformName string
+	NodeHash     node.Hash
+}
+
 type RouteResult struct {
 	PlatformID           string
 	PlatformName         string
@@ -84,6 +90,7 @@ type RouteResult struct {
 	NodeHash             node.Hash
 	EgressIP             netip.Addr
 	NodeTag              string // display tag: "<Subscription>/<Tag>" (DESIGN.md §601)
+	ChainHops            []RouteChainHop
 	LeaseCreated         bool
 	RotationStatus       string
 	RotationReason       string
@@ -96,6 +103,7 @@ type RouteOptions struct {
 	Account         string
 	Target          string
 	RequiredNetwork string
+	SkipProxyChain  bool
 }
 
 type routeAttempt struct {
@@ -134,7 +142,10 @@ func (r *Router) RouteRequest(platName, account, target string) (RouteResult, er
 func (r *Router) RouteWithOptions(options RouteOptions) (RouteResult, error) {
 	r.leaseLifecycleMu.RLock()
 	defer r.leaseLifecycleMu.RUnlock()
+	return r.routeWithOptionsLocked(options)
+}
 
+func (r *Router) routeWithOptionsLocked(options RouteOptions) (RouteResult, error) {
 	requiredNetwork, err := normalizeRequiredNetwork(options.RequiredNetwork)
 	if err != nil {
 		return RouteResult{}, err
@@ -164,7 +175,46 @@ func (r *Router) RouteWithOptions(options RouteOptions) (RouteResult, error) {
 	if r.nodeTagResolver != nil {
 		result.NodeTag = r.nodeTagResolver(result.NodeHash)
 	}
+	if !options.SkipProxyChain {
+		if err := r.attachProxyChainLocked(&result, options); err != nil {
+			return RouteResult{}, err
+		}
+	}
 	return result, nil
+}
+
+func (r *Router) attachProxyChainLocked(result *RouteResult, options RouteOptions) error {
+	if result == nil || result.SelectedPlatformID == "" {
+		return nil
+	}
+	selected, ok := r.pool.GetPlatform(result.SelectedPlatformID)
+	if !ok || len(selected.ChainPlatformIDs) == 0 {
+		return nil
+	}
+	hops := make([]RouteChainHop, 0, len(selected.ChainPlatformIDs))
+	for _, hopID := range selected.ChainPlatformIDs {
+		hopPlat, ok := r.pool.GetPlatform(hopID)
+		if !ok {
+			return fmt.Errorf("%w: chain hop platform %s", ErrNoAvailableNodes, hopID)
+		}
+		hopResult, err := r.routeWithOptionsLocked(RouteOptions{
+			PlatformName:    hopPlat.Name,
+			Account:         options.Account,
+			Target:          options.Target,
+			RequiredNetwork: options.RequiredNetwork,
+			SkipProxyChain:  true,
+		})
+		if err != nil {
+			return err
+		}
+		hops = append(hops, RouteChainHop{
+			PlatformID:   hopResult.SelectedPlatformID,
+			PlatformName: hopResult.SelectedPlatformName,
+			NodeHash:     hopResult.NodeHash,
+		})
+	}
+	result.ChainHops = hops
+	return nil
 }
 
 type routeRequest struct {

@@ -85,7 +85,7 @@ function FinalSelection({ route }: { route: Route }) {
   const { t } = useI18n();
   const selection = route.selection;
   if (!selection) return <p className="muted">{t("没有可用节点，请根据上方排除原因修复配置或节点状态。")}</p>;
-  return <dl className="compact-kv"><dt>Platform</dt><dd>{selection.platform_name}</dd><dt>{t("出口 IP")}</dt><dd>{selection.egress_ip}</dd><dt>{t("节点")}</dt><dd className="diagnostic-code" title={selection.node_hash}>{shortHash(selection.node_hash)}</dd><dt>{t("选择原因")}</dt><dd>{t(routingLabel(selection.reason))}</dd><dt>{t("轮换结果")}</dt><dd>{selection.rotation_status ? t(routingLabel(selection.rotation_status)) : t("未触发轮换")} {selection.rotation_reason ? `· ${t(routingLabel(selection.rotation_reason))}` : ""}</dd></dl>;
+  return <dl className="compact-kv"><dt>Platform</dt><dd>{selection.platform_name}</dd><dt>{t("出口 IP")}</dt><dd>{selection.egress_ip}</dd><dt>{t("节点")}</dt><dd className="diagnostic-code" title={selection.node_hash}>{shortHash(selection.node_hash)}</dd>{selection.chain?.length ? <><dt>{t("链式前置")}</dt><dd>{selection.chain.map((hop) => hop.platform_name || hop.platform_id).join(" → ")}</dd></> : null}<dt>{t("选择原因")}</dt><dd>{t(routingLabel(selection.reason))}</dd><dt>{t("轮换结果")}</dt><dd>{selection.rotation_status ? t(routingLabel(selection.rotation_status)) : t("未触发轮换")} {selection.rotation_reason ? `· ${t(routingLabel(selection.rotation_reason))}` : ""}</dd></dl>;
 }
 
 function CandidateTable({ route, platformNames }: { route: Route; platformNames: Map<string, string> }) {

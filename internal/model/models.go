@@ -49,6 +49,7 @@ type Platform struct {
 	AllocationPolicy                 string   `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	ChainPlatformIDs                 []string `json:"chain_platform_ids"`
 	RotationIntervalNs               int64    `json:"rotation_interval_ns"`
 	RotationStrategy                 string   `json:"rotation_strategy"`
 	UpdatedAtNs                      int64    `json:"updated_at_ns"`

@@ -31,6 +31,7 @@
 * RegexFilters：节点标签过滤规则列表，语法见“节点标签过滤规则”。
 * RegexFiltersCompiled：按规则类型分组的编译结果。随着 RegexFilters 更新。
 * SubscriptionIDs：允许进入该平台的订阅 ID 列表。空表示不限制订阅来源。非空时，节点必须属于其中至少一个 Enabled 订阅。与 RegexFilters、RegionFilters 同时生效（AND）。按订阅 ID 匹配，不随订阅改名失效。
+* ChainPlatformIDs：有序前置 Platform ID 列表。空表示本平台节点直连目标。有值时用户流量为 `Resin → ids[0] 节点 → … → 本平台落地节点 → 目标`。`ids[0]` 离 Resin 最近。实现安全上限 8。前置 Platform 自己的 `ChainPlatformIDs` 不展开；要 A→B→C 就把 `[A, B]` 写在 C 上。与 `FallbackPlatformIDs` 独立：fallback 是换落地 Platform，chain 是给当前落地加前置。
 * RegionFilters：一个地区列表。小写 ISO codes (e.g., "hk", "us")。节点的出口 IP 地区属于该列表才符合条件。空表示不做地区筛选。
 * 反向代理 Account 为空时的行为：随机路由 / 固定 Header 提取 / 按 Account Header Rule 提取。
 * 反向代理匹配 Account 失败后的行为：随机路由 或 拒绝请求。默认是随机路由。
@@ -274,7 +275,7 @@ No available proxy nodes
 	* MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bool：按“节点标签过滤规则”判断节点是否匹配。
 	* MatchesSubscriptionAllowlist(allowIDs []string, subLookup SubLookupFunc) bool：空 allowlist 匹配全部节点；非空时节点必须属于其中至少一个 Enabled 订阅。
 
-本项目不使用原生的 sing-box OutboundManager，而是实现上述高性能 Outbound Manager。
+直连节点由 Resin 自己的 OutboundManager 持有，不写入 sing-box OutboundManager。链式出站把 hop / landing 注册进已创建但未 Start 的 sing-box OutboundManager，只用来解析 `detour` tag；`NodeEntry.Outbound` 始终是直连探测实例。
 
 #### Platform 可路由视图
 * 结构：`Custom Set：64 分片 * (RWMutex + Slice + Map)`
@@ -509,6 +510,9 @@ Resin 内置了 GeoIP 服务，用于支持 Platform 的 RegionFilters 功能。
 * 查到表项了，并且节点依然存在于 Platform 的可路由节点中，并且出口 IP 没变：使用这个节点。
 * 查到表项了，但节点不存在于 Platform 的可路由节点中，或者节点的出口 IP 变了：使用同 IP 轮换，选个新节点，更新表项。
 
+选出落地节点后，若该落地 Platform 的 `chain_platform_ids` 非空，再按顺序为每个前置 Platform 选一个节点（`SkipProxyChain`，沿用该前置 Platform 的粘性、过滤、熔断和它自己的 fallback）。前置没有节点则整次路由失败，错误码仍是 `NO_AVAILABLE_NODES`。`RouteResult.NodeHash` / 租约 / `egress_ip` 仍是落地节点；hop 记在 `ChainHops`。用户流量使用 sing-box `Detour` 链，不用落地节点的直连 Outbound。
+
+前置 Platform 的节点仍直连探测。落地节点仅当它只匹配一条非空 chain 时，egress / latency / UDP 探针走该链。Default 等无过滤的未链式平台不参与“唯一链”判定。落地节点同时挂在带过滤的未链式平台、或两条不同 chain 上时，探针走直连。落地订阅应单独放在链式平台里。
 
 ### 随机路由算法
 随机模式采用 **P2C** 算法，结合延迟与负载进行加权选择。
@@ -599,7 +603,7 @@ Resin 项目中所有的数据库都设计为单写，不会有多进程写入�
 ### SQLite 数据模型
 #### state.db
 * system_config(config_json, version, updated_at_ns)
-* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, subscription_ids_json, updated_at_ns)
+* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, fallback_platform_ids_json, chain_platform_ids_json, subscription_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns)
 * subscriptions(id PK, name, url, update_interval_ns, enabled, ephemeral, created_at_ns, updated_at_ns)
 * account_header_rules(url_prefix PK, headers_json, updated_at_ns)
 
@@ -1221,6 +1225,8 @@ Body（partial patch 示例）：
   "reverse_proxy_fixed_account_header": "Authorization\nX-Account-Id",
   "allocation_policy": "BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP",
   "passive_circuit_breaker_disabled": false,
+  "fallback_platform_ids": [],
+  "chain_platform_ids": [],
   "updated_at": "2026-02-10T12:34:56Z"
 }
 ```
@@ -1249,14 +1255,15 @@ Body：
   "reverse_proxy_empty_account_behavior": "ACCOUNT_HEADER_RULE",
   "reverse_proxy_fixed_account_header": "Authorization\nX-Account-Id",
   "allocation_policy": "BALANCED",
-  "passive_circuit_breaker_disabled": false
+  "passive_circuit_breaker_disabled": false,
+  "chain_platform_ids": ["uuid-of-hop-platform"]
 }
 ```
 
 字段要求：
 
 * 必填字段：`name`
-* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
+* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
 * 不可传字段：`id`、`updated_at`、`routable_node_count`
 * 省略可选字段时，平台策略字段使用当前环境变量默认平台设置（`RESIN_DEFAULT_PLATFORM_*`）对应值；`passive_circuit_breaker_disabled` 默认 `false`
 
@@ -1269,6 +1276,7 @@ Body：
 * `subscription_ids`：允许进入该平台的订阅 ID 列表。空数组或不传表示不限制订阅。非空时每项必须是已存在的订阅 ID，不能为空或重复。节点只要属于其中一个 Enabled 订阅即可进入，再与 `regex_filters`、`region_filters` 取交集。删除订阅时会从所有平台的该列表中移除对应 ID。
 * 枚举字段：`reverse_proxy_miss_action` 仅 `TREAT_AS_EMPTY|REJECT`；`reverse_proxy_empty_account_behavior` 仅 `RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE`；`allocation_policy` 仅 `BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。
 * `passive_circuit_breaker_disabled`：布尔值。设为 `true` 后，此 Platform 的用户代理请求失败不会增加节点熔断计数；主动探测不受影响。成功请求仍会清除节点连续失败计数并可恢复熔断节点。
+* `chain_platform_ids`：有序前置 Platform ID。空数组或不传表示直连。每项必须是已存在的其他 Platform，不能为空、重复或指向自己，全图不能成环，长度最多 8。前置 Platform 自己的 chain 不展开。
 * 组合约束：当 `reverse_proxy_empty_account_behavior=FIXED_HEADER` 时，`reverse_proxy_fixed_account_header` 必填；其值支持多行，每行一个合法 HTTP Header 字段名（会按顺序尝试提取）。
 
 错误码映射（最小集）：
@@ -1297,7 +1305,7 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：无
-* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`
+* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
 * 不可改字段：`id`、`updated_at`、`routable_node_count`
 
 关键校验：与“创建平台”一致。
@@ -1319,7 +1327,7 @@ Body（partial patch 示例）：
 错误码映射（最小集）：
 
 * `404 NOT_FOUND`：`platform_id` 不存在。
-* `409 CONFLICT`：删除目标为 `Default` 平台。
+* `409 CONFLICT`：删除目标为 `Default` 平台，或该平台被其他平台的 `fallback_platform_ids` / `chain_platform_ids` 引用，或被路由规则引用。
 
 返回：`204 No Content`
 
@@ -2507,7 +2515,7 @@ WebUI 分为登录态与控制台态。未登录时进入登录页；登录后�
 
 工具栏包含状态过滤、关键词搜索、新建、刷新。表格行支持预览节点池、编辑、手动刷新、删除。
 
-点击“新建”弹出订阅创建表单，包含名称、更新间隔、订阅来源（远程 URL / 本地内容）、临时订阅开关、临时节点驱逐延迟、启用开关。
+点击“新建”弹出订阅创建表单，包含名称、订阅来源（远程 HTTP/HTTPS URL / 本地内容）、更新间隔或订阅内容、启用 / 临时订阅 / 存活节点增量开关。临时节点驱逐延迟仅在打开临时订阅时出现。节点分享链接（vless://、hy2:// 等）走本地内容；粘贴到远程 URL 框时会自动切到本地。
 
 点击表格行会打开订阅 Drawer，内含订阅配置编辑（基础信息、错误状态）与运维操作（手动刷新、清理失效节点、删除订阅）。
 

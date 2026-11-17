@@ -30,12 +30,18 @@ export type P2CTrace = {
   selected_hash?: string;
 };
 export type DiagnosticP2C = { platform_id: string; trace: P2CTrace };
+export type DiagnosticChainHop = {
+  platform_id: string;
+  platform_name: string;
+  node_hash?: string;
+};
 export type DiagnosticSelection = {
   platform_id: string;
   platform_name: string;
   node_hash: string;
   egress_ip: string;
   reason: string;
+  chain?: DiagnosticChainHop[];
   rotation_status?: string;
   rotation_reason?: string;
   rotation_strategy?: string;

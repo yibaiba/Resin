@@ -430,7 +430,8 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		GeoIP:          a.geoSvc,
 		MatcherRuntime: a.accountMatcher,
 		DiagnosticTCPProber: runtimeDiagnosticTCPProber{
-			pool: a.topoRuntime.pool,
+			pool:        a.topoRuntime.pool,
+			outboundMgr: a.topoRuntime.outboundMgr,
 		},
 		OnUDPProbeConfigChanged: a.topoRuntime.probeMgr.TriggerImmediateUDPProbes,
 		OnNodeDNSConfigChanged: func(upstreams []string) error {
@@ -476,6 +477,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		ProxyToken:        a.envCfg.ProxyToken,
 		Router:            a.topoRuntime.router,
 		Pool:              a.topoRuntime.pool,
+		Chain:             a.topoRuntime.outboundMgr,
 		Health:            a.topoRuntime.pool,
 		Events:            proxyEvents,
 		MetricsSink:       a.metricsManager,
@@ -489,6 +491,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		ProxyToken:        a.envCfg.ProxyToken,
 		Router:            a.topoRuntime.router,
 		Pool:              a.topoRuntime.pool,
+		Chain:             a.topoRuntime.outboundMgr,
 		PlatformLookup:    a.topoRuntime.pool,
 		Health:            a.topoRuntime.pool,
 		Matcher:           a.accountMatcher,
@@ -503,6 +506,7 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 		ProxyToken:       a.envCfg.ProxyToken,
 		Router:           a.topoRuntime.router,
 		Pool:             a.topoRuntime.pool,
+		Chain:            a.topoRuntime.outboundMgr,
 		Health:           a.topoRuntime.pool,
 		Events:           proxyEvents,
 		MetricsSink:      a.metricsManager,

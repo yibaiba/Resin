@@ -4,6 +4,7 @@
 package topology
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -17,6 +18,7 @@ import (
 	"github.com/Resinat/Resin/internal/platform"
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/puzpuzpuz/xsync/v4"
+	N "github.com/sagernet/sing/common/network"
 )
 
 // GlobalNodePool is the system's single source of truth for nodes.
@@ -274,6 +276,114 @@ func (p *GlobalNodePool) RangePlatforms(fn func(*platform.Platform) bool) {
 			return
 		}
 	}
+}
+
+// UniqueLandingChain returns hop node hashes when the node belongs to exactly
+// one non-empty platform chain. Ambiguous or unchained nodes return ok=false.
+func (p *GlobalNodePool) UniqueLandingChain(hash node.Hash) ([]node.Hash, bool) {
+	entry, ok := p.GetEntry(hash)
+	if !ok || entry == nil {
+		return nil, false
+	}
+	subLookup := p.MakeSubLookup()
+	var (
+		chainIDs []string
+		found    bool
+	)
+	for _, plat := range p.platformSnapshot() {
+		if !plat.MatchesLandingFilters(entry, subLookup, p.geoLookup) {
+			continue
+		}
+		if len(plat.ChainPlatformIDs) == 0 {
+			if plat.HasRestrictiveLandingFilters() {
+				return nil, false
+			}
+			continue
+		}
+		if !found {
+			chainIDs = append([]string(nil), plat.ChainPlatformIDs...)
+			found = true
+			continue
+		}
+		if !stringSlicesEqual(chainIDs, plat.ChainPlatformIDs) {
+			return nil, false
+		}
+	}
+	if !found {
+		return nil, false
+	}
+	hops := make([]node.Hash, 0, len(chainIDs))
+	for _, hopID := range chainIDs {
+		hopPlat, ok := p.GetPlatform(hopID)
+		if !ok {
+			return nil, false
+		}
+		hopHash, ok := p.pickStableHopHash(hopPlat)
+		if !ok {
+			return nil, false
+		}
+		hops = append(hops, hopHash)
+	}
+	return hops, true
+}
+
+func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform) (node.Hash, bool) {
+	visited := make(map[string]struct{})
+	var walk func(*platform.Platform) (node.Hash, bool)
+	walk = func(plat *platform.Platform) (node.Hash, bool) {
+		if plat == nil {
+			return node.Zero, false
+		}
+		if _, seen := visited[plat.ID]; seen {
+			return node.Zero, false
+		}
+		visited[plat.ID] = struct{}{}
+		if hash, ok := stableViewHash(plat.NetworkView(N.NetworkUDP)); ok {
+			return hash, true
+		}
+		if hash, ok := stableViewHash(plat.View()); ok {
+			return hash, true
+		}
+		for _, fallbackID := range plat.FallbackPlatformIDs {
+			fallback, ok := p.GetPlatform(fallbackID)
+			if !ok {
+				continue
+			}
+			if hash, ok := walk(fallback); ok {
+				return hash, true
+			}
+		}
+		return node.Zero, false
+	}
+	return walk(hopPlat)
+}
+
+func stableViewHash(view platform.ReadOnlyView) (node.Hash, bool) {
+	if view == nil {
+		return node.Zero, false
+	}
+	best := node.Zero
+	found := false
+	view.Range(func(h node.Hash) bool {
+		if !found || bytes.Compare(h[:], best[:]) < 0 {
+			best = h
+			found = true
+		}
+		return true
+	})
+	return best, found
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *GlobalNodePool) platformSnapshot() []*platform.Platform {

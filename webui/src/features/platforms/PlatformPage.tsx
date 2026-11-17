@@ -33,6 +33,7 @@ import {
   toPlatformCreateInput,
   type PlatformFormValues,
 } from "./formModel";
+import { OrderedPlatformList } from "./PlatformRoutingSettings";
 import { PlatformSubscriptionPicker } from "./PlatformSubscriptionPicker";
 import type { Platform } from "./types";
 
@@ -88,6 +89,17 @@ export function PlatformPage() {
     control: createForm.control,
     name: "subscription_ids",
   }) ?? [];
+  const createChainPlatformIDs = useWatch({
+    control: createForm.control,
+    name: "chain_platform_ids",
+  }) ?? [];
+
+  const platformChoicesQuery = useQuery({
+    queryKey: ["platforms", "fallback-choices"],
+    queryFn: () => listPlatforms({ limit: 1000 }),
+    staleTime: 30_000,
+    enabled: createModalOpen,
+  });
 
   const createMutation = useMutation({
     mutationFn: createPlatform,
@@ -352,6 +364,21 @@ export function PlatformPage() {
                   ) : null}
                 </div>
               </div>
+
+              <OrderedPlatformList
+                idPrefix="create-chain"
+                platforms={platformChoicesQuery.data?.items ?? EMPTY_PLATFORMS}
+                ids={createChainPlatformIDs}
+                onChange={(ids) => createForm.setValue("chain_platform_ids", ids, { shouldDirty: true })}
+                heading={t("链式代理")}
+                hint={t("流量按顺序先走这些前置 Platform 的节点，再走本平台落地节点。空着就是直连。")}
+                addLabel={t("添加前置 Platform")}
+                selectLabel={t("选择前置平台")}
+                emptyTitle={t("未配置前置 Platform")}
+                emptyHint={t("当前 Platform 直接从本平台节点出站。")}
+                orderLabel={t("前置顺序")}
+                max={8}
+              />
 
               <PlatformSubscriptionPicker
                 create

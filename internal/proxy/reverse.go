@@ -29,6 +29,7 @@ type ReverseProxyConfig struct {
 	ProxyToken        string
 	Router            *routing.Router
 	Pool              outbound.PoolAccessor
+	Chain             chainOutboundResolver
 	PlatformLookup    PlatformLookup
 	Health            HealthRecorder
 	Matcher           AccountRuleMatcher
@@ -45,6 +46,7 @@ type ReverseProxy struct {
 	token             string
 	router            *routing.Router
 	pool              outbound.PoolAccessor
+	chain             chainOutboundResolver
 	platLook          PlatformLookup
 	health            HealthRecorder
 	matcher           AccountRuleMatcher
@@ -77,6 +79,7 @@ func NewReverseProxy(cfg ReverseProxyConfig) *ReverseProxy {
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
 		pool:            cfg.Pool,
+		chain:           cfg.Chain,
 		platLook:        cfg.PlatformLookup,
 		health:          cfg.Health,
 		matcher:         cfg.Matcher,
@@ -94,7 +97,7 @@ func (p *ReverseProxy) outboundHTTPTransport(routed routedOutbound) *http.Transp
 			p.transportPool = NewOutboundTransportPool(p.transportConfig)
 		}
 	})
-	return p.transportPool.Get(routed.Route.NodeHash, routed.Outbound, p.metricsSink)
+	return p.transportPool.GetKey(routeTransportKey(routed.Route), routed.Outbound, p.metricsSink)
 }
 
 func (p *ReverseProxy) directHTTPTransport() *http.Transport {
@@ -311,7 +314,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var transport *http.Transport
 	var nodeHashRaw = route.NodeHash
 	domain := netutil.ExtractDomain(parsed.Host)
-	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
+	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, p.chain, routing.RouteOptions{
 		PlatformName: parsed.PlatformName, Account: account, Target: target.String(),
 	})
 	if routeErr != nil {

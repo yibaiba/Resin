@@ -114,6 +114,7 @@ var platformPatchAllowedFields = map[string]bool{
 	"allocation_policy":                    true,
 	"passive_circuit_breaker_disabled":     true,
 	"fallback_platform_ids":                true,
+	"chain_platform_ids":                   true,
 	"rotation_interval":                    true,
 	"rotation_strategy":                    true,
 }

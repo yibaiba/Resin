@@ -1488,6 +1488,7 @@ a {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .list-card-header h3,
@@ -2622,6 +2623,27 @@ a {
   max-height: calc(100vh - 40px);
   overflow: auto;
   padding: 18px;
+  background: var(--surface-strong);
+}
+
+.modal-card-stack {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-card-stack .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-strong);
+  padding-bottom: 8px;
+}
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .drawer-overlay {

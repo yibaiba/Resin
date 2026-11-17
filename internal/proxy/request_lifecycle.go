@@ -24,6 +24,7 @@ type requestLifecycle struct {
 	respBodyCapture *payloadCaptureReadCloser
 	healthFeedback  *requestHealthFeedback
 	tunnelRelay     *tunnelRelayResult
+	chainNodeHashes []string
 }
 
 func newRequestLifecycleFromMetadata(
@@ -206,6 +207,14 @@ func (l *requestLifecycle) setRouteResult(result routing.RouteResult) {
 	l.log.NodeHash = result.NodeHash.Hex()
 	l.log.NodeTag = result.NodeTag
 	l.log.EgressIP = result.EgressIP.String()
+	if len(result.ChainHops) == 0 {
+		l.chainNodeHashes = nil
+		return
+	}
+	l.chainNodeHashes = make([]string, 0, len(result.ChainHops))
+	for _, hop := range result.ChainHops {
+		l.chainNodeHashes = append(l.chainNodeHashes, hop.NodeHash.Hex())
+	}
 }
 
 func (l *requestLifecycle) clearTargetAndRoute() {
@@ -217,4 +226,5 @@ func (l *requestLifecycle) clearTargetAndRoute() {
 	l.log.NodeHash = ""
 	l.log.NodeTag = ""
 	l.log.EgressIP = ""
+	l.chainNodeHashes = nil
 }

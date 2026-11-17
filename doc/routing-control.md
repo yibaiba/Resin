@@ -37,6 +37,21 @@ curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<owner-id> \
   -d '{"fallback_platform_ids":["<fallback-a-id>","<fallback-b-id>"]}'
 ```
 
+## Platform Chain
+
+`chain_platform_ids` is an ordered list of other Platforms used as front hops for this landing Platform. Empty means the current direct exit. One ID is A→C. `[A, B]` on C is A→B→C. Resin does not expand a hop Platform's own chain.
+
+Traffic is a true sing-box `detour` chain: Resin dials the landing server through the hop outbound, then the landing protocol talks to the destination. Hop Platforms keep their own sticky leases, filters, circuit breakers, and fallback. A missing hop node fails the request with `NO_AVAILABLE_NODES`. A referenced hop Platform cannot be deleted.
+
+Hop nodes are probed directly. A landing node is probed through its chain only when it belongs to exactly one non-empty chain. Put landing subscriptions on the chained Platform only.
+
+```bash
+curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<landing-id> \
+  -H "Authorization: Bearer $RESIN_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"chain_platform_ids":["<hop-a-id>","<hop-b-id>"]}'
+```
+
 ## Global Egress-IP Pool
 
 Policies apply across every Platform. `ACTIVE` permits new and existing leases. `DRAINING` excludes new leases and requests rotation for existing ones, while a still-valid lease can remain deferred when no replacement exists. `BLOCKED` permits neither new nor retained leases.

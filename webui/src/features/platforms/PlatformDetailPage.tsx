@@ -136,6 +136,7 @@ export function PlatformDetailPage() {
   const detailEmptyAccountBehavior = useWatch({ control: editForm.control, name: "reverse_proxy_empty_account_behavior" });
   const detailSubscriptionIDs = useWatch({ control: editForm.control, name: "subscription_ids" }) ?? [];
   const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" });
+  const chainPlatformIDs = useWatch({ control: editForm.control, name: "chain_platform_ids" });
   const rotationInterval = useWatch({ control: editForm.control, name: "rotation_interval" });
   const rotationStrategy = useWatch({ control: editForm.control, name: "rotation_strategy" });
 
@@ -620,9 +621,11 @@ export function PlatformDetailPage() {
                   <PlatformRoutingSettings
                     platformID={platform.id}
                     platforms={platformChoicesQuery.data?.items ?? []}
+                    chainIDs={chainPlatformIDs}
                     fallbackIDs={fallbackPlatformIDs}
                     rotationInterval={rotationInterval}
                     rotationStrategy={rotationStrategy}
+                    onChainChange={(ids) => editForm.setValue("chain_platform_ids", ids, { shouldDirty: true })}
                     onFallbackChange={(ids) => editForm.setValue("fallback_platform_ids", ids, { shouldDirty: true })}
                     onRotationIntervalChange={(value) => editForm.setValue("rotation_interval", value, { shouldDirty: true })}
                     onRotationStrategyChange={(value) => editForm.setValue("rotation_strategy", value, { shouldDirty: true })}

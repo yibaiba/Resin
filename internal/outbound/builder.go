@@ -46,6 +46,7 @@ type SingboxBuilder struct {
 	registry            *sbOutbound.Registry
 	ctx                 context.Context
 	logFactory          log.Factory
+	outboundMgr         *sbOutbound.Manager
 	dnsTransportManager *dns.TransportManager
 	dnsRouter           *dns.Router
 	dnsLogger           log.ContextLogger
@@ -108,6 +109,7 @@ func (b *SingboxBuilder) initialize(dnsUpstreams []string) error {
 	// Outbound Manager (sing-box's own manager, for detour resolution)
 	outboundMgr := sbOutbound.NewManager(logger, service.FromContext[adapter.OutboundRegistry](b.ctx), endpointMgr, "")
 	service.MustRegister[adapter.OutboundManager](b.ctx, outboundMgr)
+	b.outboundMgr = outboundMgr
 
 	// DNS Transport Manager
 	dnsTransportMgr := dns.NewTransportManager(logger, service.FromContext[adapter.DNSTransportRegistry](b.ctx), outboundMgr, secureDNSFailoverTransportTag)
@@ -155,6 +157,9 @@ func (b *SingboxBuilder) initialize(dnsUpstreams []string) error {
 	}
 
 	b.registry = service.FromContext[adapter.OutboundRegistry](b.ctx).(*sbOutbound.Registry)
+	if err := b.ensureChainDirectPlaceholder(); err != nil {
+		return err
+	}
 	return nil
 }
 

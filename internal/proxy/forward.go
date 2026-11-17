@@ -20,6 +20,7 @@ type ForwardProxyConfig struct {
 	ProxyToken        string
 	Router            *routing.Router
 	Pool              outbound.PoolAccessor
+	Chain             chainOutboundResolver
 	Health            HealthRecorder
 	Events            EventEmitter
 	MetricsSink       MetricsEventSink
@@ -35,6 +36,7 @@ type ForwardProxy struct {
 	token             string
 	router            *routing.Router
 	pool              outbound.PoolAccessor
+	chain             chainOutboundResolver
 	health            HealthRecorder
 	events            EventEmitter
 	metricsSink       MetricsEventSink
@@ -65,6 +67,7 @@ func NewForwardProxy(cfg ForwardProxyConfig) *ForwardProxy {
 		token:           cfg.ProxyToken,
 		router:          cfg.Router,
 		pool:            cfg.Pool,
+		chain:           cfg.Chain,
 		health:          cfg.Health,
 		events:          ev,
 		metricsSink:     cfg.MetricsSink,
@@ -80,7 +83,7 @@ func (p *ForwardProxy) outboundHTTPTransport(routed routedOutbound) *http.Transp
 			p.transportPool = NewOutboundTransportPool(p.transportConfig)
 		}
 	})
-	return p.transportPool.Get(routed.Route.NodeHash, routed.Outbound, p.metricsSink)
+	return p.transportPool.GetKey(routeTransportKey(routed.Route), routed.Outbound, p.metricsSink)
 }
 
 func (p *ForwardProxy) directHTTPTransport() *http.Transport {
@@ -235,7 +238,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	var route routing.RouteResult
 	var hasRoute bool
 	var transport *http.Transport
-	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, routing.RouteOptions{
+	plan, routeErr := resolveOutboundPlan(p.decisioner, p.router, p.pool, p.chain, routing.RouteOptions{
 		PlatformName: platName, Account: account, Target: r.URL.String(),
 	})
 	if routeErr != nil {
@@ -354,6 +357,7 @@ func (p *ForwardProxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		deps: tunnelDeps{
 			router:      p.router,
 			pool:        p.pool,
+			chain:       p.chain,
 			decisioner:  p.decisioner,
 			health:      p.health,
 			metricsSink: p.metricsSink,

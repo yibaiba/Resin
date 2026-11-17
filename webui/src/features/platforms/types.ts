@@ -17,6 +17,7 @@ export type Platform = {
   allocation_policy: PlatformAllocationPolicy;
   passive_circuit_breaker_disabled: boolean;
   fallback_platform_ids: string[];
+  chain_platform_ids: string[];
   rotation_interval: string;
   rotation_strategy: RotationStrategy;
   updated_at: string;
@@ -41,6 +42,7 @@ export type PlatformCreateInput = {
   allocation_policy?: PlatformAllocationPolicy;
   passive_circuit_breaker_disabled?: boolean;
   fallback_platform_ids?: string[];
+  chain_platform_ids?: string[];
   rotation_interval?: string;
   rotation_strategy?: RotationStrategy;
 };
@@ -57,6 +59,7 @@ export type PlatformUpdateInput = {
   allocation_policy?: PlatformAllocationPolicy;
   passive_circuit_breaker_disabled?: boolean;
   fallback_platform_ids?: string[];
+  chain_platform_ids?: string[];
   rotation_interval?: string;
   rotation_strategy?: RotationStrategy;
 };

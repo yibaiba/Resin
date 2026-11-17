@@ -2,6 +2,7 @@ package routing
 
 import (
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net/netip"
 	"strings"
@@ -47,15 +48,22 @@ type DiagnosticP2C struct {
 	Trace      P2CTrace `json:"trace"`
 }
 
+type DiagnosticChainHop struct {
+	PlatformID   string `json:"platform_id"`
+	PlatformName string `json:"platform_name"`
+	NodeHash     string `json:"node_hash,omitempty"`
+}
+
 type DiagnosticSelection struct {
-	PlatformID       string `json:"platform_id"`
-	PlatformName     string `json:"platform_name"`
-	NodeHash         string `json:"node_hash"`
-	EgressIP         string `json:"egress_ip"`
-	Reason           string `json:"reason"`
-	RotationStatus   string `json:"rotation_status,omitempty"`
-	RotationReason   string `json:"rotation_reason,omitempty"`
-	RotationStrategy string `json:"rotation_strategy,omitempty"`
+	PlatformID       string               `json:"platform_id"`
+	PlatformName     string               `json:"platform_name"`
+	NodeHash         string               `json:"node_hash"`
+	EgressIP         string               `json:"egress_ip"`
+	Reason           string               `json:"reason"`
+	Chain            []DiagnosticChainHop `json:"chain,omitempty"`
+	RotationStatus   string               `json:"rotation_status,omitempty"`
+	RotationReason   string               `json:"rotation_reason,omitempty"`
+	RotationStrategy string               `json:"rotation_strategy,omitempty"`
 }
 
 func (r *Router) DiagnoseRoute(options RouteOptions, seed uint64) (RouteDiagnostic, error) {
@@ -88,9 +96,68 @@ func (r *Router) DiagnoseRoute(options RouteOptions, seed uint64) (RouteDiagnost
 	rng := rand.New(rand.NewPCG(seed, seed^diagnosticSeedSalt))
 	selection, traces, outcome, err := r.diagnoseRouteSelection(request, existing, rng)
 	diagnostic.P2C = append(diagnostic.P2C, traces...)
+	if selection != nil {
+		chain, chainErr := r.diagnosticAttachChain(selection, options, network, rng)
+		selection.Chain = chain
+		if chainErr != nil {
+			diagnostic.Selection = selection
+			diagnostic.Outcome = "no_available_nodes"
+			return diagnostic, chainErr
+		}
+	}
 	diagnostic.Selection = selection
 	diagnostic.Outcome = outcome
 	return diagnostic, err
+}
+
+func (r *Router) diagnosticAttachChain(
+	selection *DiagnosticSelection,
+	options RouteOptions,
+	network string,
+	rng *rand.Rand,
+) ([]DiagnosticChainHop, error) {
+	if selection == nil {
+		return nil, nil
+	}
+	selected, ok := r.pool.GetPlatform(selection.PlatformID)
+	if !ok || len(selected.ChainPlatformIDs) == 0 {
+		return nil, nil
+	}
+	out := make([]DiagnosticChainHop, 0, len(selected.ChainPlatformIDs))
+	for _, hopID := range selected.ChainPlatformIDs {
+		hopPlat, ok := r.pool.GetPlatform(hopID)
+		if !ok {
+			out = append(out, DiagnosticChainHop{PlatformID: hopID})
+			return out, fmt.Errorf("%w: chain hop platform %s", ErrNoAvailableNodes, hopID)
+		}
+		candidates, err := r.fallbackPlatforms(hopPlat)
+		if err != nil {
+			out = append(out, DiagnosticChainHop{PlatformID: hopPlat.ID, PlatformName: hopPlat.Name})
+			return out, fmt.Errorf("%w: chain hop platform %s", ErrNoAvailableNodes, hopID)
+		}
+		hopOptions := RouteOptions{
+			PlatformName:    hopPlat.Name,
+			Account:         options.Account,
+			Target:          options.Target,
+			RequiredNetwork: network,
+			SkipProxyChain:  true,
+		}
+		request, existing := r.diagnosticRequest(hopPlat, candidates, hopOptions, network)
+		hopSelection, _, _, hopErr := r.diagnoseRouteSelection(request, existing, rng)
+		if hopErr != nil || hopSelection == nil {
+			out = append(out, DiagnosticChainHop{PlatformID: hopPlat.ID, PlatformName: hopPlat.Name})
+			if hopErr == nil {
+				hopErr = ErrNoAvailableNodes
+			}
+			return out, hopErr
+		}
+		out = append(out, DiagnosticChainHop{
+			PlatformID:   hopSelection.PlatformID,
+			PlatformName: hopSelection.PlatformName,
+			NodeHash:     hopSelection.NodeHash,
+		})
+	}
+	return out, nil
 }
 
 func diagnosticPlatform(candidate *platform.Platform) DiagnosticPlatform {

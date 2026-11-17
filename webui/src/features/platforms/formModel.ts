@@ -40,6 +40,7 @@ export const platformFormSchema = z.object({
   allocation_policy: z.enum(allocationPolicies),
   passive_circuit_breaker_disabled: z.boolean(),
   fallback_platform_ids: z.array(z.string()),
+  chain_platform_ids: z.array(z.string()),
   rotation_interval: z.string(),
   rotation_strategy: z.enum(rotationStrategies),
 }).superRefine((value, ctx) => {
@@ -69,6 +70,7 @@ export const defaultPlatformFormValues: PlatformFormValues = {
   allocation_policy: "BALANCED",
   passive_circuit_breaker_disabled: false,
   fallback_platform_ids: [],
+  chain_platform_ids: [],
   rotation_interval: "0s",
   rotation_strategy: "ANY",
 };
@@ -89,7 +91,8 @@ export function platformToFormValues(platform: Platform): PlatformFormValues {
     reverse_proxy_fixed_account_header: platform.reverse_proxy_fixed_account_header,
     allocation_policy: platform.allocation_policy,
     passive_circuit_breaker_disabled: platform.passive_circuit_breaker_disabled,
-    fallback_platform_ids: platform.fallback_platform_ids,
+    fallback_platform_ids: Array.isArray(platform.fallback_platform_ids) ? [...platform.fallback_platform_ids] : [],
+    chain_platform_ids: Array.isArray(platform.chain_platform_ids) ? [...platform.chain_platform_ids] : [],
     rotation_interval: platform.rotation_interval,
     rotation_strategy: platform.rotation_strategy,
   };
@@ -107,6 +110,7 @@ function toPlatformPayloadBase(values: PlatformFormValues) {
     allocation_policy: values.allocation_policy,
     passive_circuit_breaker_disabled: values.passive_circuit_breaker_disabled,
     fallback_platform_ids: [...values.fallback_platform_ids],
+    chain_platform_ids: [...values.chain_platform_ids],
     rotation_interval: values.rotation_interval.trim() || "0s",
     rotation_strategy: values.rotation_strategy,
   };

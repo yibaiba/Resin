@@ -22,6 +22,7 @@ type ApiPlatform = Omit<Platform, "regex_filters" | "region_filters" | "subscrip
   reverse_proxy_fixed_account_header?: string | null;
   passive_circuit_breaker_disabled?: boolean | null;
   fallback_platform_ids?: string[] | null;
+  chain_platform_ids?: string[] | null;
   rotation_interval?: string | null;
   rotation_strategy?: Platform["rotation_strategy"] | null;
 };
@@ -54,6 +55,7 @@ function normalizePlatform(raw: ApiPlatform): Platform {
     passive_circuit_breaker_disabled:
       typeof raw.passive_circuit_breaker_disabled === "boolean" ? raw.passive_circuit_breaker_disabled : false,
     fallback_platform_ids: Array.isArray(raw.fallback_platform_ids) ? raw.fallback_platform_ids : [],
+    chain_platform_ids: Array.isArray(raw.chain_platform_ids) ? raw.chain_platform_ids : [],
     rotation_interval: typeof raw.rotation_interval === "string" ? raw.rotation_interval : "0s",
     rotation_strategy:
       raw.rotation_strategy === "SAME_IP" ||

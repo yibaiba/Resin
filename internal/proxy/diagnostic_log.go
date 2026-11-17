@@ -3,6 +3,7 @@ package proxy
 import (
 	"log"
 	"strconv"
+	"strings"
 
 	"github.com/Resinat/Resin/internal/diagnosticlog"
 )
@@ -27,6 +28,7 @@ func proxyFailureLine(lifecycle *requestLifecycle) string {
 		diagnosticlog.F("target_host", entry.TargetHost),
 		diagnosticlog.F("node_hash", entry.NodeHash),
 		diagnosticlog.F("node_tag", entry.NodeTag),
+		diagnosticlog.F("chain_node_hashes", strings.Join(lifecycle.chainNodeHashes, ",")),
 		diagnosticlog.F("duration_ns", strconv.FormatInt(entry.DurationNs, 10)),
 		diagnosticlog.F("first_byte_ns", strconv.FormatInt(entry.FirstByteDurationNs, 10)),
 		diagnosticlog.F("ingress_bytes", strconv.FormatInt(entry.IngressBytes, 10)),
@@ -125,6 +127,7 @@ func (w lifecycleDiagnosticWriter) Write(payload []byte) (int, error) {
 		diagnosticlog.F("target_host", entry.TargetHost),
 		diagnosticlog.F("node_hash", entry.NodeHash),
 		diagnosticlog.F("node_tag", entry.NodeTag),
+		diagnosticlog.F("chain_node_hashes", strings.Join(w.lifecycle.chainNodeHashes, ",")),
 		diagnosticlog.F("error", string(payload)),
 	)
 	return len(payload), nil

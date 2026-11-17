@@ -34,6 +34,7 @@ type PlatformResponse struct {
 	AllocationPolicy                 string   `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    bool     `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	ChainPlatformIDs                 []string `json:"chain_platform_ids"`
 	RotationInterval                 string   `json:"rotation_interval"`
 	RotationStrategy                 string   `json:"rotation_strategy"`
 	UpdatedAt                        string   `json:"updated_at"`
@@ -56,6 +57,7 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		AllocationPolicy:                 p.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    p.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), p.FallbackPlatformIDs...),
+		ChainPlatformIDs:                 append([]string(nil), p.ChainPlatformIDs...),
 		RotationInterval:                 time.Duration(p.RotationIntervalNs).String(),
 		RotationStrategy:                 normalizeRotationStrategy(p.RotationStrategy),
 		UpdatedAt:                        time.Unix(0, p.UpdatedAtNs).UTC().Format(time.RFC3339Nano),
@@ -86,6 +88,7 @@ type platformConfig struct {
 	AllocationPolicy                 string
 	PassiveCircuitBreakerDisabled    bool
 	FallbackPlatformIDs              []string
+	ChainPlatformIDs                 []string
 	RotationIntervalNs               int64
 	RotationStrategy                 string
 }
@@ -137,6 +140,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		AllocationPolicy:                 mp.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    mp.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), mp.FallbackPlatformIDs...),
+		ChainPlatformIDs:                 append([]string(nil), mp.ChainPlatformIDs...),
 		RotationIntervalNs:               mp.RotationIntervalNs,
 		RotationStrategy:                 normalizeRotationStrategy(mp.RotationStrategy),
 	}
@@ -156,6 +160,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		AllocationPolicy:                 cfg.AllocationPolicy,
 		PassiveCircuitBreakerDisabled:    cfg.PassiveCircuitBreakerDisabled,
 		FallbackPlatformIDs:              append([]string(nil), cfg.FallbackPlatformIDs...),
+		ChainPlatformIDs:                 append([]string(nil), cfg.ChainPlatformIDs...),
 		RotationIntervalNs:               cfg.RotationIntervalNs,
 		RotationStrategy:                 cfg.RotationStrategy,
 		UpdatedAtNs:                      updatedAtNs,
@@ -180,6 +185,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 		cfg.PassiveCircuitBreakerDisabled,
 	)
 	configured.FallbackPlatformIDs = append([]string(nil), cfg.FallbackPlatformIDs...)
+	configured.ChainPlatformIDs = append([]string(nil), cfg.ChainPlatformIDs...)
 	configured.SubscriptionIDs = append([]string{}, cfg.SubscriptionIDs...)
 	configured.RotationIntervalNs = cfg.RotationIntervalNs
 	configured.RotationStrategy = platform.ParseRotationStrategy(cfg.RotationStrategy)
@@ -349,12 +355,18 @@ func (s *ControlPlaneService) compileAndUpsertPlatform(id string, cfg platformCo
 	for index := range cfg.FallbackPlatformIDs {
 		cfg.FallbackPlatformIDs[index] = strings.TrimSpace(cfg.FallbackPlatformIDs[index])
 	}
+	for index := range cfg.ChainPlatformIDs {
+		cfg.ChainPlatformIDs[index] = strings.TrimSpace(cfg.ChainPlatformIDs[index])
+	}
 	plat, err := cfg.toRuntime(id)
 	if err != nil {
 		return model.Platform{}, nil, invalidArg(err.Error())
 	}
 	mp := cfg.toModel(id, time.Now().UnixNano())
 	if err := s.validatePlatformFallbackGraph(mp); err != nil {
+		return model.Platform{}, nil, err
+	}
+	if err := s.validatePlatformChainGraph(mp); err != nil {
 		return model.Platform{}, nil, err
 	}
 	if err := s.Engine.UpsertPlatform(mp); err != nil {
@@ -416,6 +428,7 @@ type CreatePlatformRequest struct {
 	AllocationPolicy                 *string  `json:"allocation_policy"`
 	PassiveCircuitBreakerDisabled    *bool    `json:"passive_circuit_breaker_disabled"`
 	FallbackPlatformIDs              []string `json:"fallback_platform_ids"`
+	ChainPlatformIDs                 []string `json:"chain_platform_ids"`
 	RotationInterval                 *string  `json:"rotation_interval"`
 	RotationStrategy                 *string  `json:"rotation_strategy"`
 }
@@ -483,6 +496,9 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	}
 	if req.FallbackPlatformIDs != nil {
 		cfg.FallbackPlatformIDs = append([]string(nil), req.FallbackPlatformIDs...)
+	}
+	if req.ChainPlatformIDs != nil {
+		cfg.ChainPlatformIDs = append([]string(nil), req.ChainPlatformIDs...)
 	}
 	if req.RotationInterval != nil {
 		interval, err := time.ParseDuration(*req.RotationInterval)
@@ -633,6 +649,11 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	} else if ok {
 		cfg.FallbackPlatformIDs = fallbackIDs
 	}
+	if chainIDs, ok, err := patch.optionalStringSlice("chain_platform_ids"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.ChainPlatformIDs = chainIDs
+	}
 	if interval, ok, err := patch.optionalDurationString("rotation_interval"); err != nil {
 		return nil, err
 	} else if ok {
@@ -691,6 +712,13 @@ func (s *ControlPlaneService) DeletePlatform(id string) error {
 	}
 	if referenced {
 		return conflict("platform is referenced as a fallback")
+	}
+	referenced, err = s.Engine.PlatformChainReferences(id)
+	if err != nil {
+		return internal("check platform chain references", err)
+	}
+	if referenced {
+		return conflict("platform is referenced as a chain hop")
 	}
 
 	if err := s.Engine.DeletePlatform(id); err != nil {

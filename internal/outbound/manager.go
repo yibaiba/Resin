@@ -50,11 +50,29 @@ type OutboundManager struct {
 	pool    PoolAccessor
 	builder OutboundBuilder
 
-	mu        sync.Mutex
-	closed    bool
-	managed   map[*managedOutbound]node.Hash
-	closeOnce sync.Once
-	closeErr  error
+	mu              sync.Mutex
+	closed          bool
+	managed         map[*managedOutbound]node.Hash
+	chains          map[string]*chainedOutbound
+	chainInflight   map[string]*chainBuildWaiter
+	chainTombstones map[string]chan struct{}
+	maxCachedChains int
+	closeOnce       sync.Once
+	closeErr        error
+}
+
+const defaultMaxCachedChains = 64
+
+type chainBuildWaiter struct {
+	done chan struct{}
+	err  error
+}
+
+type chainedOutbound struct {
+	outbound adapter.Outbound
+	tags     []string
+	hashes   []node.Hash
+	lastUsed int64
 }
 
 type detachedOutbound struct {
@@ -64,9 +82,13 @@ type detachedOutbound struct {
 
 func NewOutboundManager(pool PoolAccessor, builder OutboundBuilder) *OutboundManager {
 	return &OutboundManager{
-		pool:    pool,
-		builder: builder,
-		managed: make(map[*managedOutbound]node.Hash),
+		pool:            pool,
+		builder:         builder,
+		managed:         make(map[*managedOutbound]node.Hash),
+		chains:          make(map[string]*chainedOutbound),
+		chainInflight:   make(map[string]*chainBuildWaiter),
+		chainTombstones: make(map[string]chan struct{}),
+		maxCachedChains: defaultMaxCachedChains,
 	}
 }
 
@@ -142,6 +164,7 @@ func (m *OutboundManager) RemoveNodeOutbound(entry *node.NodeEntry) {
 	if entry == nil {
 		return
 	}
+	m.releaseChainsContaining(entry.Hash)
 	old := entry.Outbound.Swap(nil)
 	if old == nil {
 		return
@@ -164,11 +187,15 @@ func (m *OutboundManager) removeManaged(outbound *managedOutbound) {
 func (m *OutboundManager) Close() error {
 	m.closeOnce.Do(func() {
 		outbounds := m.detachAllOutbounds()
+		chains := m.detachAllChains()
 		var errs []error
 		for _, detached := range outbounds {
 			if err := closeOutbound(detached.outbound); err != nil {
 				errs = append(errs, fmt.Errorf("close outbound %s: %w", detached.hash.Hex(), err))
 			}
+		}
+		for _, chain := range chains {
+			m.releaseChain(chain)
 		}
 		m.closeErr = errors.Join(errs...)
 	})
@@ -230,15 +257,11 @@ func (m *OutboundManager) FetchWithUserAgent(
 	url string,
 	userAgent string,
 ) ([]byte, time.Duration, error) {
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok {
-		return nil, 0, errors.New("node not found")
+	ob, err := m.outboundForProbe(hash)
+	if err != nil {
+		return nil, 0, err
 	}
-	outboundPtr := entry.Outbound.Load() // *adapter.Outbound
-	if outboundPtr == nil {
-		return nil, 0, ErrOutboundNotReady
-	}
-	return netutil.HTTPGetViaOutbound(ctx, *outboundPtr, url, netutil.OutboundHTTPOptions{
+	return netutil.HTTPGetViaOutbound(ctx, ob, url, netutil.OutboundHTTPOptions{
 		RequireStatusOK: true,
 		UserAgent:       userAgent,
 	})

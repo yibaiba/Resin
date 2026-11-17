@@ -248,6 +248,45 @@ func TestMigrateStateDB_LegacyBaselineAdvancesToLatest(t *testing.T) {
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
 	}
+	if ok, err := hasTableColumn(db, "platforms", "chain_platform_ids_json"); err != nil || !ok {
+		t.Fatalf("expected migrated column platforms.chain_platform_ids_json, ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMigrateStateDB_AddsPlatformChainColumn(t *testing.T) {
+	dir := t.TempDir()
+	db, err := OpenDB(dir + "/state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (version uint64 NOT NULL PRIMARY KEY, dirty bool NOT NULL);
+		INSERT INTO schema_migrations (version, dirty) VALUES (14, 0);
+		CREATE TABLE platforms (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE
+		);
+		INSERT INTO platforms (id, name) VALUES ('p1', 'Existing');
+	`)
+	if err != nil {
+		t.Fatalf("create version 14 schema: %v", err)
+	}
+
+	if err := MigrateStateDB(db); err != nil {
+		t.Fatalf("MigrateStateDB: %v", err)
+	}
+	if ok, err := hasTableColumn(db, "platforms", "chain_platform_ids_json"); err != nil || !ok {
+		t.Fatalf("expected migrated column chain_platform_ids_json, ok=%v err=%v", ok, err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT chain_platform_ids_json FROM platforms WHERE id = 'p1'`).Scan(&raw); err != nil {
+		t.Fatalf("read migrated chain column: %v", err)
+	}
+	if raw != "[]" {
+		t.Fatalf("existing platform chain_platform_ids_json = %q, want []", raw)
+	}
 }
 
 func TestMigrateStateDB_AddsIncrementalAliveNodesToLegacySubscriptions(t *testing.T) {

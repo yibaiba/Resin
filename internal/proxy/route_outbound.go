@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/routing"
 	"github.com/sagernet/sing-box/adapter"
@@ -46,10 +47,15 @@ func (d compatibilityDecisioner) Decide(input routing.DecisionInput) (routing.De
 	}, nil
 }
 
+type chainOutboundResolver interface {
+	EnsureChainedOutbound(hops []node.Hash, landing node.Hash) (adapter.Outbound, error)
+}
+
 func resolveOutboundPlan(
 	decisioner RouteDecisioner,
 	router *routing.Router,
 	pool outbound.PoolAccessor,
+	chain chainOutboundResolver,
 	options routing.RouteOptions,
 ) (outboundPlan, *ProxyError) {
 	decision, err := decisioner.Decide(routing.DecisionInput{
@@ -66,7 +72,7 @@ func resolveOutboundPlan(
 		return outboundPlan{Decision: decision}, ErrRouteRejected
 	case routing.DecisionRouted:
 		options.PlatformName = decision.PlatformName
-		routed, routeErr := resolveRoutedOutboundWithOptions(router, pool, options)
+		routed, routeErr := resolveRoutedOutboundWithOptions(router, pool, chain, options)
 		if routeErr != nil {
 			return outboundPlan{Decision: decision}, routeErr
 		}
@@ -83,7 +89,7 @@ func resolveRoutedOutbound(
 	account string,
 	target string,
 ) (routedOutbound, *ProxyError) {
-	return resolveRoutedOutboundWithOptions(router, pool, routing.RouteOptions{
+	return resolveRoutedOutboundWithOptions(router, pool, nil, routing.RouteOptions{
 		PlatformName: platformName,
 		Account:      account,
 		Target:       target,
@@ -93,11 +99,27 @@ func resolveRoutedOutbound(
 func resolveRoutedOutboundWithOptions(
 	router *routing.Router,
 	pool outbound.PoolAccessor,
+	chain chainOutboundResolver,
 	options routing.RouteOptions,
 ) (routedOutbound, *ProxyError) {
 	result, err := router.RouteWithOptions(options)
 	if err != nil {
 		return routedOutbound{}, mapRouteError(err)
+	}
+
+	if len(result.ChainHops) > 0 {
+		if chain == nil {
+			return routedOutbound{}, ErrNoAvailableNodes
+		}
+		hops := make([]node.Hash, 0, len(result.ChainHops))
+		for _, hop := range result.ChainHops {
+			hops = append(hops, hop.NodeHash)
+		}
+		ob, chainErr := chain.EnsureChainedOutbound(hops, result.NodeHash)
+		if chainErr != nil {
+			return routedOutbound{}, ErrNoAvailableNodes
+		}
+		return routedOutbound{Route: result, Outbound: ob}, nil
 	}
 
 	entry, ok := pool.GetEntry(result.NodeHash)

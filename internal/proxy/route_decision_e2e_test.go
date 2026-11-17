@@ -163,7 +163,7 @@ func TestSocks5UDPFlow_RoutingPolicyRejectsBeforeOpeningPacketFlow(t *testing.T)
 
 func TestResolveOutboundPlan_PassesRequiredNetworkToDecisioner(t *testing.T) {
 	decisioner := &capturingDecisioner{action: routing.DecisionDirect}
-	plan, proxyErr := resolveOutboundPlan(decisioner, nil, nil, routing.RouteOptions{
+	plan, proxyErr := resolveOutboundPlan(decisioner, nil, nil, nil, routing.RouteOptions{
 		PlatformName: "plat", Account: "acct", Target: "example.com:53", RequiredNetwork: N.NetworkUDP,
 	})
 	if proxyErr != nil || !plan.IsDirect() {

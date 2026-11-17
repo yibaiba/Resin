@@ -77,7 +77,7 @@ type socks5UDPRelayFlow struct {
 
 func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPFlowCreateResult {
 	destination := M.ParseSocksaddr(request.target)
-	plan, routeErr := resolveOutboundPlan(s.tunnel.decisioner, s.tunnel.router, s.tunnel.pool, routing.RouteOptions{
+	plan, routeErr := resolveOutboundPlan(s.tunnel.decisioner, s.tunnel.router, s.tunnel.pool, s.tunnel.chain, routing.RouteOptions{
 		PlatformName:    request.association.platformName,
 		Account:         request.association.account,
 		Target:          request.target,

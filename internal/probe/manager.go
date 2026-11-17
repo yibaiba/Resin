@@ -15,6 +15,7 @@ import (
 	"github.com/Resinat/Resin/internal/scanloop"
 	"github.com/Resinat/Resin/internal/topology"
 	"github.com/puzpuzpuz/xsync/v4"
+	"github.com/sagernet/sing-box/adapter"
 )
 
 // Fetcher executes an HTTP request through the given node, returning
@@ -32,6 +33,8 @@ type ProbeConfig struct {
 
 	// Fetcher executes HTTP via node hash. Injectable for testing.
 	Fetcher Fetcher
+	// Outbound resolves the outbound used for UDP probes. Nil uses the node's direct outbound.
+	Outbound func(hash node.Hash) (adapter.Outbound, error)
 
 	// Interval thresholds — closures for hot-reload from RuntimeConfig.
 	MaxEgressTestInterval           func() time.Duration
@@ -64,6 +67,7 @@ type ProbeManager struct {
 	stopOnce    sync.Once
 	wg          sync.WaitGroup
 	fetcher     Fetcher
+	outbound    func(hash node.Hash) (adapter.Outbound, error)
 	workerCount int
 	taskQueue   *probeTaskQueue
 	taskStates  *xsync.Map[probeTaskKey, *probeTaskState]
@@ -283,6 +287,7 @@ func NewProbeManager(cfg ProbeConfig) *ProbeManager {
 		ctx:                             ctx,
 		cancel:                          cancel,
 		fetcher:                         cfg.Fetcher,
+		outbound:                        cfg.Outbound,
 		workerCount:                     conc,
 		taskQueue:                       newProbeTaskQueue(queueCap, queueCap, cfg.ChooseNormalWhenBoth),
 		taskStates:                      xsync.NewMap[probeTaskKey, *probeTaskState](),

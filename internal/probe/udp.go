@@ -14,6 +14,7 @@ import (
 	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -66,18 +67,28 @@ func (m *ProbeManager) performUDPProbe(hash node.Hash, rawTarget string) error {
 	if timeout <= 0 {
 		return fmt.Errorf("invalid timeout %v", timeout)
 	}
-	entry, ok := m.pool.GetEntry(hash)
-	if !ok {
-		return fmt.Errorf("node not found")
-	}
-	outbound := entry.Outbound.Load()
-	if outbound == nil {
-		return fmt.Errorf("node outbound not ready")
+	var ob adapter.Outbound
+	if m.outbound != nil {
+		resolved, err := m.outbound(hash)
+		if err != nil {
+			return err
+		}
+		ob = resolved
+	} else {
+		entry, ok := m.pool.GetEntry(hash)
+		if !ok {
+			return fmt.Errorf("node not found")
+		}
+		outbound := entry.Outbound.Load()
+		if outbound == nil {
+			return fmt.Errorf("node outbound not ready")
+		}
+		ob = *outbound
 	}
 
 	ctx, cancel := context.WithTimeout(m.ctx, timeout)
 	defer cancel()
-	packetConn, err := (*outbound).ListenPacket(ctx, M.SocksaddrFromNetIP(target))
+	packetConn, err := ob.ListenPacket(ctx, M.SocksaddrFromNetIP(target))
 	if err != nil {
 		return fmt.Errorf("listen packet: %w", err)
 	}

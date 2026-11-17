@@ -258,15 +258,11 @@ func newTopologyRuntime(
 		Fetcher: func(hash node.Hash, url string) ([]byte, time.Duration, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), envCfg.ProbeTimeout)
 			defer cancel()
-			entry, ok := pool.GetEntry(hash)
-			if !ok {
-				return nil, 0, fmt.Errorf("node not found")
+			ob, err := outboundMgr.OutboundForProbe(hash)
+			if err != nil {
+				return nil, 0, err
 			}
-			outboundPtr := entry.Outbound.Load()
-			if outboundPtr == nil {
-				return nil, 0, outbound.ErrOutboundNotReady
-			}
-			return netutil.HTTPGetViaOutbound(ctx, *outboundPtr, url, netutil.OutboundHTTPOptions{
+			return netutil.HTTPGetViaOutbound(ctx, ob, url, netutil.OutboundHTTPOptions{
 				RequireStatusOK: false,
 				OnConnLifecycle: func(op netutil.ConnLifecycleOp) {
 					if onProbeConnLifecycle != nil {
@@ -275,6 +271,7 @@ func newTopologyRuntime(
 				},
 			})
 		},
+		Outbound: outboundMgr.OutboundForProbe,
 		MaxEgressTestInterval: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxEgressTestInterval)
 		},

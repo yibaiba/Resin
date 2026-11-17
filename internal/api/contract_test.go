@@ -52,6 +52,7 @@ func (p *recordingDiagnosticTCPProber) ProbeDirect(_ context.Context, target str
 func (p *recordingDiagnosticTCPProber) ProbeRouted(
 	_ context.Context,
 	hash node.Hash,
+	_ []node.Hash,
 	target string,
 ) error {
 	p.routedCalls++
@@ -986,6 +987,70 @@ func TestAPIContract_PlatformFallbackGraph(t *testing.T) {
 		t.Fatalf("delete referenced fallback: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	assertErrorCode(t, rec, "CONFLICT")
+}
+
+func TestAPIContract_PlatformChainGraph(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+	hopID := mustCreatePlatform(t, srv, "chain-hop")
+
+	rec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/platforms", map[string]any{
+		"name":               "chain-landing",
+		"chain_platform_ids": []string{hopID},
+	}, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create chain landing: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeJSONMap(t, rec)
+	landingID, _ := body["id"].(string)
+	gotChain, _ := body["chain_platform_ids"].([]any)
+	if len(gotChain) != 1 || gotChain[0] != hopID {
+		t.Fatalf("chain_platform_ids = %v, want [%s]", gotChain, hopID)
+	}
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+hopID, map[string]any{
+		"chain_platform_ids": []string{landingID},
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("cycle patch: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+landingID, map[string]any{
+		"chain_platform_ids": []string{landingID},
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("self chain: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	tooMany := make([]string, 9)
+	for i := range tooMany {
+		tooMany[i] = mustCreatePlatform(t, srv, fmt.Sprintf("chain-extra-%d", i))
+	}
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+landingID, map[string]any{
+		"chain_platform_ids": tooMany,
+	}, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("too many hops: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "INVALID_ARGUMENT")
+
+	rec = doJSONRequest(t, srv, http.MethodDelete, "/api/v1/platforms/"+hopID, nil, true)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete referenced chain hop: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	assertErrorCode(t, rec, "CONFLICT")
+
+	rec = doJSONRequest(t, srv, http.MethodPatch, "/api/v1/platforms/"+landingID, map[string]any{
+		"chain_platform_ids": []string{},
+	}, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear chain: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = doJSONRequest(t, srv, http.MethodDelete, "/api/v1/platforms/"+hopID, nil, true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete unreferenced chain hop: status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestAPIContract_EgressIPPoliciesAndPartialBatchDrain(t *testing.T) {
