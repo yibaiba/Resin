@@ -260,6 +260,59 @@ func TestRouteDiagnosticAttachesChainHops(t *testing.T) {
 	}
 }
 
+func TestPlatformChainExcludesLandingFromHopPick(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.StickyTTLNs = int64(time.Hour)
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+
+	hashVPS, entryVPS := newIsolatedRoutableEntry(t, `{"chain":"vps"}`, "198.51.100.80", "sub-vps")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-self"}`, "198.51.100.81", "sub-land")
+	pool.addEntry(hashVPS, entryVPS)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	router := newTestRouter(pool, nil)
+	result, err := router.RouteRequest(landing.Name, "acct-self", "example.com:443")
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if result.NodeHash != hashL || len(result.ChainHops) != 1 || result.ChainHops[0].NodeHash != hashVPS {
+		t.Fatalf("result = %+v, want landing %s hop %s", result, hashL.Hex(), hashVPS.Hex())
+	}
+	again, err := router.RouteRequest(landing.Name, "acct-self", "example.com:443")
+	if err != nil {
+		t.Fatalf("sticky: %v", err)
+	}
+	if again.ChainHops[0].NodeHash != hashVPS {
+		t.Fatalf("sticky hop reused landing: %+v", again.ChainHops)
+	}
+}
+
+func TestPlatformChainLandingOnlyHopIsUnavailable(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.StickyTTLNs = int64(time.Hour)
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-only-hop"}`, "198.51.100.82", "sub-land")
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	_, err := newTestRouter(pool, nil).RouteRequest(landing.Name, "", "example.com:443")
+	if !errors.Is(err, ErrNoAvailableNodes) {
+		t.Fatalf("self hop error = %v, want ErrNoAvailableNodes", err)
+	}
+}
+
 func TestPlatformChainUDPAttachesUDPHops(t *testing.T) {
 	pool := newRouterTestPool()
 	hop := newChainPlatform("hop", "Hop", "sub-hop")

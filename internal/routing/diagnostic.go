@@ -141,6 +141,7 @@ func (r *Router) diagnosticAttachChain(
 			Target:          options.Target,
 			RequiredNetwork: network,
 			SkipProxyChain:  true,
+			ExcludeNodeHash: parseDiagnosticNodeHash(selection.NodeHash),
 		}
 		request, existing := r.diagnosticRequest(hopPlat, candidates, hopOptions, network)
 		hopSelection, _, _, hopErr := r.diagnoseRouteSelection(request, existing, rng)
@@ -177,6 +178,7 @@ func (r *Router) diagnosticRequest(
 	request := routeRequest{
 		root: root, candidates: candidates, state: state, network: network,
 		account: options.Account, targetDomain: netutil.ExtractDomain(options.Target), now: time.Now(),
+		excludeNode: options.ExcludeNodeHash,
 	}
 	if options.Account == "" {
 		return request, nil
@@ -211,9 +213,18 @@ func (r *Router) diagnosticAttempt(request routeRequest, selected *platform.Plat
 	}
 	return routeAttempt{
 		ownerPlatform: request.root, platform: selected, state: request.state,
-		allocationStats: stats, view: selected.NetworkView(request.network),
-		account: request.account, targetDomain: request.targetDomain, now: request.now,
+		allocationStats: stats,
+		view:            platform.ExcludeHash(selected.NetworkView(request.network), request.excludeNode),
+		account:         request.account, targetDomain: request.targetDomain, now: request.now,
 	}
+}
+
+func parseDiagnosticNodeHash(hex string) node.Hash {
+	hash, err := node.ParseHex(hex)
+	if err != nil {
+		return node.Zero
+	}
+	return hash
 }
 
 func (r *Router) diagnosticCandidates(request routeRequest, previous *Lease) []DiagnosticCandidate {

@@ -111,6 +111,10 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	}
 	body, latency, fetchErr := m.fetcher(task.key.hash, egressTraceURL)
 	if fetchErr != nil {
+		if isSkippedProbe(fetchErr) {
+			m.pool.CancelTCPValidation(task.key.hash, validation)
+			return
+		}
 		m.completeFailedTCPValidation(task.key.hash, entry, validation, fetchErr)
 		return
 	}

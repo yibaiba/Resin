@@ -233,6 +233,18 @@ func TestOutboundForUDPProbeSkipsWhenUniqueChainHasNoUDPHop(t *testing.T) {
 	}
 }
 
+func TestOutboundForProbeSkipsWhenUniqueChainHasNoHop(t *testing.T) {
+	landing := newTestEntry(`{"type":"direct","role":"land-http-skip"}`)
+	pool := &chainAwarePool{hasChain: true}
+	pool.addEntry(landing)
+	mgr := NewOutboundManager(pool, &recordingChainBuilder{})
+
+	_, err := mgr.OutboundForProbe(landing.Hash)
+	if !errors.Is(err, ErrSkipProbe) {
+		t.Fatalf("HTTP probe = %v, want ErrSkipProbe", err)
+	}
+}
+
 func TestOutboundForUDPProbeUsesUDPHops(t *testing.T) {
 	hop := newTestEntry(`{"type":"direct","role":"hop-udp"}`)
 	landing := newTestEntry(`{"type":"direct","role":"land-udp"}`)

@@ -14,6 +14,8 @@ import (
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/platform"
+	"github.com/Resinat/Resin/internal/subscription"
+	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -474,16 +476,32 @@ func TestSocks5UDPChainedListenFailureDoesNotPenalizeLanding(t *testing.T) {
 
 	hop := platform.NewPlatform("hop-id", "hop", nil, nil)
 	hop.StickyTTLNs = int64(time.Hour)
-	hop.SubscriptionIDs = []string{"sub-1"}
 	routeEnv.pool.RegisterPlatform(hop)
 	landing.ChainPlatformIDs = []string{hop.ID}
 
-	raw := json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":1}`)
-	hash := node.HashFromRawOptions(raw)
+	hopRaw := json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":2}`)
+	hopHash := node.HashFromRawOptions(hopRaw)
+	routeEnv.sub.ManagedNodes().StoreNode(hopHash, subscription.ManagedNode{Tags: []string{"hop"}})
+	routeEnv.pool.AddNodeFromSub(hopHash, hopRaw, "sub-1")
+	hopEntry, ok := routeEnv.pool.GetEntry(hopHash)
+	if !ok {
+		t.Fatal("hop node missing")
+	}
+	hopOb := testutil.NewNoopOutbound()
+	hopEntry.Outbound.Store(&hopOb)
+	hopEntry.SetEgressIP(netip.MustParseAddr("198.51.100.20"))
+	hopEntry.LatencyTable.Update("example.com", 20*time.Millisecond, 10*time.Minute)
+	routeEnv.pool.RecordResult(hopHash, true)
+	routeEnv.pool.RecordUDPProbeResult(hopHash, true)
+
+	landingHash := node.HashFromRawOptions(json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":1}`))
 	routeEnv.pool.RebuildPlatform(hop)
 	routeEnv.pool.RebuildPlatform(landing)
-	if !hop.NetworkView("udp").Contains(hash) || !landing.NetworkView("udp").Contains(hash) {
-		t.Fatal("expected hop and landing UDP views to contain the node")
+	if !hop.NetworkView("udp").Contains(hopHash) {
+		t.Fatal("expected hop UDP view to contain the hop node")
+	}
+	if !landing.NetworkView("udp").Contains(landingHash) {
+		t.Fatal("expected landing UDP view to contain the landing node")
 	}
 
 	health := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}

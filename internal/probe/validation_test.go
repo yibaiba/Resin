@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/topology"
 )
 
@@ -132,6 +133,27 @@ func TestTCPValidation_RecoveryResultTransitions(t *testing.T) {
 			t.Fatalf("recovery failure state: %+v", state)
 		}
 	})
+}
+
+func TestTCPValidation_SkipCancelsWithoutHealthChange(t *testing.T) {
+	pool, hash, entry := newValidationTestNode(t, 2)
+	openedAt := time.Now().Add(-time.Minute).UnixNano()
+	entry.RestoreTCPHealth(2, openedAt)
+	manager := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(node.Hash, string) ([]byte, time.Duration, error) {
+			return nil, 0, outbound.ErrSkipProbe
+		},
+	})
+	if err := pool.BeginTCPValidation(hash, node.TCPValidationRecovery, topology.HealthSourceRecovery); err != nil {
+		t.Fatalf("begin recovery: %v", err)
+	}
+	runNextQueuedTask(t, manager)
+	state := entry.TCPHealth()
+	if state.FailureCount != 2 || state.CircuitOpenSince != openedAt ||
+		state.ValidationPending != node.TCPValidationNone {
+		t.Fatalf("skip validation state: %+v", state)
+	}
 }
 
 func TestTCPValidation_OrdinarySuccessInvalidatesQueuedGeneration(t *testing.T) {

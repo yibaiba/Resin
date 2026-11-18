@@ -512,7 +512,7 @@ Resin 内置了 GeoIP 服务，用于支持 Platform 的 RegionFilters 功能。
 
 选出落地节点后，若该落地 Platform 的 `chain_platform_ids` 非空，再按顺序为每个前置 Platform 选一个节点（`SkipProxyChain`，沿用该前置 Platform 的粘性、过滤、熔断和它自己的 fallback）。前置没有节点则整次路由失败，错误码仍是 `NO_AVAILABLE_NODES`。`RouteResult.NodeHash` / 租约 / `egress_ip` 仍是落地节点；hop 记在 `ChainHops`。用户流量使用 sing-box `Detour` 链，不用落地节点的直连 Outbound。
 
-前置 Platform 的节点仍直连探测。落地节点仅当它只匹配一条非空 chain 时，egress / latency / UDP 探针走该链。落地 UDP 探针只选 UDP 可路由 hop；唯一 chain 但没有 UDP hop 时跳过该次 UDP 探针，不记失败、不改走直连。用户链式 UDP `ListenPacket` 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。直连 `NodeEntry.Outbound` 构建时去掉订阅自带的 `detour` / `dialer-proxy`，平台 chain 才是用户链。Default 等无过滤的未链式平台不参与“唯一链”判定。落地节点同时挂在带过滤的未链式平台、或两条不同 chain 上时，探针走直连。落地订阅应单独放在链式平台里。
+前置 Platform 的节点仍直连探测。落地节点只要匹配到任意非空 chain，egress / latency / UDP 探针走链；hop 选不出则跳过该次探针，不记失败、不改走直连。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只选 UDP 可路由 hop。用户链式 UDP `ListenPacket` 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。直连 `NodeEntry.Outbound` 构建时去掉订阅自带的 `detour` / `dialer-proxy`，平台 chain 才是用户链。未链式平台不参与探针选链。家宽等本机不可达节点必须放在带前置的落地 Platform，不要挂到未链式 allowlist 上。
 
 ### 随机路由算法
 随机模式采用 **P2C** 算法，结合延迟与负载进行加权选择。

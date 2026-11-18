@@ -114,7 +114,7 @@ export function PlatformRoutingSettings(props: Props) {
         ids={props.chainIDs}
         onChange={props.onChainChange}
         heading={t("链式代理")}
-        hint={t("流量按顺序先走这些前置 Platform 的节点，再走本平台落地节点。空着就是直连。")}
+        hint={t("流量按顺序先走这些前置 Platform 的节点，再走本平台落地。空着就是直连。家宽等本机打不通的节点只能放在带前置的落地平台里。")}
         addLabel={t("添加前置 Platform")}
         selectLabel={t("选择前置平台")}
         emptyTitle={t("未配置前置 Platform")}

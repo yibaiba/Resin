@@ -13,7 +13,6 @@ import (
 
 	"github.com/Resinat/Resin/internal/config"
 	"github.com/Resinat/Resin/internal/node"
-	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
@@ -41,7 +40,7 @@ func (m *ProbeManager) probeUDP(hash node.Hash, entry *node.NodeEntry) {
 	}
 
 	err := m.performUDPProbe(hash, m.udpProbeTarget())
-	if errors.Is(err, context.Canceled) || errors.Is(err, outbound.ErrSkipUDPProbe) {
+	if errors.Is(err, context.Canceled) || isSkippedProbe(err) {
 		return
 	}
 	m.pool.RecordUDPProbeResult(hash, err == nil)

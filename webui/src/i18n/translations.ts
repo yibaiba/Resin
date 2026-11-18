@@ -64,7 +64,7 @@ const EXACT_ZH_TO_EN: Record<string, string> = {
   "Platform 动作必须选择平台": "PLATFORM action requires a platform",
   "Platform fallback": "Platform Fallback",
   "链式代理": "Proxy Chain",
-  "流量按顺序先走这些前置 Platform 的节点，再走本平台落地节点。空着就是直连。": "Traffic goes through these front platforms in order, then this platform's landing node. Leave empty for a direct exit.",
+  "流量按顺序先走这些前置 Platform 的节点，再走本平台落地。空着就是直连。家宽等本机打不通的节点只能放在带前置的落地平台里。": "Traffic goes through these front platforms in order, then this platform's landing node. Leave empty for a direct exit. Locally unreachable home-broadband nodes belong only on a chained landing platform.",
   "添加前置 Platform": "Add Front Platform",
   "选择前置平台": "Select front platform",
   "未配置前置 Platform": "No front platform configured",

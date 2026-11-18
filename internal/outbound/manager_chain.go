@@ -224,6 +224,9 @@ func (m *OutboundManager) outboundForProbe(hash node.Hash) (adapter.Outbound, er
 		if hops, found := resolver.UniqueLandingChain(hash); found {
 			return m.EnsureChainedOutbound(hops, hash)
 		}
+		if resolver.HasUniqueLandingChain(hash) {
+			return nil, ErrSkipProbe
+		}
 	}
 	return m.directProbeOutbound(hash)
 }

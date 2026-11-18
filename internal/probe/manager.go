@@ -864,6 +864,9 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 
 	_, stage, err := m.performEgressProbe(hash)
 	if err != nil {
+		if isSkippedProbe(err) {
+			return
+		}
 		if stage == egressProbeParseError {
 			logProbeFailure(topology.HealthSourceEgressProbe, hash, "trace_parse_failed", err)
 			return
@@ -890,6 +893,9 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 	}
 
 	if err := m.performLatencyProbe(hash, testURL); err != nil {
+		if isSkippedProbe(err) {
+			return
+		}
 		logProbeFailure(topology.HealthSourceLatencyProbe, hash, "transport_failed", err)
 		return
 	}
@@ -898,6 +904,9 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressProbeErrorStage, error) {
 	body, latency, err := m.fetcher(hash, egressTraceURL)
 	if err != nil {
+		if isSkippedProbe(err) {
+			return netip.Addr{}, egressProbeFetchError, err
+		}
 		m.recordProbeTCPHealth(hash, topology.HealthSourceEgressProbe, false)
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeFetchError, err
@@ -921,6 +930,9 @@ func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) error
 	domain := netutil.ExtractDomain(testURL)
 	_, latency, err := m.fetcher(hash, testURL)
 	if err != nil {
+		if isSkippedProbe(err) {
+			return err
+		}
 		m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, false)
 		m.pool.RecordLatency(hash, domain, nil)
 		return err

@@ -18,7 +18,8 @@ import (
 
 var (
 	ErrOutboundNotReady = errors.New("outbound not ready")
-	ErrSkipUDPProbe     = errors.New("unique landing chain has no udp hop")
+	ErrSkipProbe        = errors.New("skip probe: chain landing has no usable hops")
+	ErrSkipUDPProbe     = ErrSkipProbe
 )
 
 // PoolAccessor provides read-only access to the node pool.

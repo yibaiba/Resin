@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Resinat/Resin/internal/node"
+	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/Resinat/Resin/internal/subscription"
 	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/Resinat/Resin/internal/topology"
@@ -211,6 +212,69 @@ func TestProbeLatency_Failure(t *testing.T) {
 
 	if entry.TCPHealth().FailureCount != 1 {
 		t.Fatalf("expected 1 failure, got %d", entry.TCPHealth().FailureCount)
+	}
+}
+
+func TestProbeEgress_SkipDoesNotRecordHealth(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+	hash := node.HashFromRawOptions([]byte(`{"type":"egress-skip"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"egress-skip"}`), "sub1")
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+	pool.RecordResult(hash, true)
+	ip := netip.MustParseAddr("203.0.113.9")
+	pool.UpdateNodeEgressIP(hash, &ip, nil)
+	attemptBefore := entry.LastEgressUpdateAttempt.Load()
+
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(node.Hash, string) ([]byte, time.Duration, error) {
+			return nil, 0, outbound.ErrSkipProbe
+		},
+	})
+	mgr.probeEgress(hash, entry)
+
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("skip recorded TCP failure: %+v", entry.TCPHealth())
+	}
+	if entry.GetEgressIP() != ip {
+		t.Fatalf("skip changed egress IP: %v", entry.GetEgressIP())
+	}
+	if entry.LastEgressUpdateAttempt.Load() != attemptBefore {
+		t.Fatal("skip updated egress attempt timestamp")
+	}
+}
+
+func TestProbeLatency_SkipDoesNotRecordHealth(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+	hash := node.HashFromRawOptions([]byte(`{"type":"latency-skip"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"latency-skip"}`), "sub1")
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+	pool.RecordResult(hash, true)
+
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(node.Hash, string) ([]byte, time.Duration, error) {
+			return nil, 0, outbound.ErrSkipProbe
+		},
+	})
+	mgr.probeLatency(hash, entry, "https://www.gstatic.com/generate_204")
+
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("skip recorded TCP failure: %+v", entry.TCPHealth())
 	}
 }
 

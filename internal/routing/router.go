@@ -104,6 +104,9 @@ type RouteOptions struct {
 	Target          string
 	RequiredNetwork string
 	SkipProxyChain  bool
+	// ExcludeNodeHash omits this node from hop selection so a landing node
+	// cannot be used as its own first hop (which is a direct dial from Resin).
+	ExcludeNodeHash node.Hash
 }
 
 type routeAttempt struct {
@@ -162,6 +165,7 @@ func (r *Router) routeWithOptionsLocked(options RouteOptions) (RouteResult, erro
 		root: root, candidates: candidates, state: r.ensurePlatformState(root.ID),
 		network: requiredNetwork, account: options.Account,
 		targetDomain: netutil.ExtractDomain(options.Target), now: time.Now(),
+		excludeNode: options.ExcludeNodeHash,
 	}
 	var result RouteResult
 	if options.Account == "" {
@@ -203,6 +207,7 @@ func (r *Router) attachProxyChainLocked(result *RouteResult, options RouteOption
 			Target:          options.Target,
 			RequiredNetwork: options.RequiredNetwork,
 			SkipProxyChain:  true,
+			ExcludeNodeHash: result.NodeHash,
 		})
 		if err != nil {
 			return err
@@ -225,14 +230,16 @@ type routeRequest struct {
 	account      string
 	targetDomain string
 	now          time.Time
+	excludeNode  node.Hash
 }
 
 func (r *Router) attemptFor(request routeRequest, selected *platform.Platform) routeAttempt {
 	return routeAttempt{
 		ownerPlatform: request.root, platform: selected, state: request.state,
 		allocationStats: r.ensureSelectedStats(selected.ID),
-		view:            selected.NetworkView(request.network), account: request.account,
-		targetDomain: request.targetDomain, now: request.now,
+		view:            platform.ExcludeHash(selected.NetworkView(request.network), request.excludeNode),
+		account:         request.account,
+		targetDomain:    request.targetDomain, now: request.now,
 	}
 }
 

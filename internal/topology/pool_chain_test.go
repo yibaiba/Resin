@@ -68,7 +68,7 @@ func TestUniqueLandingChain_DefaultCatchAllDoesNotCompete(t *testing.T) {
 	}
 }
 
-func TestUniqueLandingChain_CompetingAllowlistProbesDirect(t *testing.T) {
+func TestUniqueLandingChain_CompetingAllowlistStillChains(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := newTestPool(subMgr)
 
@@ -83,18 +83,19 @@ func TestUniqueLandingChain_CompetingAllowlistProbesDirect(t *testing.T) {
 	pool.RegisterPlatform(landing)
 	pool.RegisterPlatform(direct)
 
-	_ = addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop"}`, "198.51.100.1")
+	hopHash := addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop"}`, "198.51.100.1")
 	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
 	pool.RebuildPlatform(hop)
 	pool.RebuildPlatform(landing)
 	pool.RebuildPlatform(direct)
 
-	if hops, ok := pool.UniqueLandingChain(landHash); ok {
-		t.Fatalf("competing unchained allowlist should probe direct, hops=%v", hops)
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != hopHash {
+		t.Fatalf("competing unchained allowlist should still chain, hops=%v ok=%v", hops, ok)
 	}
 }
 
-func TestUniqueLandingChain_TwoDifferentChainsProbeDirect(t *testing.T) {
+func TestUniqueLandingChain_TwoDifferentChainsPicksStable(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := newTestPool(subMgr)
 
@@ -112,15 +113,16 @@ func TestUniqueLandingChain_TwoDifferentChainsProbeDirect(t *testing.T) {
 		pool.RegisterPlatform(plat)
 	}
 
-	_ = addHealthyChainNode(t, pool, subMgr, "hop-a", `{"role":"a"}`, "198.51.100.1")
+	hopAHash := addHealthyChainNode(t, pool, subMgr, "hop-a", `{"role":"a"}`, "198.51.100.1")
 	_ = addHealthyChainNode(t, pool, subMgr, "hop-b", `{"role":"b"}`, "198.51.100.2")
 	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.3")
 	for _, plat := range []*platform.Platform{hopA, hopB, landA, landB} {
 		pool.RebuildPlatform(plat)
 	}
 
-	if hops, ok := pool.UniqueLandingChain(landHash); ok {
-		t.Fatalf("two chains should probe direct, hops=%v", hops)
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != hopAHash {
+		t.Fatalf("two chains should pick land-a hop, hops=%v ok=%v", hops, ok)
 	}
 }
 
@@ -176,6 +178,51 @@ func TestUniqueLandingChain_EmptyHopViewIsNotUnique(t *testing.T) {
 	}
 	if hops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp"); ok {
 		t.Fatalf("empty hop UDP chain = %v", hops)
+	}
+}
+
+func TestUniqueLandingChain_ExcludesLandingFromHopPick(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	vpsHash := addHealthyChainNode(t, pool, subMgr, "vps-sub", `{"role":"vps"}`, "198.51.100.1")
+	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
+	pool.RebuildPlatform(hop)
+	pool.RebuildPlatform(landing)
+
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != vpsHash {
+		t.Fatalf("chain hops = %v ok=%v, want VPS %s", hops, ok, vpsHash.Hex())
+	}
+}
+
+func TestUniqueLandingChain_SkipsWhenOnlyHopIsLanding(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land-only"}`, "198.51.100.2")
+	pool.RebuildPlatform(hop)
+	pool.RebuildPlatform(landing)
+
+	if hops, ok := pool.UniqueLandingChain(landHash); ok {
+		t.Fatalf("self hop should be skipped, hops=%v", hops)
+	}
+	if !pool.HasUniqueLandingChain(landHash) {
+		t.Fatal("self-only hop still requires a chain probe")
 	}
 }
 
