@@ -133,6 +133,8 @@ export function PlatformDetailPage() {
     resolver: zodResolver(platformFormSchema),
     defaultValues: defaultPlatformFormValues,
   });
+  const detailMissAction = useWatch({ control: editForm.control, name: "reverse_proxy_miss_action" });
+  const detailAllocationPolicy = useWatch({ control: editForm.control, name: "allocation_policy" });
   const detailEmptyAccountBehavior = useWatch({ control: editForm.control, name: "reverse_proxy_empty_account_behavior" });
   const detailSubscriptionIDs = useWatch({ control: editForm.control, name: "subscription_ids" }) ?? [];
   const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" });
@@ -635,7 +637,16 @@ export function PlatformDetailPage() {
                     <label className="field-label" htmlFor="detail-edit-miss-action">
                       {t("反向代理账号解析出错策略")}
                     </label>
-                    <Select id="detail-edit-miss-action" {...editForm.register("reverse_proxy_miss_action")}>
+                    <Select
+                      id="detail-edit-miss-action"
+                      value={detailMissAction}
+                      onChange={(event) =>
+                        editForm.setValue("reverse_proxy_miss_action", event.target.value as PlatformFormValues["reverse_proxy_miss_action"], {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }
+                    >
                       {missActions.map((item) => (
                         <option key={item} value={item}>
                           {t(missActionLabel[item])}
@@ -648,7 +659,16 @@ export function PlatformDetailPage() {
                     <label className="field-label" htmlFor="detail-edit-policy">
                       {t("节点分配策略")}
                     </label>
-                    <Select id="detail-edit-policy" {...editForm.register("allocation_policy")}>
+                    <Select
+                      id="detail-edit-policy"
+                      value={detailAllocationPolicy}
+                      onChange={(event) =>
+                        editForm.setValue("allocation_policy", event.target.value as PlatformFormValues["allocation_policy"], {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }
+                    >
                       {allocationPolicies.map((item) => (
                         <option key={item} value={item}>
                           {t(allocationPolicyLabel[item])}
@@ -681,7 +701,17 @@ export function PlatformDetailPage() {
                     <label className="field-label" htmlFor="detail-edit-empty-account-behavior">
                       {t("反向代理账号为空行为")}
                     </label>
-                    <Select id="detail-edit-empty-account-behavior" {...editForm.register("reverse_proxy_empty_account_behavior")}>
+                    <Select
+                      id="detail-edit-empty-account-behavior"
+                      value={detailEmptyAccountBehavior}
+                      onChange={(event) =>
+                        editForm.setValue(
+                          "reverse_proxy_empty_account_behavior",
+                          event.target.value as PlatformFormValues["reverse_proxy_empty_account_behavior"],
+                          { shouldDirty: true, shouldValidate: true },
+                        )
+                      }
+                    >
                       {emptyAccountBehaviors.map((item) => (
                         <option key={item} value={item}>
                           {t(emptyAccountBehaviorLabel[item])}

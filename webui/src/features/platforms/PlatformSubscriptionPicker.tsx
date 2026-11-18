@@ -3,7 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
-import { Select } from "../../components/ui/Select";
+import { Listbox } from "../../components/ui/Listbox";
 import { useI18n } from "../../i18n";
 import { listAllSubscriptions } from "../subscriptions/api";
 
@@ -62,22 +62,24 @@ export function PlatformSubscriptionPicker(props: Props) {
           {t("添加订阅")}
         </label>
         <div className="fallback-add-row">
-          <Select
+          <Listbox
             id={fieldID}
             value={candidate}
-            onChange={(event) => setCandidate(event.target.value)}
+            onChange={setCandidate}
             aria-label={t("选择订阅")}
-            disabled={subscriptionsQuery.isLoading}
-          >
-            <option value="">
-              {subscriptionsQuery.isLoading ? t("正在加载订阅...") : available.length ? t("选择订阅") : t("没有可添加的订阅")}
-            </option>
-            {available.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.enabled ? item.name : `${item.name} (${t("已停用")})`}
-              </option>
-            ))}
-          </Select>
+            disabled={subscriptionsQuery.isLoading || available.length === 0}
+            placeholder={
+              subscriptionsQuery.isLoading
+                ? t("正在加载订阅...")
+                : available.length
+                  ? t("选择订阅")
+                  : t("没有可添加的订阅")
+            }
+            options={available.map((item) => ({
+              value: item.id,
+              label: item.enabled ? item.name : `${item.name} (${t("已停用")})`,
+            }))}
+          />
           <Button variant="secondary" size="sm" onClick={add} disabled={!candidate}>
             <Plus size={15} />
             {t("添加")}

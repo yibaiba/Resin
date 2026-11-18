@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
+import { Listbox } from "../../components/ui/Listbox";
 import { Select } from "../../components/ui/Select";
 import { useI18n } from "../../i18n";
 import { rotationStrategies, rotationStrategyDescription, rotationStrategyLabel } from "./constants";
@@ -54,16 +55,15 @@ export function OrderedPlatformList(props: OrderedListProps) {
       <div className="field-group">
         <label className="field-label" htmlFor={`${props.idPrefix}-platform`}>{props.addLabel}</label>
         <div className="fallback-add-row">
-          <Select
+          <Listbox
             id={`${props.idPrefix}-platform`}
             value={candidate}
-            onChange={(event) => setCandidate(event.target.value)}
+            onChange={setCandidate}
             aria-label={props.selectLabel}
-            disabled={atMax}
-          >
-            <option value="">{available.length && !atMax ? t("选择平台") : t("没有可添加的平台")}</option>
-            {available.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </Select>
+            disabled={atMax || available.length === 0}
+            placeholder={available.length && !atMax ? t("选择平台") : t("没有可添加的平台")}
+            options={available.map((item) => ({ value: item.id, label: item.name }))}
+          />
           <Button variant="secondary" size="sm" onClick={add} disabled={!candidate || atMax}><Plus size={15} />{t("添加")}</Button>
         </div>
       </div>

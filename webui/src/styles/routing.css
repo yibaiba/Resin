@@ -643,8 +643,9 @@
   gap: 8px;
 }
 
-.egress-rotation-controls .select {
+.egress-rotation-controls .listbox {
   flex: 1;
+  min-width: 0;
 }
 
 .operation-results {
