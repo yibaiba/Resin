@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 type udpProbeTestOutbound struct {
 	*testutil.NoopOutbound
 	networks []string
+	wrap     func(net.PacketConn) net.PacketConn
 }
 
 func (o *udpProbeTestOutbound) Network() []string {
@@ -27,7 +29,41 @@ func (o *udpProbeTestOutbound) Network() []string {
 }
 
 func (o *udpProbeTestOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
-	return net.ListenPacket("udp4", "127.0.0.1:0")
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil || o.wrap == nil {
+		return conn, err
+	}
+	return o.wrap(conn), nil
+}
+
+// hysteriaLikePacketConn matches sing-quic hy2: SetDeadline is invalid,
+// SetReadDeadline works.
+type hysteriaLikePacketConn struct {
+	net.PacketConn
+}
+
+func (c hysteriaLikePacketConn) SetDeadline(time.Time) error {
+	return os.ErrInvalid
+}
+
+func (c hysteriaLikePacketConn) SetWriteDeadline(time.Time) error {
+	return os.ErrInvalid
+}
+
+type noDeadlinePacketConn struct {
+	net.PacketConn
+}
+
+func (c noDeadlinePacketConn) SetDeadline(time.Time) error {
+	return os.ErrInvalid
+}
+
+func (c noDeadlinePacketConn) SetReadDeadline(time.Time) error {
+	return os.ErrInvalid
+}
+
+func (c noDeadlinePacketConn) SetWriteDeadline(time.Time) error {
+	return os.ErrInvalid
 }
 
 type udpProbeResponder struct {

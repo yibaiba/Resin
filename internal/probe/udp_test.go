@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/netip"
 	"sync/atomic"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
+	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
 )
@@ -188,6 +190,55 @@ func TestProbeManager_UDPProbeUsesHotTarget(t *testing.T) {
 	}
 	if entry.LastUDPProbeSuccess.Load() == 0 {
 		t.Fatal("hot target probe did not record success")
+	}
+}
+
+func TestProbeManager_UDPProbeSucceedsWhenSetDeadlineUnsupported(t *testing.T) {
+	server := newUDPProbeResponder(t, func(query *dns.Msg) ([]byte, bool) {
+		return validDNSResponse(query), false
+	})
+	manager, entry, hash := newUDPProbeTestManager(t, server.target, "tcp", "udp")
+	var ob adapter.Outbound = &udpProbeTestOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     []string{"tcp", "udp"},
+		wrap: func(conn net.PacketConn) net.PacketConn {
+			return hysteriaLikePacketConn{PacketConn: conn}
+		},
+	}
+	entry.Outbound.Store(&ob)
+
+	manager.probeUDP(hash, entry)
+	if entry.LastUDPProbeSuccess.Load() == 0 || entry.UDPHealthState().FailureCount != 0 {
+		t.Fatalf("hy2-like UDP probe failed: success=%d failures=%d",
+			entry.LastUDPProbeSuccess.Load(), entry.UDPHealthState().FailureCount)
+	}
+}
+
+func TestProbeManager_UDPProbeTimesOutWithoutDeadlines(t *testing.T) {
+	server := newUDPProbeResponder(t, func(*dns.Msg) ([]byte, bool) { return nil, false })
+	manager, entry, hash := newUDPProbeTestManager(t, server.target, "tcp", "udp")
+	var ob adapter.Outbound = &udpProbeTestOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     []string{"tcp", "udp"},
+		wrap: func(conn net.PacketConn) net.PacketConn {
+			return noDeadlinePacketConn{PacketConn: conn}
+		},
+	}
+	entry.Outbound.Store(&ob)
+
+	done := make(chan struct{})
+	go func() {
+		manager.probeUDP(hash, entry)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("UDP probe did not time out after unsupported deadlines")
+	}
+	if entry.LastUDPProbeSuccess.Load() != 0 || entry.UDPHealthState().FailureCount != 1 {
+		t.Fatalf("timeout health: success=%d failures=%d",
+			entry.LastUDPProbeSuccess.Load(), entry.UDPHealthState().FailureCount)
 	}
 }
 

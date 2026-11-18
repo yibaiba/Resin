@@ -94,15 +94,8 @@ func (m *ProbeManager) performUDPProbe(hash node.Hash, rawTarget string) error {
 		return fmt.Errorf("listen packet: %w", err)
 	}
 	defer packetConn.Close()
-	stopDeadline := context.AfterFunc(ctx, func() {
-		_ = packetConn.SetDeadline(time.Now())
-	})
+	stopDeadline := armUDPProbeConn(ctx, packetConn)
 	defer stopDeadline()
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := packetConn.SetDeadline(deadline); err != nil {
-			return fmt.Errorf("set deadline: %w", err)
-		}
-	}
 
 	queryID, query, err := buildUDPProbeQuery()
 	if err != nil {
@@ -164,6 +157,33 @@ func validateUDPProbeResponse(payload []byte, queryID uint16) error {
 		return fmt.Errorf("response question mismatch")
 	}
 	return nil
+}
+
+// armUDPProbeConn bounds a probe with SetReadDeadline. Hysteria2's PacketConn
+// rejects SetDeadline (os.ErrInvalid); SetReadDeadline is implemented.
+// If neither deadline method works, timeout closes the conn to unblock ReadFrom.
+func armUDPProbeConn(ctx context.Context, packetConn net.PacketConn) func() bool {
+	stop := context.AfterFunc(ctx, func() {
+		interruptUDPProbeConn(packetConn)
+	})
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = setUDPProbeReadDeadline(packetConn, deadline)
+	}
+	return stop
+}
+
+func setUDPProbeReadDeadline(packetConn net.PacketConn, deadline time.Time) error {
+	if err := packetConn.SetReadDeadline(deadline); err == nil {
+		return nil
+	}
+	return packetConn.SetDeadline(deadline)
+}
+
+func interruptUDPProbeConn(packetConn net.PacketConn) {
+	if setUDPProbeReadDeadline(packetConn, time.Now()) == nil {
+		return
+	}
+	_ = packetConn.Close()
 }
 
 func sameAddrPort(left, right netip.AddrPort) bool {
