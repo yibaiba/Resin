@@ -12,6 +12,7 @@ import { Card } from "../../components/ui/Card";
 import { DataTable } from "../../components/ui/DataTable";
 import { Input } from "../../components/ui/Input";
 import { OffsetPagination } from "../../components/ui/OffsetPagination";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { Switch } from "../../components/ui/Switch";
 import { Textarea } from "../../components/ui/Textarea";
@@ -752,7 +753,7 @@ export function SubscriptionPage() {
       </Card>
 
       {drawerVisible && selectedSubscription ? (
-        <div
+        <Overlay
           className="drawer-overlay"
           role="dialog"
           aria-modal="true"
@@ -1013,11 +1014,11 @@ export function SubscriptionPage() {
               </section>
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
 
       {createModalOpen ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-sub-title">
+        <Overlay className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="create-sub-title">
           <Card className="modal-card modal-card-stack">
             <div className="modal-header">
               <h3 id="create-sub-title">{t("新建订阅")}</h3>
@@ -1199,7 +1200,7 @@ export function SubscriptionPage() {
               </div>
             </form>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );

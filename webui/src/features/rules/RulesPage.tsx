@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { DataTable } from "../../components/ui/DataTable";
 import { Input } from "../../components/ui/Input";
+import { Overlay } from "../../components/ui/Overlay";
 import { Textarea } from "../../components/ui/Textarea";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
@@ -354,7 +355,7 @@ export function RulesPage() {
       </Card>
 
       {drawerOpen ? (
-        <div className="drawer-overlay" role="dialog" aria-modal="true" aria-label={t("规则编辑抽屉")} onClick={() => setDrawerOpen(false)}>
+        <Overlay className="drawer-overlay" role="dialog" aria-modal="true" aria-label={t("规则编辑抽屉")} onClick={() => setDrawerOpen(false)}>
           <Card className="drawer-panel" onClick={(event) => event.stopPropagation()}>
             <div className="drawer-header">
               <div>
@@ -437,11 +438,11 @@ export function RulesPage() {
               ) : null}
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
 
       {resolveModalOpen ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("规则测试")}>
+        <Overlay className="modal-overlay" role="dialog" aria-modal="true" aria-label={t("规则测试")}>
           <Card className="modal-card rules-resolve-modal-card">
             <div className="modal-header">
               <div>
@@ -499,11 +500,11 @@ export function RulesPage() {
               ) : null}
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
 
       {createModalOpen ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
+        <Overlay className="modal-overlay" role="dialog" aria-modal="true">
           <Card className="modal-card">
             <div className="modal-header">
               <h3>{t("新建规则")}</h3>
@@ -547,7 +548,7 @@ export function RulesPage() {
               </div>
             </form>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );

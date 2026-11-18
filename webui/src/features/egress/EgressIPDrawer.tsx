@@ -4,6 +4,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { useI18n } from "../../i18n";
 import { routingLabel } from "../../lib/routing-labels";
@@ -48,7 +49,7 @@ export function EgressIPDrawer({ item, pending, onClose, onSave, onRotate }: Pro
   };
 
   return (
-    <div className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="egress-drawer-title" onClick={onClose}>
+    <Overlay className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="egress-drawer-title" onClick={onClose}>
       <Card className="drawer-panel egress-drawer" onClick={(event) => event.stopPropagation()}>
         <div className="drawer-header">
           <div><h3 id="egress-drawer-title" className="egress-ip-value">{item.egress_ip}</h3><p>{t("编辑出口状态、容量和自动恢复时间。")}</p></div>
@@ -75,6 +76,6 @@ export function EgressIPDrawer({ item, pending, onClose, onSave, onRotate }: Pro
           </section>
         </div>
       </Card>
-    </div>
+    </Overlay>
   );
 }

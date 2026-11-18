@@ -9,6 +9,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { OffsetPagination } from "../../components/ui/OffsetPagination";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { Switch } from "../../components/ui/Switch";
 import { Textarea } from "../../components/ui/Textarea";
@@ -264,7 +265,7 @@ export function PlatformPage() {
       </Card>
 
       {createModalOpen ? (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
+        <Overlay className="modal-overlay" role="dialog" aria-modal="true">
           <Card className="modal-card">
             <div className="modal-header">
               <h3>{t("新建平台")}</h3>
@@ -463,7 +464,7 @@ export function PlatformPage() {
               </div>
             </form>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );

@@ -3,6 +3,7 @@ import { type FormEvent } from "react";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { Switch } from "../../components/ui/Switch";
 import { useI18n } from "../../i18n";
@@ -64,16 +65,16 @@ export function RoutingRuleEditor({ form, platforms, pending, presentation, titl
 
   if (presentation === "drawer") {
     return (
-      <div className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
+      <Overlay className="drawer-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
         <Card className="drawer-panel route-rule-drawer" onClick={(event) => event.stopPropagation()}>{content}</Card>
-      </div>
+      </Overlay>
     );
   }
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
+    <Overlay className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="routing-rule-editor-title" onClick={onClose}>
       <Card className="modal-card route-rule-modal" onClick={(event) => event.stopPropagation()}>{content}</Card>
-    </div>
+    </Overlay>
   );
 }
 

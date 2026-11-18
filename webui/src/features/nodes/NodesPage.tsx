@@ -9,6 +9,7 @@ import { DataTable } from "../../components/ui/DataTable";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { OffsetPagination } from "../../components/ui/OffsetPagination";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
@@ -841,7 +842,7 @@ export function NodesPage() {
       </Card>
 
       {drawerVisible && detailNode ? (
-        <div
+        <Overlay
           className="drawer-overlay"
           role="dialog"
           aria-modal="true"
@@ -997,7 +998,7 @@ export function NodesPage() {
               </section>
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );

@@ -9,6 +9,7 @@ import { Card } from "../../components/ui/Card";
 import { DataTable } from "../../components/ui/DataTable";
 import { CursorPagination } from "../../components/ui/CursorPagination";
 import { Input } from "../../components/ui/Input";
+import { Overlay } from "../../components/ui/Overlay";
 import { Select } from "../../components/ui/Select";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
@@ -965,7 +966,7 @@ export function RequestLogsPage() {
       </Card>
 
       {drawerVisible && detailLog ? (
-        <div
+        <Overlay
           className="drawer-overlay"
           role="dialog"
           aria-modal="true"
@@ -1208,7 +1209,7 @@ export function RequestLogsPage() {
               </section>
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );

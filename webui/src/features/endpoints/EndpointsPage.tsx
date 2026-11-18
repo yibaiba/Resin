@@ -16,6 +16,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Input } from "../../components/ui/Input";
 import { OffsetPagination } from "../../components/ui/OffsetPagination";
+import { Overlay } from "../../components/ui/Overlay";
 import { Switch } from "../../components/ui/Switch";
 import { ToastContainer } from "../../components/ui/Toast";
 import { useToast } from "../../hooks/useToast";
@@ -658,7 +659,7 @@ export function EndpointsPage() {
       </Card>
 
       {editingEndpoint ? (
-        <div
+        <Overlay
           className="drawer-overlay"
           role="dialog"
           aria-modal="true"
@@ -732,11 +733,11 @@ export function EndpointsPage() {
               ) : null}
             </div>
           </Card>
-        </div>
+        </Overlay>
       ) : null}
 
       {createModalOpen ? (
-        <div
+        <Overlay
           className="modal-overlay"
           role="dialog"
           aria-modal="true"
@@ -770,7 +771,7 @@ export function EndpointsPage() {
               onSubmit={submitCreateEndpoint}
             />
           </Card>
-        </div>
+        </Overlay>
       ) : null}
     </section>
   );
