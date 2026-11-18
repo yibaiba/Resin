@@ -10,6 +10,7 @@ export type Platform = {
   regex_filters: string[];
   region_filters: string[];
   subscription_ids: string[];
+  subscription_exclude_ids: string[];
   routable_node_count: number;
   reverse_proxy_miss_action: PlatformMissAction;
   reverse_proxy_empty_account_behavior: PlatformEmptyAccountBehavior;
@@ -36,6 +37,7 @@ export type PlatformCreateInput = {
   regex_filters?: string[];
   region_filters?: string[];
   subscription_ids?: string[];
+  subscription_exclude_ids?: string[];
   reverse_proxy_miss_action?: PlatformMissAction;
   reverse_proxy_empty_account_behavior?: PlatformEmptyAccountBehavior;
   reverse_proxy_fixed_account_header?: string;
@@ -53,6 +55,7 @@ export type PlatformUpdateInput = {
   regex_filters?: string[];
   region_filters?: string[];
   subscription_ids?: string[];
+  subscription_exclude_ids?: string[];
   reverse_proxy_miss_action?: PlatformMissAction;
   reverse_proxy_empty_account_behavior?: PlatformEmptyAccountBehavior;
   reverse_proxy_fixed_account_header?: string;

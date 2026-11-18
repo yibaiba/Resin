@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "../../lib/cn";
@@ -27,10 +28,8 @@ type MenuCoords = {
   placement: "top" | "bottom";
 };
 
-type ListboxProps = {
+type ListboxCommon = {
   id?: string;
-  value: string;
-  onChange: (value: string) => void;
   options: ListboxOption[];
   placeholder?: string;
   disabled?: boolean;
@@ -39,6 +38,20 @@ type ListboxProps = {
   style?: CSSProperties;
   "aria-label"?: string;
 };
+
+type ListboxSingleProps = ListboxCommon & {
+  multiple?: false;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+type ListboxMultipleProps = ListboxCommon & {
+  multiple: true;
+  value: string[];
+  onChange: (value: string[]) => void;
+};
+
+export type ListboxProps = ListboxSingleProps | ListboxMultipleProps;
 
 const MENU_GAP = 6;
 const VIEWPORT_PAD = 8;
@@ -72,18 +85,34 @@ function measureMenu(trigger: HTMLElement): MenuCoords {
   };
 }
 
-export function Listbox({
-  id,
-  value,
-  onChange,
-  options,
-  placeholder = "",
-  disabled = false,
-  invalid = false,
-  className,
-  style,
-  "aria-label": ariaLabel,
-}: ListboxProps) {
+export function Listbox(props: ListboxSingleProps): ReactElement;
+export function Listbox(props: ListboxMultipleProps): ReactElement;
+export function Listbox(props: ListboxProps): ReactElement {
+  const {
+    id,
+    options,
+    placeholder = "",
+    disabled = false,
+    invalid = false,
+    className,
+    style,
+    "aria-label": ariaLabel,
+  } = props;
+  const multiple = props.multiple === true;
+  const selectedValues = multiple ? props.value : [props.value];
+  const selectedSet = new Set(selectedValues);
+  const selectedLabels = selectedValues
+    .map((item) => options.find((option) => option.value === item)?.label ?? item)
+    .filter((label) => label.length > 0);
+  const triggerLabel = multiple
+    ? selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length <= 2
+        ? selectedLabels.join("、")
+        : `${selectedLabels.slice(0, 2).join("、")} 等 ${selectedLabels.length} 个`
+    : (options.find((item) => item.value === props.value)?.label ?? placeholder);
+  const hasValue = multiple ? selectedValues.length > 0 : Boolean(options.find((item) => item.value === props.value));
+
   const reactId = useId();
   const triggerId = id ?? reactId;
   const listId = `${triggerId}-list`;
@@ -98,7 +127,6 @@ export function Listbox({
   const [coords, setCoords] = useState<MenuCoords | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
 
-  const selected = options.find((item) => item.value === value);
   const enabledIndexes = options.flatMap((item, index) => (item.disabled ? [] : [index]));
   const canOpen = !disabled && options.length > 0;
 
@@ -115,7 +143,7 @@ export function Listbox({
   const openMenu = (index?: number) => {
     if (!canOpen) return;
     window.clearTimeout(closeTimerRef.current);
-    const selectedIndex = options.findIndex((item) => item.value === value && !item.disabled);
+    const selectedIndex = options.findIndex((item) => selectedSet.has(item.value) && !item.disabled);
     const nextIndex = index ?? (selectedIndex >= 0 ? selectedIndex : (enabledIndexes[0] ?? 0));
     setActiveIndex(nextIndex);
     if (triggerRef.current) {
@@ -131,8 +159,15 @@ export function Listbox({
   const selectIndex = (index: number) => {
     const option = options[index];
     if (!option || option.disabled) return;
+    if (multiple) {
+      const next = selectedSet.has(option.value)
+        ? selectedValues.filter((item) => item !== option.value)
+        : [...selectedValues, option.value];
+      props.onChange(next);
+      return;
+    }
     suppressTriggerClickRef.current = true;
-    onChange(option.value);
+    props.onChange(option.value);
     closeMenu();
     triggerRef.current?.focus();
     window.setTimeout(() => {
@@ -299,10 +334,11 @@ export function Listbox({
         aria-controls={rendered ? listId : undefined}
         aria-activedescendant={open ? activeId : undefined}
         aria-invalid={invalid || undefined}
+        aria-multiselectable={multiple || undefined}
         onClick={onTriggerClick}
         onKeyDown={onTriggerKeyDown}
       >
-        <span className={cn("listbox-value", !selected && "is-placeholder")}>{selected?.label ?? placeholder}</span>
+        <span className={cn("listbox-value", !hasValue && "is-placeholder")}>{triggerLabel}</span>
         <ChevronDown className="listbox-chevron" size={16} aria-hidden="true" />
       </button>
       {rendered && coords
@@ -315,6 +351,7 @@ export function Listbox({
               data-open={open ? "true" : "false"}
               data-placement={coords.placement}
               aria-labelledby={triggerId}
+              aria-multiselectable={multiple || undefined}
               style={{
                 position: "fixed",
                 top: coords.top,
@@ -328,7 +365,7 @@ export function Listbox({
                 <li className="listbox-empty">{placeholder}</li>
               ) : (
                 options.map((item, index) => {
-                  const isSelected = item.value === value;
+                  const isSelected = selectedSet.has(item.value);
                   return (
                     <li
                       key={item.value === "" ? `__empty-${index}` : item.value}

@@ -34,7 +34,9 @@ const (
 	stateVersionPlatformRotation                 = 13
 	stateVersionPlatformSubscriptionIDs          = 14
 	stateVersionPlatformChain                    = 15
-	stateLatestVersion                           = stateVersionPlatformChain
+	stateVersionPlatformSubscriptionExclude      = 16
+	stateVersionDisableInvalidNodeCheck          = 17
+	stateLatestVersion                           = stateVersionDisableInvalidNodeCheck
 	stateLegacyBaselineVersion                   = stateVersionAddFixedAccountHeader
 
 	stateBaseSchemaMigration = stateMigrationsPath + "/000001_state_base.up.sql"

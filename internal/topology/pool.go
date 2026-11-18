@@ -361,13 +361,8 @@ func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform, network s
 			return node.Zero, false
 		}
 		visited[plat.ID] = struct{}{}
-		if hash, ok := stableViewHash(plat.NetworkView(N.NetworkUDP), exclude); ok {
+		if hash, ok := p.bestChainHopHash(plat, exclude, udpOnly); ok {
 			return hash, true
-		}
-		if !udpOnly {
-			if hash, ok := stableViewHash(plat.View(), exclude); ok {
-				return hash, true
-			}
 		}
 		for _, fallbackID := range plat.FallbackPlatformIDs {
 			fallback, ok := p.GetPlatform(fallbackID)
@@ -383,22 +378,50 @@ func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform, network s
 	return walk(hopPlat)
 }
 
-func stableViewHash(view platform.ReadOnlyView, exclude node.Hash) (node.Hash, bool) {
-	if view == nil {
+func (p *GlobalNodePool) hopHasVisionFlow(hash node.Hash) bool {
+	entry, ok := p.GetEntry(hash)
+	if !ok || entry == nil {
+		return false
+	}
+	return node.HasXTLSVisionFlow(entry.RawOptions)
+}
+
+// bestChainHopHash prefers a non-Vision hop over XTLS-Vision. Vision splices
+// inner TLS and breaks a Reality landing dialed through that hop. Rank order:
+// UDP plain, TCP plain, UDP vision, TCP vision. udpOnly keeps UDP ranks only.
+func (p *GlobalNodePool) bestChainHopHash(plat *platform.Platform, exclude node.Hash, udpOnly bool) (node.Hash, bool) {
+	if plat == nil {
 		return node.Zero, false
 	}
-	best := node.Zero
-	found := false
-	view.Range(func(h node.Hash) bool {
-		if !exclude.IsZero() && h == exclude {
+	var (
+		best  node.Hash
+		rank  int
+		found bool
+	)
+	consider := func(view platform.ReadOnlyView, baseRank int) {
+		if view == nil {
+			return
+		}
+		view.Range(func(h node.Hash) bool {
+			if !exclude.IsZero() && h == exclude {
+				return true
+			}
+			itemRank := baseRank
+			if p.hopHasVisionFlow(h) {
+				itemRank += 2
+			}
+			if !found || itemRank < rank || (itemRank == rank && bytes.Compare(h[:], best[:]) < 0) {
+				best = h
+				rank = itemRank
+				found = true
+			}
 			return true
-		}
-		if !found || bytes.Compare(h[:], best[:]) < 0 {
-			best = h
-			found = true
-		}
-		return true
-	})
+		})
+	}
+	consider(plat.NetworkView(N.NetworkUDP), 0)
+	if !udpOnly {
+		consider(plat.View(), 1)
+	}
 	return best, found
 }
 
@@ -434,6 +457,21 @@ func (p *GlobalNodePool) MakeSubLookup() node.SubLookupFunc {
 		}
 		tags := managed.Tags
 		return sub.Name(), sub.Enabled(), tags, true
+	}
+}
+
+// MakeDisableInvalidNodeCheckLookup reports whether a subscription opts out of
+// invalid-node health gating on chained landing platforms.
+func (p *GlobalNodePool) MakeDisableInvalidNodeCheckLookup() node.DisableInvalidNodeCheckFunc {
+	return func(subID string) bool {
+		if p.subLookup == nil {
+			return false
+		}
+		sub := p.subLookup(subID)
+		if sub == nil {
+			return false
+		}
+		return sub.DisableInvalidNodeCheck()
 	}
 }
 
@@ -549,6 +587,7 @@ func (p *GlobalNodePool) notifyAllPlatformsDirty(hash node.Hash) {
 	}
 
 	subLookup := p.MakeSubLookup()
+	flags := p.MakeDisableInvalidNodeCheckLookup()
 	getEntry := func(h node.Hash) (*node.NodeEntry, bool) {
 		return p.nodes.Load(h)
 	}
@@ -569,7 +608,7 @@ func (p *GlobalNodePool) notifyAllPlatformsDirty(hash node.Hash) {
 		go func(plat *platform.Platform) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			plat.NotifyDirty(hash, getEntry, subLookup, p.geoLookup)
+			plat.NotifyDirtyWithFlags(hash, getEntry, subLookup, p.geoLookup, flags)
 		}(plat)
 	}
 	wg.Wait()
@@ -583,6 +622,7 @@ func (p *GlobalNodePool) RebuildAllPlatforms() {
 	}
 
 	subLookup := p.MakeSubLookup()
+	flags := p.MakeDisableInvalidNodeCheckLookup()
 	poolRange := func(fn func(node.Hash, *node.NodeEntry) bool) {
 		p.nodes.Range(fn)
 	}
@@ -603,7 +643,7 @@ func (p *GlobalNodePool) RebuildAllPlatforms() {
 		go func(plat *platform.Platform) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			plat.FullRebuild(poolRange, subLookup, p.geoLookup)
+			plat.FullRebuildWithFlags(poolRange, subLookup, p.geoLookup, flags)
 		}(plat)
 	}
 	wg.Wait()
@@ -612,10 +652,11 @@ func (p *GlobalNodePool) RebuildAllPlatforms() {
 // RebuildPlatform triggers a full rebuild on a specific platform.
 func (p *GlobalNodePool) RebuildPlatform(plat *platform.Platform) {
 	subLookup := p.MakeSubLookup()
+	flags := p.MakeDisableInvalidNodeCheckLookup()
 	poolRange := func(fn func(node.Hash, *node.NodeEntry) bool) {
 		p.nodes.Range(fn)
 	}
-	plat.FullRebuild(poolRange, subLookup, p.geoLookup)
+	plat.FullRebuildWithFlags(poolRange, subLookup, p.geoLookup, flags)
 }
 
 // --- Health Management ---

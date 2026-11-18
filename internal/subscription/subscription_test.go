@@ -30,6 +30,9 @@ func TestNewSubscription(t *testing.T) {
 	if got := s.SourceType(); got != SourceTypeRemote {
 		t.Fatalf("expected default source type %q, got %q", SourceTypeRemote, got)
 	}
+	if s.DisableInvalidNodeCheck() {
+		t.Fatal("expected disable_invalid_node_check off by default")
+	}
 }
 
 func TestSubscription_NameThreadSafe(t *testing.T) {
@@ -45,6 +48,17 @@ func TestSubscription_EphemeralNodeEvictDelayThreadSafe(t *testing.T) {
 	s.SetEphemeralNodeEvictDelayNs(int64(10 * time.Minute))
 	if got, want := s.EphemeralNodeEvictDelayNs(), int64(10*time.Minute); got != want {
 		t.Fatalf("expected %d, got %d", want, got)
+	}
+}
+
+func TestSubscription_DisableInvalidNodeCheckThreadSafe(t *testing.T) {
+	s := NewSubscription("id1", "sub", "url", true, false)
+	if s.DisableInvalidNodeCheck() {
+		t.Fatal("expected default false")
+	}
+	s.SetDisableInvalidNodeCheck(true)
+	if !s.DisableInvalidNodeCheck() {
+		t.Fatal("expected true after set")
 	}
 }
 

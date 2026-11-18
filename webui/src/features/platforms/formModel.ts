@@ -34,6 +34,7 @@ export const platformFormSchema = z.object({
   regex_filters_text: z.string().optional(),
   region_filters_text: z.string().optional(),
   subscription_ids: z.array(z.string()),
+  subscription_exclude_ids: z.array(z.string()),
   reverse_proxy_miss_action: z.enum(missActions),
   reverse_proxy_empty_account_behavior: z.enum(emptyAccountBehaviors),
   reverse_proxy_fixed_account_header: z.string().optional(),
@@ -54,6 +55,17 @@ export const platformFormSchema = z.object({
       message: "用于提取 Account 的 Headers 不能为空",
     });
   }
+  const allow = new Set(value.subscription_ids);
+  for (const id of value.subscription_exclude_ids) {
+    if (allow.has(id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["subscription_exclude_ids"],
+        message: "同一订阅不能同时出现在允许和排除列表里",
+      });
+      break;
+    }
+  }
 });
 
 export type PlatformFormValues = z.infer<typeof platformFormSchema>;
@@ -64,6 +76,7 @@ export const defaultPlatformFormValues: PlatformFormValues = {
   regex_filters_text: "",
   region_filters_text: "",
   subscription_ids: [],
+  subscription_exclude_ids: [],
   reverse_proxy_miss_action: "TREAT_AS_EMPTY",
   reverse_proxy_empty_account_behavior: "RANDOM",
   reverse_proxy_fixed_account_header: "Authorization",
@@ -79,6 +92,7 @@ export function platformToFormValues(platform: Platform): PlatformFormValues {
   const regexFilters = Array.isArray(platform.regex_filters) ? platform.regex_filters : [];
   const regionFilters = Array.isArray(platform.region_filters) ? platform.region_filters : [];
   const subscriptionIDs = Array.isArray(platform.subscription_ids) ? platform.subscription_ids : [];
+  const subscriptionExcludeIDs = Array.isArray(platform.subscription_exclude_ids) ? platform.subscription_exclude_ids : [];
 
   return {
     name: platform.name,
@@ -86,6 +100,7 @@ export function platformToFormValues(platform: Platform): PlatformFormValues {
     regex_filters_text: regexFilters.join("\n"),
     region_filters_text: regionFilters.join("\n"),
     subscription_ids: [...subscriptionIDs],
+    subscription_exclude_ids: [...subscriptionExcludeIDs],
     reverse_proxy_miss_action: platform.reverse_proxy_miss_action,
     reverse_proxy_empty_account_behavior: platform.reverse_proxy_empty_account_behavior,
     reverse_proxy_fixed_account_header: platform.reverse_proxy_fixed_account_header,
@@ -104,6 +119,7 @@ function toPlatformPayloadBase(values: PlatformFormValues) {
     regex_filters: parseLinesToList(values.regex_filters_text),
     region_filters: parseLinesToList(values.region_filters_text, (value) => value.toLowerCase()),
     subscription_ids: [...values.subscription_ids],
+    subscription_exclude_ids: [...values.subscription_exclude_ids],
     reverse_proxy_miss_action: values.reverse_proxy_miss_action,
     reverse_proxy_empty_account_behavior: values.reverse_proxy_empty_account_behavior,
     reverse_proxy_fixed_account_header: parseHeaderLines(values.reverse_proxy_fixed_account_header).join("\n"),

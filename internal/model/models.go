@@ -43,6 +43,7 @@ type Platform struct {
 	RegexFilters                     []string
 	RegionFilters                    []string
 	SubscriptionIDs                  []string `json:"subscription_ids"`
+	SubscriptionExcludeIDs           []string `json:"subscription_exclude_ids"`
 	ReverseProxyMissAction           string   `json:"reverse_proxy_miss_action"`
 	ReverseProxyEmptyAccountBehavior string   `json:"reverse_proxy_empty_account_behavior"`
 	ReverseProxyFixedAccountHeader   string   `json:"reverse_proxy_fixed_account_header"`
@@ -66,6 +67,7 @@ type Subscription struct {
 	Enabled                   bool   `json:"enabled"`
 	Ephemeral                 bool   `json:"ephemeral"`
 	IncrementalAliveNodes     bool   `json:"incremental_alive_nodes"`
+	DisableInvalidNodeCheck   bool   `json:"disable_invalid_node_check"`
 	EphemeralNodeEvictDelayNs int64  `json:"ephemeral_node_evict_delay_ns"`
 	CreatedAtNs               int64  `json:"created_at_ns"`
 	UpdatedAtNs               int64  `json:"updated_at_ns"`

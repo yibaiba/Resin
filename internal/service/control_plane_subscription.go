@@ -33,6 +33,7 @@ type SubscriptionResponse struct {
 	HealthyNodeCount        int    `json:"healthy_node_count"`
 	Ephemeral               bool   `json:"ephemeral"`
 	IncrementalAliveNodes   bool   `json:"incremental_alive_nodes"`
+	DisableInvalidNodeCheck bool   `json:"disable_invalid_node_check"`
 	EphemeralNodeEvictDelay string `json:"ephemeral_node_evict_delay"`
 	Enabled                 bool   `json:"enabled"`
 	CreatedAt               string `json:"created_at"`
@@ -75,6 +76,7 @@ func (s *ControlPlaneService) subToResponse(sub *subscription.Subscription) Subs
 		HealthyNodeCount:        healthyNodeCount,
 		Ephemeral:               sub.Ephemeral(),
 		IncrementalAliveNodes:   sub.IncrementalAliveNodes(),
+		DisableInvalidNodeCheck: sub.DisableInvalidNodeCheck(),
 		EphemeralNodeEvictDelay: time.Duration(sub.EphemeralNodeEvictDelayNs()).String(),
 		Enabled:                 sub.Enabled(),
 		CreatedAt:               time.Unix(0, sub.CreatedAtNs).UTC().Format(time.RFC3339Nano),
@@ -125,6 +127,7 @@ type CreateSubscriptionRequest struct {
 	Enabled                 *bool   `json:"enabled"`
 	Ephemeral               *bool   `json:"ephemeral"`
 	IncrementalAliveNodes   *bool   `json:"incremental_alive_nodes"`
+	DisableInvalidNodeCheck *bool   `json:"disable_invalid_node_check"`
 	EphemeralNodeEvictDelay *string `json:"ephemeral_node_evict_delay"`
 }
 
@@ -206,6 +209,10 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 	if req.IncrementalAliveNodes != nil {
 		incrementalAliveNodes = *req.IncrementalAliveNodes
 	}
+	disableInvalidNodeCheck := false
+	if req.DisableInvalidNodeCheck != nil {
+		disableInvalidNodeCheck = *req.DisableInvalidNodeCheck
+	}
 	ephemeralNodeEvictDelay := defaultSubscriptionEphemeralNodeEvictDelay
 	if req.EphemeralNodeEvictDelay != nil {
 		d, err := time.ParseDuration(*req.EphemeralNodeEvictDelay)
@@ -231,6 +238,7 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 		Enabled:                   enabled,
 		Ephemeral:                 ephemeral,
 		IncrementalAliveNodes:     incrementalAliveNodes,
+		DisableInvalidNodeCheck:   disableInvalidNodeCheck,
 		EphemeralNodeEvictDelayNs: int64(ephemeralNodeEvictDelay),
 		CreatedAtNs:               now,
 		UpdatedAtNs:               now,
@@ -244,6 +252,7 @@ func (s *ControlPlaneService) CreateSubscription(req CreateSubscriptionRequest) 
 	sub.SetSourceType(sourceType)
 	sub.SetContent(content)
 	sub.SetIncrementalAliveNodes(incrementalAliveNodes)
+	sub.SetDisableInvalidNodeCheck(disableInvalidNodeCheck)
 	sub.SetEphemeralNodeEvictDelayNs(int64(ephemeralNodeEvictDelay))
 	sub.CreatedAtNs = now
 	sub.UpdatedAtNs = now
@@ -355,6 +364,17 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 		newIncrementalAliveNodes = b
 	}
 
+	newDisableInvalidNodeCheck := sub.DisableInvalidNodeCheck()
+	flagChanged := false
+	if b, ok, err := patch.optionalBool("disable_invalid_node_check"); err != nil {
+		return nil, err
+	} else if ok {
+		if b != newDisableInvalidNodeCheck {
+			flagChanged = true
+		}
+		newDisableInvalidNodeCheck = b
+	}
+
 	newEphemeralNodeEvictDelay := sub.EphemeralNodeEvictDelayNs()
 	if d, ok, err := patch.optionalDurationString("ephemeral_node_evict_delay"); err != nil {
 		return nil, err
@@ -376,6 +396,7 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 		Enabled:                   newEnabled,
 		Ephemeral:                 newEphemeral,
 		IncrementalAliveNodes:     newIncrementalAliveNodes,
+		DisableInvalidNodeCheck:   newDisableInvalidNodeCheck,
 		EphemeralNodeEvictDelayNs: newEphemeralNodeEvictDelay,
 		CreatedAtNs:               sub.CreatedAtNs,
 		UpdatedAtNs:               now,
@@ -389,6 +410,7 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 	sub.SetContent(newContent)
 	sub.SetEphemeral(newEphemeral)
 	sub.SetIncrementalAliveNodes(newIncrementalAliveNodes)
+	sub.SetDisableInvalidNodeCheck(newDisableInvalidNodeCheck)
 	sub.SetEphemeralNodeEvictDelayNs(newEphemeralNodeEvictDelay)
 	sub.UpdatedAtNs = now
 
@@ -400,6 +422,9 @@ func (s *ControlPlaneService) UpdateSubscription(id string, patchJSON json.RawMe
 	}
 	if urlChanged || contentChanged {
 		go s.Scheduler.UpdateSubscription(sub)
+	}
+	if flagChanged && s.Pool != nil {
+		s.Pool.RebuildAllPlatforms()
 	}
 
 	r := s.subToResponse(sub)
@@ -456,6 +481,12 @@ func (s *ControlPlaneService) platformIDsAllowingSubscription(subscriptionID str
 			return true
 		}
 		for _, id := range plat.SubscriptionIDs {
+			if id == subscriptionID {
+				ids = append(ids, plat.ID)
+				return true
+			}
+		}
+		for _, id := range plat.SubscriptionExcludeIDs {
 			if id == subscriptionID {
 				ids = append(ids, plat.ID)
 				return true

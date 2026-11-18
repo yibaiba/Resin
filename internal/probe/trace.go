@@ -50,3 +50,16 @@ func ParseCloudflareTrace(body []byte) (netip.Addr, *string, error) {
 	}
 	return ip, &locValue, nil
 }
+
+// ParseEgressBody accepts a Cloudflare /cdn-cgi/trace body or a plain IP
+// (ipify-style). Residential landings often cannot fetch cloudflare.com.
+func ParseEgressBody(body []byte) (netip.Addr, *string, error) {
+	if ip, loc, err := ParseCloudflareTrace(body); err == nil {
+		return ip, loc, nil
+	}
+	raw := strings.TrimSpace(string(body))
+	if addr, err := netip.ParseAddr(raw); err == nil {
+		return addr, nil, nil
+	}
+	return ParseCloudflareTrace(body)
+}

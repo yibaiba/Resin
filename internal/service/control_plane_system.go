@@ -64,8 +64,8 @@ type ControlPlaneService struct {
 	EnvCfg                  *config.EnvConfig
 	EndpointRuntime         EndpointRuntime
 	DiagnosticTCPProber     DiagnosticTCPProber
-	OnUDPProbeConfigChanged  func()
-	OnNodeDNSConfigChanged   func([]string) error
+	OnUDPProbeConfigChanged func()
+	OnNodeDNSConfigChanged  func([]string) error
 
 	configMu       sync.Mutex
 	configVersion  int
@@ -108,6 +108,7 @@ var platformPatchAllowedFields = map[string]bool{
 	"regex_filters":                        true,
 	"region_filters":                       true,
 	"subscription_ids":                     true,
+	"subscription_exclude_ids":             true,
 	"reverse_proxy_miss_action":            true,
 	"reverse_proxy_empty_account_behavior": true,
 	"reverse_proxy_fixed_account_header":   true,
@@ -127,6 +128,7 @@ var subscriptionPatchAllowedFields = map[string]bool{
 	"enabled":                    true,
 	"ephemeral":                  true,
 	"incremental_alive_nodes":    true,
+	"disable_invalid_node_check": true,
 	"ephemeral_node_evict_delay": true,
 }
 

@@ -3,6 +3,7 @@ package outbound
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
@@ -212,8 +213,10 @@ func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound,
 	if resolver, ok := m.pool.(landingChainResolver); ok && resolver.HasUniqueLandingChain(hash) {
 		hops, found := resolver.UniqueLandingChainForNetwork(hash, N.NetworkUDP)
 		if !found {
+			log.Printf("[probe] skip udp node %s: chained landing has no usable udp hops", hash.Hex())
 			return nil, ErrSkipUDPProbe
 		}
+		log.Printf("[probe] node %s udp using chain hops %s", hash.Hex(), formatHopHashes(hops))
 		return m.EnsureChainedOutbound(hops, hash)
 	}
 	return m.directProbeOutbound(hash)
@@ -222,13 +225,23 @@ func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound,
 func (m *OutboundManager) outboundForProbe(hash node.Hash) (adapter.Outbound, error) {
 	if resolver, ok := m.pool.(landingChainResolver); ok {
 		if hops, found := resolver.UniqueLandingChain(hash); found {
+			log.Printf("[probe] node %s using chain hops %s", hash.Hex(), formatHopHashes(hops))
 			return m.EnsureChainedOutbound(hops, hash)
 		}
 		if resolver.HasUniqueLandingChain(hash) {
+			log.Printf("[probe] skip node %s: chained landing has no usable hops", hash.Hex())
 			return nil, ErrSkipProbe
 		}
 	}
 	return m.directProbeOutbound(hash)
+}
+
+func formatHopHashes(hops []node.Hash) string {
+	parts := make([]string, len(hops))
+	for i, hop := range hops {
+		parts[i] = hop.Hex()
+	}
+	return strings.Join(parts, ">")
 }
 
 func (m *OutboundManager) directProbeOutbound(hash node.Hash) (adapter.Outbound, error) {

@@ -53,6 +53,7 @@ const subscriptionCreateSchema = z.object({
   enabled: z.boolean(),
   ephemeral: z.boolean(),
   incremental_alive_nodes: z.boolean(),
+  disable_invalid_node_check: z.boolean(),
 }).superRefine((value, ctx) => {
   const url = value.url.trim();
   const content = value.content.trim();
@@ -88,10 +89,13 @@ const CREATE_FORM_DEFAULTS: SubscriptionCreateForm = {
   enabled: true,
   ephemeral: false,
   incremental_alive_nodes: false,
+  disable_invalid_node_check: false,
 };
 const SUBSCRIPTION_DISABLE_HINT = "禁用订阅后，相关节点不会参与平台路由、健康统计或自动探测。";
 const SUBSCRIPTION_EPHEMERAL_HINT = "临时订阅的非健康节点会在一段时间后被自动删除。订阅本身不会被删除。";
 const SUBSCRIPTION_INCREMENTAL_HINT = "开启后刷新时保留当前仍存活的旧节点，仅清理失效旧节点，并合并新订阅内容；关闭后仅保留刷新后的订阅内容。";
+const SUBSCRIPTION_DISABLE_INVALID_NODE_CHECK_HINT =
+  "打开后，该订阅在带前置的落地 Platform 上不因探活失败被剔除；未链式 Platform 仍只走健康节点。";
 const SUBSCRIPTION_SOURCE_HINT =
   "远程填写 HTTP/HTTPS 订阅 URL。vless://、hy2:// 等节点分享链接请选本地并粘贴内容。";
 
@@ -122,6 +126,7 @@ function subscriptionToEditForm(subscription: Subscription): SubscriptionEditFor
     enabled: subscription.enabled,
     ephemeral: subscription.ephemeral,
     incremental_alive_nodes: subscription.incremental_alive_nodes,
+    disable_invalid_node_check: subscription.disable_invalid_node_check,
   };
 }
 
@@ -224,6 +229,7 @@ export function SubscriptionPage() {
       enabled: true,
       ephemeral: false,
       incremental_alive_nodes: false,
+      disable_invalid_node_check: false,
     },
   });
 
@@ -290,6 +296,7 @@ export function SubscriptionPage() {
         enabled: formData.enabled,
         ephemeral: formData.ephemeral,
         incremental_alive_nodes: formData.incremental_alive_nodes,
+        disable_invalid_node_check: formData.disable_invalid_node_check,
         ...(formData.source_type === "remote"
           ? { url: formData.url.trim() }
           : { content: formData.content }),
@@ -440,6 +447,7 @@ export function SubscriptionPage() {
       enabled: values.enabled,
       ephemeral: values.ephemeral,
       incremental_alive_nodes: values.incremental_alive_nodes,
+      disable_invalid_node_check: values.disable_invalid_node_check,
       ...(values.source_type === "remote"
         ? { url: values.url.trim() }
         : { content: values.content }),
@@ -938,6 +946,21 @@ export function SubscriptionPage() {
                     </div>
                   </div>
 
+                  <div className="subscription-switch-item field-span-2">
+                    <label className="subscription-switch-label" htmlFor="edit-sub-disable-invalid-node-check">
+                      <span>{t("关闭检查失效节点")}</span>
+                      <span
+                        className="subscription-info-icon"
+                        title={t(SUBSCRIPTION_DISABLE_INVALID_NODE_CHECK_HINT)}
+                        aria-label={t(SUBSCRIPTION_DISABLE_INVALID_NODE_CHECK_HINT)}
+                        tabIndex={0}
+                      >
+                        <Info size={13} />
+                      </span>
+                    </label>
+                    <Switch id="edit-sub-disable-invalid-node-check" {...editForm.register("disable_invalid_node_check")} />
+                  </div>
+
                   {editEphemeral ? (
                     <div className="field-group field-span-2">
                       <label className="field-label" htmlFor="edit-sub-ephemeral-evict-delay">
@@ -1170,6 +1193,20 @@ export function SubscriptionPage() {
                     </span>
                   </label>
                   <Switch id="create-sub-incremental-alive-nodes" {...createForm.register("incremental_alive_nodes")} />
+                </div>
+                <div className="subscription-switch-item">
+                  <label className="subscription-switch-label" htmlFor="create-sub-disable-invalid-node-check">
+                    <span>{t("关闭检查失效节点")}</span>
+                    <span
+                      className="subscription-info-icon"
+                      title={t(SUBSCRIPTION_DISABLE_INVALID_NODE_CHECK_HINT)}
+                      aria-label={t(SUBSCRIPTION_DISABLE_INVALID_NODE_CHECK_HINT)}
+                      tabIndex={0}
+                    >
+                      <Info size={13} />
+                    </span>
+                  </label>
+                  <Switch id="create-sub-disable-invalid-node-check" {...createForm.register("disable_invalid_node_check")} />
                 </div>
               </div>
 

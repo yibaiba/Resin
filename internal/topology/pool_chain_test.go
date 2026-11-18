@@ -274,6 +274,51 @@ func TestUniqueLandingChain_PrefersUDPCapableHop(t *testing.T) {
 	}
 }
 
+func TestUniqueLandingChain_PrefersNonVisionHop(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.SubscriptionIDs = []string{"hop-sub"}
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	visionHash := addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop-vision","flow":"xtls-rprx-vision"}`, "198.51.100.1")
+	plainHash := addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop-ws","transport":{"type":"ws"}}`, "198.51.100.3")
+	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
+	hopSub, ok := subMgr.Get("hop-sub")
+	if !ok {
+		t.Fatal("hop-sub missing")
+	}
+	managed := subscription.NewManagedNodes()
+	managed.StoreNode(visionHash, subscription.ManagedNode{Tags: []string{"hop-sub"}})
+	managed.StoreNode(plainHash, subscription.ManagedNode{Tags: []string{"hop-sub"}})
+	hopSub.SwapManagedNodes(managed)
+
+	plainEntry, _ := pool.GetEntry(plainHash)
+	var tcpOut adapter.Outbound = &networkLimitedOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     []string{"tcp"},
+	}
+	plainEntry.Outbound.Store(&tcpOut)
+	pool.RecordUDPProbeResult(visionHash, true)
+
+	pool.RebuildPlatform(hop)
+	pool.RebuildPlatform(landing)
+
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != plainHash {
+		t.Fatalf("http chain = %v ok=%v, want non-vision hop %s (vision=%s)", hops, ok, plainHash.Hex(), visionHash.Hex())
+	}
+	udpHops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp")
+	if !ok || len(udpHops) != 1 || udpHops[0] != visionHash {
+		t.Fatalf("udp chain = %v ok=%v, want vision UDP hop %s", udpHops, ok, visionHash.Hex())
+	}
+}
+
 func TestUniqueLandingChainForNetwork_UDPRequiresUDPHop(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	pool := newTestPool(subMgr)
@@ -306,5 +351,47 @@ func TestUniqueLandingChainForNetwork_UDPRequiresUDPHop(t *testing.T) {
 	}
 	if udpHops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp"); ok {
 		t.Fatalf("udp chain should be unavailable, hops=%v", udpHops)
+	}
+}
+
+func TestPool_DisableInvalidNodeCheck_ChainedLandingAllowsUnhealthy(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	def := platform.NewPlatform(platform.DefaultPlatformID, platform.DefaultPlatformName, nil, nil)
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.SubscriptionIDs = []string{"hop-sub"}
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(def)
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	_ = addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop"}`, "198.51.100.1")
+	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
+	land, ok := pool.GetEntry(landHash)
+	if !ok {
+		t.Fatal("landing node missing")
+	}
+	land.RestoreTCPHealth(3, time.Now().UnixNano())
+	land.SetEgressIP(netip.Addr{})
+
+	pool.RebuildAllPlatforms()
+	if landing.View().Contains(landHash) {
+		t.Fatal("unhealthy landing must stay out while the flag is off")
+	}
+
+	sub := subMgr.Lookup("land-sub")
+	if sub == nil {
+		t.Fatal("land-sub missing")
+	}
+	sub.SetDisableInvalidNodeCheck(true)
+	pool.RebuildAllPlatforms()
+	if !landing.View().Contains(landHash) {
+		t.Fatal("chained landing should keep the node when disable_invalid_node_check is on")
+	}
+	if def.View().Contains(landHash) {
+		t.Fatal("unchained Default must still require health")
 	}
 }

@@ -27,6 +27,7 @@ type PlatformResponse struct {
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
 	SubscriptionIDs                  []string `json:"subscription_ids"`
+	SubscriptionExcludeIDs           []string `json:"subscription_exclude_ids"`
 	RoutableNodeCount                int      `json:"routable_node_count"`
 	ReverseProxyMissAction           string   `json:"reverse_proxy_miss_action"`
 	ReverseProxyEmptyAccountBehavior string   `json:"reverse_proxy_empty_account_behavior"`
@@ -50,6 +51,7 @@ func platformToResponse(p model.Platform) PlatformResponse {
 		RegexFilters:                     append([]string{}, p.RegexFilters...),
 		RegionFilters:                    append([]string{}, p.RegionFilters...),
 		SubscriptionIDs:                  append([]string{}, p.SubscriptionIDs...),
+		SubscriptionExcludeIDs:           append([]string{}, p.SubscriptionExcludeIDs...),
 		RoutableNodeCount:                0,
 		ReverseProxyMissAction:           p.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: behavior,
@@ -82,6 +84,7 @@ type platformConfig struct {
 	RegexFilters                     []string
 	RegionFilters                    []string
 	SubscriptionIDs                  []string
+	SubscriptionExcludeIDs           []string
 	ReverseProxyMissAction           string
 	ReverseProxyEmptyAccountBehavior string
 	ReverseProxyFixedAccountHeader   string
@@ -115,6 +118,7 @@ func (s *ControlPlaneService) defaultPlatformConfig(name string) platformConfig 
 		RegexFilters:           append([]string(nil), s.EnvCfg.DefaultPlatformRegexFilters...),
 		RegionFilters:          append([]string(nil), s.EnvCfg.DefaultPlatformRegionFilters...),
 		SubscriptionIDs:        []string{},
+		SubscriptionExcludeIDs: []string{},
 		ReverseProxyMissAction: s.EnvCfg.DefaultPlatformReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(
 			s.EnvCfg.DefaultPlatformReverseProxyEmptyAccountBehavior,
@@ -134,6 +138,7 @@ func platformConfigFromModel(mp model.Platform) platformConfig {
 		RegexFilters:                     append([]string(nil), mp.RegexFilters...),
 		RegionFilters:                    append([]string(nil), mp.RegionFilters...),
 		SubscriptionIDs:                  append([]string{}, mp.SubscriptionIDs...),
+		SubscriptionExcludeIDs:           append([]string{}, mp.SubscriptionExcludeIDs...),
 		ReverseProxyMissAction:           mp.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: normalizePlatformEmptyAccountBehavior(mp.ReverseProxyEmptyAccountBehavior),
 		ReverseProxyFixedAccountHeader:   normalizeHeaderFieldName(mp.ReverseProxyFixedAccountHeader),
@@ -154,6 +159,7 @@ func (cfg platformConfig) toModel(id string, updatedAtNs int64) model.Platform {
 		RegexFilters:                     append([]string(nil), cfg.RegexFilters...),
 		RegionFilters:                    append([]string(nil), cfg.RegionFilters...),
 		SubscriptionIDs:                  append([]string{}, cfg.SubscriptionIDs...),
+		SubscriptionExcludeIDs:           append([]string{}, cfg.SubscriptionExcludeIDs...),
 		ReverseProxyMissAction:           cfg.ReverseProxyMissAction,
 		ReverseProxyEmptyAccountBehavior: cfg.ReverseProxyEmptyAccountBehavior,
 		ReverseProxyFixedAccountHeader:   cfg.ReverseProxyFixedAccountHeader,
@@ -187,6 +193,7 @@ func (cfg platformConfig) toRuntime(id string) (*platform.Platform, error) {
 	configured.FallbackPlatformIDs = append([]string(nil), cfg.FallbackPlatformIDs...)
 	configured.ChainPlatformIDs = append([]string(nil), cfg.ChainPlatformIDs...)
 	configured.SubscriptionIDs = append([]string{}, cfg.SubscriptionIDs...)
+	configured.SubscriptionExcludeIDs = append([]string{}, cfg.SubscriptionExcludeIDs...)
 	configured.RotationIntervalNs = cfg.RotationIntervalNs
 	configured.RotationStrategy = platform.ParseRotationStrategy(cfg.RotationStrategy)
 	return configured, nil
@@ -306,7 +313,23 @@ func setPlatformEmptyAccountBehavior(cfg *platformConfig, behavior string) *Serv
 }
 
 func (s *ControlPlaneService) normalizeAndValidateSubscriptionIDs(ids []string) ([]string, *ServiceError) {
-	normalized, err := platform.NormalizeSubscriptionIDs(ids)
+	return s.normalizeAndValidateSubscriptionIDField(ids, "subscription_ids")
+}
+
+func (s *ControlPlaneService) normalizeAndValidateSubscriptionExcludeIDs(ids []string) ([]string, *ServiceError) {
+	return s.normalizeAndValidateSubscriptionIDField(ids, "subscription_exclude_ids")
+}
+
+func (s *ControlPlaneService) normalizeAndValidateSubscriptionIDField(ids []string, field string) ([]string, *ServiceError) {
+	var (
+		normalized []string
+		err        error
+	)
+	if field == "subscription_exclude_ids" {
+		normalized, err = platform.NormalizeSubscriptionExcludeIDs(ids)
+	} else {
+		normalized, err = platform.NormalizeSubscriptionIDs(ids)
+	}
 	if err != nil {
 		return nil, invalidArg(err.Error())
 	}
@@ -315,10 +338,25 @@ func (s *ControlPlaneService) normalizeAndValidateSubscriptionIDs(ids []string) 
 	}
 	for _, id := range normalized {
 		if s.SubMgr == nil || s.SubMgr.Lookup(id) == nil {
-			return nil, invalidArg(fmt.Sprintf("subscription_ids: subscription %q does not exist", id))
+			return nil, invalidArg(fmt.Sprintf("%s: subscription %q does not exist", field, id))
 		}
 	}
 	return normalized, nil
+}
+
+func (s *ControlPlaneService) normalizeSubscriptionFilters(allow, exclude []string) ([]string, []string, *ServiceError) {
+	allowIDs, err := s.normalizeAndValidateSubscriptionIDs(allow)
+	if err != nil {
+		return nil, nil, err
+	}
+	excludeIDs, err := s.normalizeAndValidateSubscriptionExcludeIDs(exclude)
+	if err != nil {
+		return nil, nil, err
+	}
+	if overlap := platform.ValidateSubscriptionFilterOverlap(allowIDs, excludeIDs); overlap != nil {
+		return nil, nil, invalidArg(overlap.Error())
+	}
+	return allowIDs, excludeIDs, nil
 }
 
 func setPlatformAllocationPolicy(cfg *platformConfig, policy string) *ServiceError {
@@ -422,6 +460,7 @@ type CreatePlatformRequest struct {
 	RegexFilters                     []string `json:"regex_filters"`
 	RegionFilters                    []string `json:"region_filters"`
 	SubscriptionIDs                  []string `json:"subscription_ids"`
+	SubscriptionExcludeIDs           []string `json:"subscription_exclude_ids"`
 	ReverseProxyMissAction           *string  `json:"reverse_proxy_miss_action"`
 	ReverseProxyEmptyAccountBehavior *string  `json:"reverse_proxy_empty_account_behavior"`
 	ReverseProxyFixedAccountHeader   *string  `json:"reverse_proxy_fixed_account_header"`
@@ -473,6 +512,9 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	if req.SubscriptionIDs != nil {
 		cfg.SubscriptionIDs = req.SubscriptionIDs
 	}
+	if req.SubscriptionExcludeIDs != nil {
+		cfg.SubscriptionExcludeIDs = req.SubscriptionExcludeIDs
+	}
 	if req.ReverseProxyMissAction != nil {
 		if err := setPlatformMissAction(&cfg, *req.ReverseProxyMissAction); err != nil {
 			return nil, err
@@ -517,11 +559,12 @@ func (s *ControlPlaneService) CreatePlatform(req CreatePlatformRequest) (*Platfo
 	if err := validatePlatformConfig(&cfg, true); err != nil {
 		return nil, err
 	}
-	if ids, err := s.normalizeAndValidateSubscriptionIDs(cfg.SubscriptionIDs); err != nil {
-		return nil, err
-	} else {
-		cfg.SubscriptionIDs = ids
+	allowIDs, excludeIDs, filterErr := s.normalizeSubscriptionFilters(cfg.SubscriptionIDs, cfg.SubscriptionExcludeIDs)
+	if filterErr != nil {
+		return nil, filterErr
 	}
+	cfg.SubscriptionIDs = allowIDs
+	cfg.SubscriptionExcludeIDs = excludeIDs
 
 	id := uuid.New().String()
 	mp, plat, svcErr := s.compileAndUpsertPlatform(id, cfg)
@@ -611,6 +654,11 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	} else if ok {
 		cfg.SubscriptionIDs = ids
 	}
+	if ids, ok, err := patch.optionalStringSlice("subscription_exclude_ids"); err != nil {
+		return nil, err
+	} else if ok {
+		cfg.SubscriptionExcludeIDs = ids
+	}
 
 	if ma, ok, err := patch.optionalString("reverse_proxy_miss_action"); err != nil {
 		return nil, err
@@ -671,11 +719,12 @@ func (s *ControlPlaneService) UpdatePlatform(id string, patchJSON json.RawMessag
 	if err := validatePlatformConfig(&cfg, regionFiltersPatched); err != nil {
 		return nil, err
 	}
-	if ids, err := s.normalizeAndValidateSubscriptionIDs(cfg.SubscriptionIDs); err != nil {
-		return nil, err
-	} else {
-		cfg.SubscriptionIDs = ids
+	allowIDs, excludeIDs, filterErr := s.normalizeSubscriptionFilters(cfg.SubscriptionIDs, cfg.SubscriptionExcludeIDs)
+	if filterErr != nil {
+		return nil, filterErr
 	}
+	cfg.SubscriptionIDs = allowIDs
+	cfg.SubscriptionExcludeIDs = excludeIDs
 
 	mp, plat, svcErr := s.compileAndUpsertPlatform(id, cfg)
 	if svcErr != nil {
@@ -778,9 +827,10 @@ type PreviewFilterRequest struct {
 }
 
 type PlatformSpecFilter struct {
-	RegexFilters    []string `json:"regex_filters"`
-	RegionFilters   []string `json:"region_filters"`
-	SubscriptionIDs []string `json:"subscription_ids"`
+	RegexFilters           []string `json:"regex_filters"`
+	RegionFilters          []string `json:"region_filters"`
+	SubscriptionIDs        []string `json:"subscription_ids"`
+	SubscriptionExcludeIDs []string `json:"subscription_exclude_ids"`
 }
 
 // NodeSummary is the API response for a node.
@@ -925,6 +975,7 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 	var regexFilters node.TagFilter
 	var regionFilters []string
 	var subscriptionIDs []string
+	var subscriptionExcludeIDs []string
 
 	if hasPlatformID {
 		plat, ok := s.Pool.GetPlatform(*req.PlatformID)
@@ -934,6 +985,7 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 		regexFilters = plat.RegexFilters
 		regionFilters = plat.RegionFilters
 		subscriptionIDs = append([]string{}, plat.SubscriptionIDs...)
+		subscriptionExcludeIDs = append([]string{}, plat.SubscriptionExcludeIDs...)
 	} else {
 		compiled, err := platform.CompileRegexFilters(req.PlatformSpec.RegexFilters)
 		if err != nil {
@@ -944,11 +996,12 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 		if err := platform.ValidateRegionFilters(regionFilters); err != nil {
 			return nil, invalidArg(err.Error())
 		}
-		ids, svcErr := s.normalizeAndValidateSubscriptionIDs(req.PlatformSpec.SubscriptionIDs)
+		allowIDs, excludeIDs, svcErr := s.normalizeSubscriptionFilters(req.PlatformSpec.SubscriptionIDs, req.PlatformSpec.SubscriptionExcludeIDs)
 		if svcErr != nil {
 			return nil, svcErr
 		}
-		subscriptionIDs = ids
+		subscriptionIDs = allowIDs
+		subscriptionExcludeIDs = excludeIDs
 	}
 
 	var subLookup node.SubLookupFunc
@@ -957,7 +1010,7 @@ func (s *ControlPlaneService) PreviewFilter(req PreviewFilterRequest) ([]NodeSum
 	}
 	var result []NodeSummary
 	s.Pool.Range(func(h node.Hash, entry *node.NodeEntry) bool {
-		if !entry.MatchesSubscriptionAllowlist(subscriptionIDs, subLookup) {
+		if !entry.MatchesSubscriptionFilters(subscriptionIDs, subscriptionExcludeIDs, subLookup) {
 			return true
 		}
 		if !entry.MatchTagFilter(regexFilters, subLookup) {

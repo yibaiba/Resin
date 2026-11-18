@@ -86,6 +86,9 @@ func TestMigrateStateDB_AddsEnabledToExistingEndpoints(t *testing.T) {
 			id TEXT PRIMARY KEY,
 			regex_filters_json TEXT NOT NULL DEFAULT '[]'
 		);
+		CREATE TABLE subscriptions (
+			id TEXT PRIMARY KEY
+		);
 		CREATE TABLE endpoints (
 			id TEXT PRIMARY KEY,
 			port INTEGER NOT NULL UNIQUE CHECK (port BETWEEN 1 AND 65535),
@@ -133,6 +136,9 @@ func TestMigrateStateDB_ConvertsLegacyRegexFiltersToMustRules(t *testing.T) {
 		CREATE TABLE platforms (
 			id TEXT PRIMARY KEY,
 			regex_filters_json TEXT NOT NULL DEFAULT '[]'
+		);
+		CREATE TABLE subscriptions (
+			id TEXT PRIMARY KEY
 		);
 		INSERT INTO platforms (id, regex_filters_json) VALUES
 			('legacy', '["^Provider/.*","!literal","\\!escaped",""]'),
@@ -245,11 +251,17 @@ func TestMigrateStateDB_LegacyBaselineAdvancesToLatest(t *testing.T) {
 	if ok, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes"); err != nil || !ok {
 		t.Fatalf("expected migrated column subscriptions.incremental_alive_nodes, ok=%v err=%v", ok, err)
 	}
+	if ok, err := hasTableColumn(db, "subscriptions", "disable_invalid_node_check"); err != nil || !ok {
+		t.Fatalf("expected migrated column subscriptions.disable_invalid_node_check, ok=%v err=%v", ok, err)
+	}
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
 	}
 	if ok, err := hasTableColumn(db, "platforms", "chain_platform_ids_json"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.chain_platform_ids_json, ok=%v err=%v", ok, err)
+	}
+	if ok, err := hasTableColumn(db, "platforms", "subscription_exclude_ids_json"); err != nil || !ok {
+		t.Fatalf("expected migrated column platforms.subscription_exclude_ids_json, ok=%v err=%v", ok, err)
 	}
 }
 
@@ -267,6 +279,9 @@ func TestMigrateStateDB_AddsPlatformChainColumn(t *testing.T) {
 		CREATE TABLE platforms (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE
+		);
+		CREATE TABLE subscriptions (
+			id TEXT PRIMARY KEY
 		);
 		INSERT INTO platforms (id, name) VALUES ('p1', 'Existing');
 	`)
@@ -335,6 +350,9 @@ func TestMigrateStateDB_AddsIncrementalAliveNodesToLegacySubscriptions(t *testin
 
 	if ok, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes"); err != nil || !ok {
 		t.Fatalf("expected migrated column subscriptions.incremental_alive_nodes, ok=%v err=%v", ok, err)
+	}
+	if ok, err := hasTableColumn(db, "subscriptions", "disable_invalid_node_check"); err != nil || !ok {
+		t.Fatalf("expected migrated column subscriptions.disable_invalid_node_check, ok=%v err=%v", ok, err)
 	}
 
 	var version int
@@ -426,8 +444,59 @@ func TestMigrateStateDB_NormalizesLegacyRandomMissAction(t *testing.T) {
 	if ok, err := hasTableColumn(db, "subscriptions", "incremental_alive_nodes"); err != nil || !ok {
 		t.Fatalf("expected migrated column subscriptions.incremental_alive_nodes, ok=%v err=%v", ok, err)
 	}
+	if ok, err := hasTableColumn(db, "subscriptions", "disable_invalid_node_check"); err != nil || !ok {
+		t.Fatalf("expected migrated column subscriptions.disable_invalid_node_check, ok=%v err=%v", ok, err)
+	}
 	if ok, err := hasTableColumn(db, "platforms", "passive_circuit_breaker_disabled"); err != nil || !ok {
 		t.Fatalf("expected migrated column platforms.passive_circuit_breaker_disabled, ok=%v err=%v", ok, err)
+	}
+}
+
+func TestMigrateStateDB_AddsDisableInvalidNodeCheckToSubscriptions(t *testing.T) {
+	dir := t.TempDir()
+	db, err := OpenDB(dir + "/state.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE schema_migrations (version uint64 NOT NULL PRIMARY KEY, dirty bool NOT NULL);
+		INSERT INTO schema_migrations (version, dirty) VALUES (16, 0);
+		CREATE TABLE subscriptions (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			source_type TEXT NOT NULL DEFAULT 'remote',
+			url TEXT NOT NULL,
+			content TEXT NOT NULL DEFAULT '',
+			update_interval_ns INTEGER NOT NULL,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			ephemeral INTEGER NOT NULL DEFAULT 0,
+			incremental_alive_nodes INTEGER NOT NULL DEFAULT 0,
+			ephemeral_node_evict_delay_ns INTEGER NOT NULL,
+			created_at_ns INTEGER NOT NULL,
+			updated_at_ns INTEGER NOT NULL
+		);
+		INSERT INTO subscriptions (
+			id, name, url, update_interval_ns, ephemeral_node_evict_delay_ns, created_at_ns, updated_at_ns
+		) VALUES ('sub-1', 'Existing', 'https://example.com/sub', 1, 1, 1, 1);
+	`)
+	if err != nil {
+		t.Fatalf("create version 16 schema: %v", err)
+	}
+
+	if err := MigrateStateDB(db); err != nil {
+		t.Fatalf("MigrateStateDB: %v", err)
+	}
+	if ok, err := hasTableColumn(db, "subscriptions", "disable_invalid_node_check"); err != nil || !ok {
+		t.Fatalf("expected migrated column disable_invalid_node_check, ok=%v err=%v", ok, err)
+	}
+	var flag int
+	if err := db.QueryRow(`SELECT disable_invalid_node_check FROM subscriptions WHERE id = 'sub-1'`).Scan(&flag); err != nil {
+		t.Fatalf("read migrated flag: %v", err)
+	}
+	if flag != 0 {
+		t.Fatalf("existing subscription disable_invalid_node_check = %d, want 0", flag)
 	}
 }
 
@@ -524,6 +593,7 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 		RotationIntervalNs:            500,
 		RotationStrategy:              "REQUIRE_NEW_IP",
 		SubscriptionIDs:               []string{"sub-a", "sub-b"},
+		SubscriptionExcludeIDs:        []string{"sub-c"},
 		UpdatedAtNs:                   now,
 	}
 	if err := repo.UpsertPlatform(p); err != nil {
@@ -553,6 +623,9 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	if len(got.SubscriptionIDs) != 2 || got.SubscriptionIDs[0] != "sub-a" || got.SubscriptionIDs[1] != "sub-b" {
 		t.Fatalf("subscription ids did not round-trip: %+v", got.SubscriptionIDs)
 	}
+	if len(got.SubscriptionExcludeIDs) != 1 || got.SubscriptionExcludeIDs[0] != "sub-c" {
+		t.Fatalf("subscription exclude ids did not round-trip: %+v", got.SubscriptionExcludeIDs)
+	}
 
 	affected, err := repo.RemoveSubscriptionIDFromPlatforms("sub-a")
 	if err != nil {
@@ -567,6 +640,23 @@ func TestStateRepo_Platforms_CRUD(t *testing.T) {
 	}
 	if len(got.SubscriptionIDs) != 1 || got.SubscriptionIDs[0] != "sub-b" {
 		t.Fatalf("subscription ids after remove = %v, want [sub-b]", got.SubscriptionIDs)
+	}
+	if len(got.SubscriptionExcludeIDs) != 1 || got.SubscriptionExcludeIDs[0] != "sub-c" {
+		t.Fatalf("exclude ids after allowlist remove = %v, want [sub-c]", got.SubscriptionExcludeIDs)
+	}
+	affected, err = repo.RemoveSubscriptionIDFromPlatforms("sub-c")
+	if err != nil {
+		t.Fatalf("RemoveSubscriptionIDFromPlatforms exclude: %v", err)
+	}
+	if len(affected) != 1 || affected[0] != "plat-1" {
+		t.Fatalf("affected exclude platforms = %v, want [plat-1]", affected)
+	}
+	got, err = repo.GetPlatform("plat-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.SubscriptionExcludeIDs) != 0 {
+		t.Fatalf("exclude ids after remove = %v, want empty", got.SubscriptionExcludeIDs)
 	}
 
 	if err := repo.UpsertSubscription(model.Subscription{
@@ -827,6 +917,18 @@ func TestStateRepo_Subscriptions_CRUD(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].URL != "https://example.com/sub" {
 		t.Fatalf("unexpected list: %+v", list)
+	}
+	if list[0].DisableInvalidNodeCheck {
+		t.Fatal("expected disable_invalid_node_check default false")
+	}
+
+	s.DisableInvalidNodeCheck = true
+	if err := repo.UpsertSubscription(s); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = repo.ListSubscriptions()
+	if !list[0].DisableInvalidNodeCheck {
+		t.Fatal("expected disable_invalid_node_check persisted true")
 	}
 
 	// Update.

@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
+import { useMemo } from "react";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import { Listbox } from "../../components/ui/Listbox";
@@ -29,19 +29,19 @@ type OrderedListProps = {
 
 export function OrderedPlatformList(props: OrderedListProps) {
   const { t } = useI18n();
-  const [candidate, setCandidate] = useState("");
+  const ids = props.ids ?? [];
   const platformNames = useMemo(() => new Map(props.platforms.map((item) => [item.id, item.name])), [props.platforms]);
-  const atMax = typeof props.max === "number" && props.ids.length >= props.max;
-  const available = props.platforms.filter((item) => item.id !== props.platformID && !props.ids.includes(item.id));
-  const add = () => {
-    if (!candidate || atMax) return;
-    props.onChange([...props.ids, candidate]);
-    setCandidate("");
-  };
+  const atMax = typeof props.max === "number" && ids.length >= props.max;
+  const choices = props.platforms.filter((item) => item.id !== props.platformID);
+  const options = choices.map((item) => ({
+    value: item.id,
+    label: item.name,
+    disabled: atMax && !ids.includes(item.id),
+  }));
   const move = (index: number, delta: number) => {
     const target = index + delta;
-    if (target < 0 || target >= props.ids.length) return;
-    const next = [...props.ids];
+    if (target < 0 || target >= ids.length) return;
+    const next = [...ids];
     [next[index], next[target]] = [next[target], next[index]];
     props.onChange(next);
   };
@@ -52,33 +52,31 @@ export function OrderedPlatformList(props: OrderedListProps) {
         <h5>{props.heading}</h5>
         <p>{props.hint}</p>
       </div>
-      <div className="field-group">
+      <div className="field-group field-span-2">
         <label className="field-label" htmlFor={`${props.idPrefix}-platform`}>{props.addLabel}</label>
-        <div className="fallback-add-row">
-          <Listbox
-            id={`${props.idPrefix}-platform`}
-            value={candidate}
-            onChange={setCandidate}
-            aria-label={props.selectLabel}
-            disabled={atMax || available.length === 0}
-            placeholder={available.length && !atMax ? t("选择平台") : t("没有可添加的平台")}
-            options={available.map((item) => ({ value: item.id, label: item.name }))}
-          />
-          <Button variant="secondary" size="sm" onClick={add} disabled={!candidate || atMax}><Plus size={15} />{t("添加")}</Button>
-        </div>
+        <Listbox
+          id={`${props.idPrefix}-platform`}
+          multiple
+          value={ids}
+          onChange={props.onChange}
+          aria-label={props.selectLabel}
+          disabled={choices.length === 0}
+          placeholder={choices.length ? t("点选可多选，已选项会显示在下方") : t("没有可添加的平台")}
+          options={options}
+        />
       </div>
-      <div className="field-group fallback-order-field">
+      <div className="field-group field-span-2 fallback-order-field">
         <span className="field-label">{props.orderLabel}</span>
-        {props.ids.length === 0 ? <div className="fallback-empty"><strong>{props.emptyTitle}</strong><p>{props.emptyHint}</p></div> : null}
+        {ids.length === 0 ? <div className="fallback-empty"><strong>{props.emptyTitle}</strong><p>{props.emptyHint}</p></div> : null}
         <ol className="fallback-list">
-          {props.ids.map((id, index) => (
+          {ids.map((id, index) => (
             <li key={id}>
               <span className="fallback-order">{index + 1}</span>
               <span className="fallback-name">{platformNames.get(id) ?? id}</span>
               <div className="fallback-actions">
                 <Button variant="ghost" size="sm" onClick={() => move(index, -1)} disabled={index === 0} title={t("上移")} aria-label={t("上移")}><ArrowUp size={14} /></Button>
-                <Button variant="ghost" size="sm" onClick={() => move(index, 1)} disabled={index === props.ids.length - 1} title={t("下移")} aria-label={t("下移")}><ArrowDown size={14} /></Button>
-                <Button variant="ghost" size="sm" onClick={() => props.onChange(props.ids.filter((item) => item !== id))} title={t("移除")} aria-label={t("移除")}><Trash2 size={14} /></Button>
+                <Button variant="ghost" size="sm" onClick={() => move(index, 1)} disabled={index === ids.length - 1} title={t("下移")} aria-label={t("下移")}><ArrowDown size={14} /></Button>
+                <Button variant="ghost" size="sm" onClick={() => props.onChange(ids.filter((item) => item !== id))} title={t("移除")} aria-label={t("移除")}><Trash2 size={14} /></Button>
               </div>
             </li>
           ))}
@@ -114,7 +112,7 @@ export function PlatformRoutingSettings(props: Props) {
         ids={props.chainIDs}
         onChange={props.onChainChange}
         heading={t("链式代理")}
-        hint={t("流量按顺序先走这些前置 Platform 的节点，再走本平台落地。空着就是直连。家宽等本机打不通的节点只能放在带前置的落地平台里。")}
+        hint={t("流量按顺序先走这些前置 Platform，再从本平台节点落地。空着就是直连。前置节点不会并进本平台；本平台只用允许的订阅和过滤规则里的节点。")}
         addLabel={t("添加前置 Platform")}
         selectLabel={t("选择前置平台")}
         emptyTitle={t("未配置前置 Platform")}

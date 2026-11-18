@@ -23,6 +23,7 @@ func TestBuildFromModel_Success(t *testing.T) {
 		RotationIntervalNs:               1000,
 		RotationStrategy:                 "PREFER_NEW_IP",
 		SubscriptionIDs:                  []string{"sub-1", "sub-2"},
+		SubscriptionExcludeIDs:           []string{"sub-x"},
 	}
 
 	plat, err := BuildFromModel(mp)
@@ -70,6 +71,9 @@ func TestBuildFromModel_Success(t *testing.T) {
 	}
 	if len(plat.SubscriptionIDs) != 2 || plat.SubscriptionIDs[0] != "sub-1" || plat.SubscriptionIDs[1] != "sub-2" {
 		t.Fatalf("subscription ids mismatch: %+v", plat.SubscriptionIDs)
+	}
+	if len(plat.SubscriptionExcludeIDs) != 1 || plat.SubscriptionExcludeIDs[0] != "sub-x" {
+		t.Fatalf("subscription exclude ids mismatch: %+v", plat.SubscriptionExcludeIDs)
 	}
 }
 

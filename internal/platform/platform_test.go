@@ -432,6 +432,118 @@ func TestPlatform_EvaluateNode_SubscriptionAllowlist(t *testing.T) {
 	}
 }
 
+func TestPlatform_EvaluateNode_SubscriptionExclude(t *testing.T) {
+	p := NewPlatform("p-ex", "CatchAllMinusHome", nil, nil)
+	p.SubscriptionExcludeIDs = []string{"home-sub"}
+
+	keepHash := makeHash(`{"type":"ss","n":"vps"}`)
+	dropHash := makeHash(`{"type":"ss","n":"home"}`)
+	keep := makeFullyRoutableEntry(keepHash, "vps-sub")
+	drop := makeFullyRoutableEntry(dropHash, "home-sub")
+
+	lookup := func(subID string, hash node.Hash) (string, bool, []string, bool) {
+		return subID, true, []string{"node"}, true
+	}
+
+	p.FullRebuild(func(fn func(node.Hash, *node.NodeEntry) bool) {
+		fn(keepHash, keep)
+		fn(dropHash, drop)
+	}, lookup, usGeoLookup)
+
+	if !p.View().Contains(keepHash) {
+		t.Fatal("non-excluded subscription node should remain routable")
+	}
+	if p.View().Contains(dropHash) {
+		t.Fatal("excluded subscription node should leave the view")
+	}
+}
+
+func flagLookupFor(ids ...string) node.DisableInvalidNodeCheckFunc {
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return func(subID string) bool {
+		_, ok := set[subID]
+		return ok
+	}
+}
+
+func TestPlatform_EvaluateNode_DisableInvalidNodeCheck(t *testing.T) {
+	h := makeHash(`{"type":"ss","role":"home"}`)
+	unhealthy := func() *node.NodeEntry {
+		entry := makeFullyRoutableEntry(h, "sub1")
+		entry.RestoreTCPHealth(3, time.Now().UnixNano())
+		entry.SetEgressIP(netip.Addr{})
+		return entry
+	}
+	rebuild := func(p *Platform, entry *node.NodeEntry, flags node.DisableInvalidNodeCheckFunc) {
+		p.FullRebuildWithFlags(func(fn func(node.Hash, *node.NodeEntry) bool) {
+			fn(h, entry)
+		}, alwaysLookup, usGeoLookup, flags)
+	}
+
+	t.Run("chained with flag keeps circuit-open node", func(t *testing.T) {
+		p := NewPlatform("landing", "Landing", nil, nil)
+		p.ChainPlatformIDs = []string{"hop"}
+		rebuild(p, unhealthy(), flagLookupFor("sub1"))
+		if p.View().Size() != 1 {
+			t.Fatal("chained landing with flag should keep the node")
+		}
+	})
+
+	t.Run("unchained still requires health", func(t *testing.T) {
+		p := NewPlatform("direct", "Direct", nil, nil)
+		rebuild(p, unhealthy(), flagLookupFor("sub1"))
+		if p.View().Size() != 0 {
+			t.Fatal("unchained platform must still require health")
+		}
+	})
+
+	t.Run("chained without flag still requires health", func(t *testing.T) {
+		p := NewPlatform("landing", "Landing", nil, nil)
+		p.ChainPlatformIDs = []string{"hop"}
+		rebuild(p, unhealthy(), flagLookupFor())
+		if p.View().Size() != 0 {
+			t.Fatal("chained landing without flag must still require health")
+		}
+	})
+
+	t.Run("still requires outbound", func(t *testing.T) {
+		p := NewPlatform("landing", "Landing", nil, nil)
+		p.ChainPlatformIDs = []string{"hop"}
+		entry := unhealthy()
+		entry.Outbound.Store(nil)
+		rebuild(p, entry, flagLookupFor("sub1"))
+		if p.View().Size() != 0 {
+			t.Fatal("skip-health still requires outbound")
+		}
+	})
+
+	t.Run("unknown egress skips region", func(t *testing.T) {
+		p := NewPlatform("landing", "Landing", nil, []string{"us"})
+		p.ChainPlatformIDs = []string{"hop"}
+		rebuild(p, unhealthy(), flagLookupFor("sub1"))
+		if p.View().Size() != 1 {
+			t.Fatal("unknown egress should skip region while skip-health")
+		}
+	})
+
+	t.Run("known egress still applies region", func(t *testing.T) {
+		p := NewPlatform("landing", "Landing", nil, []string{"us"})
+		p.ChainPlatformIDs = []string{"hop"}
+		entry := unhealthy()
+		entry.SetEgressIP(netip.MustParseAddr("8.8.8.8"))
+		jpLookup := func(netip.Addr) string { return "jp" }
+		p.FullRebuildWithFlags(func(fn func(node.Hash, *node.NodeEntry) bool) {
+			fn(h, entry)
+		}, alwaysLookup, jpLookup, flagLookupFor("sub1"))
+		if p.View().Size() != 0 {
+			t.Fatal("known jp egress should fail us region filter")
+		}
+	})
+}
+
 func TestPlatform_FullRebuild_ClearsOld(t *testing.T) {
 	p := NewPlatform("p1", "Test", nil, nil)
 	h1 := makeHash(`{"type":"ss","n":1}`)
@@ -470,7 +582,7 @@ func TestPlatform_MatchesLandingFilters_IgnoresLiveHealth(t *testing.T) {
 	entry.RestoreTCPHealth(3, time.Now().UnixNano())
 	entry.SetEgressIP(netip.Addr{})
 
-	if p.evaluateNode(entry, alwaysLookup, usGeoLookup) {
+	if p.evaluateNode(entry, alwaysLookup, usGeoLookup, nil) {
 		t.Fatal("circuit-open landing without egress must stay out of the routable view")
 	}
 	if !p.MatchesLandingFilters(entry, alwaysLookup, usGeoLookup) {
@@ -498,5 +610,10 @@ func TestPlatform_HasRestrictiveLandingFilters(t *testing.T) {
 	allowlist.SubscriptionIDs = []string{"land-sub"}
 	if !allowlist.HasRestrictiveLandingFilters() {
 		t.Fatal("subscription allowlist is a restrictive landing filter")
+	}
+	denylist := NewPlatform("ex", "Ex", nil, nil)
+	denylist.SubscriptionExcludeIDs = []string{"home-sub"}
+	if !denylist.HasRestrictiveLandingFilters() {
+		t.Fatal("subscription exclude list is a restrictive landing filter")
 	}
 }

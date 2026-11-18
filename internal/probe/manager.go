@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"net/netip"
 	"sync"
@@ -89,6 +90,34 @@ const (
 	defaultLatencyTestURL = "https://www.gstatic.com/generate_204"
 	defaultQueueCap       = 1024
 )
+
+// Home-broadband exits often reset cloudflare.com / gstatic; keep the original
+// URL first and fall back to addresses residential networks can usually reach.
+var egressTraceURLs = []string{
+	egressTraceURL,
+	"https://1.1.1.1/cdn-cgi/trace",
+	"https://api.ipify.org",
+}
+
+var latencyFallbackURLs = []string{
+	defaultLatencyTestURL,
+	"https://api.ipify.org",
+}
+
+// Chained landings exit from residential networks. Cloudflare and gstatic are
+// commonly reset there, so probe plain-HTTP IP/captive endpoints first.
+var chainedEgressTraceURLs = []string{
+	"http://ip.3322.net",
+	"http://checkip.amazonaws.com",
+	"http://whatismyip.akamai.com",
+	"http://api.ipify.org",
+}
+
+var chainedLatencyFallbackURLs = []string{
+	"http://connect.rom.miui.com/generate_204",
+	"http://captive.apple.com/hotspot-detect.html",
+	"http://ip.3322.net",
+}
 
 type probePriority uint8
 
@@ -901,8 +930,45 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 	}
 }
 
+func (m *ProbeManager) landingChainProbe(hash node.Hash) bool {
+	return m.pool != nil && m.pool.HasUniqueLandingChain(hash)
+}
+
+func egressProbeURLs(chained bool) []string {
+	if chained {
+		return append([]string(nil), chainedEgressTraceURLs...)
+	}
+	return append([]string(nil), egressTraceURLs...)
+}
+
+func (m *ProbeManager) fetchEgress(hash node.Hash) ([]byte, time.Duration, string, error) {
+	if m.fetcher == nil {
+		return nil, 0, "", fmt.Errorf("no probe fetcher configured")
+	}
+	urls := egressProbeURLs(m.landingChainProbe(hash))
+	var firstErr error
+	for _, url := range urls {
+		body, latency, err := m.fetcher(hash, url)
+		if err == nil {
+			if url != urls[0] {
+				log.Printf("[probe] egress %s fell back to %s", hash.Hex(), url)
+			}
+			return body, latency, url, nil
+		}
+		if isSkippedProbe(err) {
+			return nil, 0, url, err
+		}
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", url, err)
+		} else {
+			firstErr = fmt.Errorf("%w; %s: %v", firstErr, url, err)
+		}
+	}
+	return nil, 0, "", firstErr
+}
+
 func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressProbeErrorStage, error) {
-	body, latency, err := m.fetcher(hash, egressTraceURL)
+	body, latency, _, err := m.fetchEgress(hash)
 	if err != nil {
 		if isSkippedProbe(err) {
 			return netip.Addr{}, egressProbeFetchError, err
@@ -917,7 +983,7 @@ func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressPro
 		m.pool.RecordLatency(hash, egressTraceDomain, &latency)
 	}
 
-	ip, loc, err := ParseCloudflareTrace(body)
+	ip, loc, err := ParseEgressBody(body)
 	if err != nil {
 		m.pool.UpdateNodeEgressIP(hash, nil, nil)
 		return netip.Addr{}, egressProbeParseError, err
@@ -927,20 +993,64 @@ func (m *ProbeManager) performEgressProbe(hash node.Hash) (netip.Addr, egressPro
 }
 
 func (m *ProbeManager) performLatencyProbe(hash node.Hash, testURL string) error {
+	if m.fetcher == nil {
+		return fmt.Errorf("no probe fetcher configured")
+	}
 	domain := netutil.ExtractDomain(testURL)
-	_, latency, err := m.fetcher(hash, testURL)
-	if err != nil {
+	var firstErr error
+	for _, url := range latencyProbeURLs(testURL, m.landingChainProbe(hash)) {
+		_, latency, err := m.fetcher(hash, url)
+		if err == nil {
+			if url != testURL {
+				log.Printf("[probe] latency %s fell back to %s", hash.Hex(), url)
+			}
+			m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, true)
+			m.pool.RecordLatency(hash, domain, &latency)
+			return nil
+		}
 		if isSkippedProbe(err) {
 			return err
 		}
-		m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, false)
-		m.pool.RecordLatency(hash, domain, nil)
-		return err
+		if firstErr == nil {
+			firstErr = fmt.Errorf("%s: %w", url, err)
+		} else {
+			firstErr = fmt.Errorf("%w; %s: %v", firstErr, url, err)
+		}
 	}
+	m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, false)
+	m.pool.RecordLatency(hash, domain, nil)
+	return firstErr
+}
 
-	m.recordProbeTCPHealth(hash, topology.HealthSourceLatencyProbe, true)
-	m.pool.RecordLatency(hash, domain, &latency)
-	return nil
+func latencyProbeURLs(primary string, chained bool) []string {
+	if primary == "" {
+		primary = defaultLatencyTestURL
+	}
+	extras := latencyFallbackURLs
+	if chained {
+		extras = chainedLatencyFallbackURLs
+	}
+	ordered := make([]string, 0, 1+len(extras))
+	if chained {
+		ordered = append(ordered, extras...)
+		ordered = append(ordered, primary)
+	} else {
+		ordered = append(ordered, primary)
+		ordered = append(ordered, extras...)
+	}
+	out := make([]string, 0, len(ordered))
+	seen := make(map[string]struct{}, len(ordered))
+	for _, url := range ordered {
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		out = append(out, url)
+	}
+	return out
 }
 
 func (key probeTaskKey) isValidation() bool {

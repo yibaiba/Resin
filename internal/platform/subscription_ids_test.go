@@ -26,3 +26,15 @@ func TestNormalizeSubscriptionIDs(t *testing.T) {
 		t.Fatal("expected empty error")
 	}
 }
+
+func TestValidateSubscriptionFilterOverlap(t *testing.T) {
+	if err := ValidateSubscriptionFilterOverlap([]string{"a"}, []string{"b"}); err != nil {
+		t.Fatalf("disjoint: %v", err)
+	}
+	if err := ValidateSubscriptionFilterOverlap([]string{"a"}, []string{"a"}); err == nil {
+		t.Fatal("expected overlap error")
+	}
+	if err := ValidateSubscriptionFilterOverlap(nil, []string{"a"}); err != nil {
+		t.Fatalf("empty allow: %v", err)
+	}
+}

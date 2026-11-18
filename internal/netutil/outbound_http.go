@@ -34,6 +34,9 @@ type OutboundHTTPOptions struct {
 	// lifecycle for metrics. Set by probe callers to count outbound connections;
 	// left nil for download callers (GeoIP, subscription) to exclude from stats.
 	OnConnLifecycle func(op ConnLifecycleOp)
+	// DisableHTTP2 keeps the GET on HTTP/1.1. Chained VLESS/Reality landings
+	// often reset HTTP/2 prefaces even when HTTP/1.1 works.
+	DisableHTTP2 bool
 }
 
 // HTTPGetViaOutbound executes an HTTP GET through the provided outbound.
@@ -61,7 +64,10 @@ func HTTPGetViaOutbound(
 			return conn, nil
 		},
 		DisableKeepAlives: true,
-		ForceAttemptHTTP2: true,
+		ForceAttemptHTTP2: !opts.DisableHTTP2,
+	}
+	if opts.DisableHTTP2 {
+		transport.TLSNextProto = map[string]func(authority string, c *tls.Conn) http.RoundTripper{}
 	}
 
 	client := &http.Client{
@@ -91,6 +97,7 @@ func HTTPGetViaOutbound(
 	}
 	req = req.WithContext(httptrace.WithClientTrace(ctx, trace))
 
+	started := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -104,6 +111,9 @@ func HTTPGetViaOutbound(
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, latency, err
+	}
+	if latency <= 0 {
+		latency = time.Since(started)
 	}
 
 	return body, latency, nil

@@ -106,6 +106,49 @@ func TestCreatePlatform_SubscriptionAllowlist(t *testing.T) {
 	}
 }
 
+func TestCreatePlatform_SubscriptionExclude(t *testing.T) {
+	cp, exclusive, _, exclusiveHash, sharedHash := newPlatformSubscriptionFixture(t)
+
+	name := "exclude-home"
+	created, err := cp.CreatePlatform(CreatePlatformRequest{
+		Name:                   &name,
+		SubscriptionExcludeIDs: []string{exclusive.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+	if !reflect.DeepEqual(created.SubscriptionExcludeIDs, []string{exclusive.ID}) {
+		t.Fatalf("subscription_exclude_ids = %v, want [%s]", created.SubscriptionExcludeIDs, exclusive.ID)
+	}
+
+	plat, ok := cp.Pool.GetPlatform(created.ID)
+	if !ok {
+		t.Fatal("platform missing from pool")
+	}
+	if plat.View().Contains(exclusiveHash) {
+		t.Fatal("excluded subscription node should not be routable")
+	}
+	if !plat.View().Contains(sharedHash) {
+		t.Fatal("non-excluded subscription node should stay routable")
+	}
+}
+
+func TestCreatePlatform_RejectsAllowAndExcludeOverlap(t *testing.T) {
+	cp, exclusive, _, _, _ := newPlatformSubscriptionFixture(t)
+	name := "overlap-platform"
+	_, err := cp.CreatePlatform(CreatePlatformRequest{
+		Name:                   &name,
+		SubscriptionIDs:        []string{exclusive.ID},
+		SubscriptionExcludeIDs: []string{exclusive.ID},
+	})
+	if err == nil {
+		t.Fatal("expected overlapping allow/exclude to be rejected")
+	}
+	if svcErr, ok := err.(*ServiceError); !ok || svcErr.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("error = %v, want INVALID_ARGUMENT", err)
+	}
+}
+
 func TestCreatePlatform_RejectsUnknownSubscription(t *testing.T) {
 	cp, _, _, _, _ := newPlatformSubscriptionFixture(t)
 	name := "bad-sub-platform"
@@ -281,5 +324,101 @@ func TestPreviewFilter_SubscriptionIDs(t *testing.T) {
 		if n.NodeHash == sharedHash.Hex() {
 			t.Fatal("shared node should not match exclusive allowlist preview")
 		}
+	}
+}
+
+func TestPreviewFilter_SubscriptionExcludeIDs(t *testing.T) {
+	cp, exclusive, _, exclusiveHash, sharedHash := newPlatformSubscriptionFixture(t)
+
+	nodes, err := cp.PreviewFilter(PreviewFilterRequest{
+		PlatformSpec: &PlatformSpecFilter{
+			SubscriptionExcludeIDs: []string{exclusive.ID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PreviewFilter: %v", err)
+	}
+	if len(nodes) != 1 || nodes[0].NodeHash != sharedHash.Hex() {
+		t.Fatalf("preview nodes = %+v, want only %s", nodes, sharedHash.Hex())
+	}
+	for _, n := range nodes {
+		if n.NodeHash == exclusiveHash.Hex() {
+			t.Fatal("excluded subscription node should not match preview")
+		}
+	}
+}
+
+func TestDeleteSubscription_RemovesPlatformExcludeIDs(t *testing.T) {
+	cp, exclusive, _, exclusiveHash, sharedHash := newPlatformSubscriptionFixture(t)
+	name := "cleanup-exclude-platform"
+	created, err := cp.CreatePlatform(CreatePlatformRequest{
+		Name:                   &name,
+		SubscriptionExcludeIDs: []string{exclusive.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	if err := cp.Engine.UpsertSubscription(model.Subscription{
+		ID:                        exclusive.ID,
+		Name:                      exclusive.Name(),
+		URL:                       exclusive.URL(),
+		UpdateIntervalNs:          int64(30 * time.Second),
+		Enabled:                   true,
+		EphemeralNodeEvictDelayNs: exclusive.EphemeralNodeEvictDelayNs(),
+		CreatedAtNs:               time.Now().UnixNano(),
+		UpdatedAtNs:               time.Now().UnixNano(),
+	}); err != nil {
+		t.Fatalf("UpsertSubscription: %v", err)
+	}
+
+	if err := cp.DeleteSubscription(exclusive.ID); err != nil {
+		t.Fatalf("DeleteSubscription: %v", err)
+	}
+
+	got, err := cp.GetPlatform(created.ID)
+	if err != nil {
+		t.Fatalf("GetPlatform: %v", err)
+	}
+	if len(got.SubscriptionExcludeIDs) != 0 {
+		t.Fatalf("subscription_exclude_ids after delete = %v, want empty", got.SubscriptionExcludeIDs)
+	}
+
+	plat, ok := cp.Pool.GetPlatform(created.ID)
+	if !ok {
+		t.Fatal("platform missing from pool")
+	}
+	if len(plat.SubscriptionExcludeIDs) != 0 {
+		t.Fatalf("runtime subscription_exclude_ids = %v, want empty", plat.SubscriptionExcludeIDs)
+	}
+	if plat.View().Contains(exclusiveHash) {
+		t.Fatal("deleted subscription node should leave the view")
+	}
+	if !plat.View().Contains(sharedHash) {
+		t.Fatal("cleared exclude list should keep remaining subscription nodes")
+	}
+}
+
+func TestUpdatePlatform_RejectsAllowAndExcludeOverlap(t *testing.T) {
+	cp, exclusive, _, _, _ := newPlatformSubscriptionFixture(t)
+	name := "update-overlap-platform"
+	created, err := cp.CreatePlatform(CreatePlatformRequest{
+		Name:            &name,
+		SubscriptionIDs: []string{exclusive.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreatePlatform: %v", err)
+	}
+
+	patch, err := json.Marshal(map[string]any{"subscription_exclude_ids": []string{exclusive.ID}})
+	if err != nil {
+		t.Fatalf("marshal patch: %v", err)
+	}
+	_, err = cp.UpdatePlatform(created.ID, patch)
+	if err == nil {
+		t.Fatal("expected overlapping allow/exclude patch to be rejected")
+	}
+	if svcErr, ok := err.(*ServiceError); !ok || svcErr.Code != "INVALID_ARGUMENT" {
+		t.Fatalf("error = %v, want INVALID_ARGUMENT", err)
 	}
 }

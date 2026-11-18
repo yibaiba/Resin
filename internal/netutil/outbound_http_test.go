@@ -57,6 +57,28 @@ func TestHTTPGetViaOutbound_AllowNon200(t *testing.T) {
 	}
 }
 
+func TestHTTPGetViaOutbound_DisableHTTP2StillFetches(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("http11"))
+	}))
+	defer srv.Close()
+
+	ob, err := (&testutil.StubOutboundBuilder{}).Build(nil)
+	if err != nil {
+		t.Fatalf("build outbound: %v", err)
+	}
+	body, _, err := HTTPGetViaOutbound(context.Background(), ob, srv.URL, OutboundHTTPOptions{
+		DisableHTTP2: true,
+	})
+	if err != nil {
+		t.Fatalf("DisableHTTP2 GET: %v", err)
+	}
+	if string(body) != "http11" {
+		t.Fatalf("unexpected body %q", string(body))
+	}
+}
+
 func TestConnCloseHook_CloseIsIdempotentAndConcurrentSafe(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()

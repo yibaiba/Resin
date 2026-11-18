@@ -62,7 +62,7 @@ curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<owner-platform-id> \
 
 真链式是 sing-box `detour`：用前置 outbound 去拨落地服务器，再在隧道上做落地协议。前置 Platform 沿用自己的粘性、过滤、熔断和 fallback。前置没有节点时整次请求失败，错误码仍是 `NO_AVAILABLE_NODES`。被引用的前置 Platform 不能删除。
 
-前置节点直连探测。落地节点只要匹配到任意非空 chain，探针走链；hop 选不出则跳过，不记失败、不直连。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只走 UDP hop。用户链式 UDP listen 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。订阅自带的 `dialer-proxy` 不会进入直连 outbound。家宽等本机不可达节点必须放在带前置的落地 Platform，不要挂到未链式 allowlist 上。
+前置节点直连探测。落地节点只要匹配到任意非空 chain，探针走链；hop 选不出则跳过，不记失败、不直连。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只走 UDP hop。用户链式 UDP listen 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。订阅自带的 `dialer-proxy` 不会进入直连 outbound。家宽订阅勾在落地 Platform 的允许列表；`Default` 或其他前置把这份订阅放进排除订阅。订阅打开 `disable_invalid_node_check` 后，带前置的落地 Platform 不因探活失败剔除这些节点；未链式 Platform 仍只走健康节点。
 
 ```bash
 curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<landing-id> \

@@ -137,10 +137,11 @@ export function PlatformDetailPage() {
   const detailAllocationPolicy = useWatch({ control: editForm.control, name: "allocation_policy" });
   const detailEmptyAccountBehavior = useWatch({ control: editForm.control, name: "reverse_proxy_empty_account_behavior" });
   const detailSubscriptionIDs = useWatch({ control: editForm.control, name: "subscription_ids" }) ?? [];
-  const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" });
-  const chainPlatformIDs = useWatch({ control: editForm.control, name: "chain_platform_ids" });
-  const rotationInterval = useWatch({ control: editForm.control, name: "rotation_interval" });
-  const rotationStrategy = useWatch({ control: editForm.control, name: "rotation_strategy" });
+  const detailSubscriptionExcludeIDs = useWatch({ control: editForm.control, name: "subscription_exclude_ids" }) ?? [];
+  const fallbackPlatformIDs = useWatch({ control: editForm.control, name: "fallback_platform_ids" }) ?? [];
+  const chainPlatformIDs = useWatch({ control: editForm.control, name: "chain_platform_ids" }) ?? [];
+  const rotationInterval = useWatch({ control: editForm.control, name: "rotation_interval" }) ?? "0s";
+  const rotationStrategy = useWatch({ control: editForm.control, name: "rotation_strategy" }) ?? "ANY";
 
   const platformChoicesQuery = useQuery({
     queryKey: ["platforms", "fallback-choices"],
@@ -151,6 +152,9 @@ export function PlatformDetailPage() {
 
   useEffect(() => {
     if (!platform) {
+      return;
+    }
+    if (editForm.formState.isDirty) {
       return;
     }
     editForm.reset(platformToFormValues(platform));
@@ -627,8 +631,8 @@ export function PlatformDetailPage() {
                     fallbackIDs={fallbackPlatformIDs}
                     rotationInterval={rotationInterval}
                     rotationStrategy={rotationStrategy}
-                    onChainChange={(ids) => editForm.setValue("chain_platform_ids", ids, { shouldDirty: true })}
-                    onFallbackChange={(ids) => editForm.setValue("fallback_platform_ids", ids, { shouldDirty: true })}
+                    onChainChange={(ids) => editForm.setValue("chain_platform_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
+                    onFallbackChange={(ids) => editForm.setValue("fallback_platform_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
                     onRotationIntervalChange={(value) => editForm.setValue("rotation_interval", value, { shouldDirty: true })}
                     onRotationStrategyChange={(value) => editForm.setValue("rotation_strategy", value, { shouldDirty: true })}
                   />
@@ -741,8 +745,11 @@ export function PlatformDetailPage() {
                   </div>
 
                   <PlatformSubscriptionPicker
-                    selectedIDs={detailSubscriptionIDs}
-                    onChange={(ids) => editForm.setValue("subscription_ids", ids, { shouldDirty: true })}
+                    allowIDs={detailSubscriptionIDs}
+                    excludeIDs={detailSubscriptionExcludeIDs}
+                    error={editForm.formState.errors.subscription_exclude_ids?.message}
+                    onAllowChange={(ids) => editForm.setValue("subscription_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
+                    onExcludeChange={(ids) => editForm.setValue("subscription_exclude_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
                   />
 
                   <div className="field-group">

@@ -3,6 +3,7 @@ package probe
 import (
 	"errors"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1040,5 +1041,206 @@ func TestParseCloudflareTrace_NoIP(t *testing.T) {
 	_, _, err := ParseCloudflareTrace(body)
 	if err == nil {
 		t.Fatal("expected error when ip field is missing")
+	}
+}
+
+func TestParseEgressBody_CloudflareTrace(t *testing.T) {
+	addr, loc, err := ParseEgressBody([]byte("fl=abc\nip=203.0.113.8\nloc=JP\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr != netip.MustParseAddr("203.0.113.8") {
+		t.Fatalf("got %v, want 203.0.113.8", addr)
+	}
+	if loc == nil || *loc != "jp" {
+		t.Fatalf("loc: got %v, want jp", loc)
+	}
+}
+
+func TestParseEgressBody_PlainIP(t *testing.T) {
+	addr, loc, err := ParseEgressBody([]byte("  198.51.100.20\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr != netip.MustParseAddr("198.51.100.20") {
+		t.Fatalf("got %v, want 198.51.100.20", addr)
+	}
+	if loc != nil {
+		t.Fatalf("loc: got %v, want nil", loc)
+	}
+}
+
+func TestParseEgressBody_Invalid(t *testing.T) {
+	if _, _, err := ParseEgressBody([]byte("not-an-ip")); err == nil {
+		t.Fatal("expected error for invalid egress body")
+	}
+}
+
+func TestFetchEgress_FallsBackWhenFirstURLsFail(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+	hash := node.HashFromRawOptions([]byte(`{"type":"egress-fallback"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"egress-fallback"}`), "sub1")
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var urls []string
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, url string) ([]byte, time.Duration, error) {
+			urls = append(urls, url)
+			switch url {
+			case egressTraceURL, "https://1.1.1.1/cdn-cgi/trace":
+				return nil, 0, errors.New("EOF")
+			case "https://api.ipify.org":
+				return []byte("203.0.113.50"), 11 * time.Millisecond, nil
+			default:
+				return nil, 0, errors.New("unexpected url " + url)
+			}
+		},
+	})
+
+	mgr.probeEgress(hash, entry)
+
+	if got := entry.GetEgressIP(); got != netip.MustParseAddr("203.0.113.50") {
+		t.Fatalf("egress IP: got %v, want 203.0.113.50", got)
+	}
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures after fallback success, got %d", entry.TCPHealth().FailureCount)
+	}
+	if len(urls) != 3 {
+		t.Fatalf("fetcher URLs: got %v, want 3 attempts", urls)
+	}
+}
+
+func TestFetchEgress_SkipDoesNotTryFallbacks(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+	hash := node.HashFromRawOptions([]byte(`{"type":"egress-skip-fallback"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"egress-skip-fallback"}`), "sub1")
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+	pool.RecordResult(hash, true)
+
+	var urls []string
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, url string) ([]byte, time.Duration, error) {
+			urls = append(urls, url)
+			return nil, 0, outbound.ErrSkipProbe
+		},
+	})
+	mgr.probeEgress(hash, entry)
+	if len(urls) != 1 {
+		t.Fatalf("skip should short-circuit, got URLs %v", urls)
+	}
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("skip recorded TCP failure: %+v", entry.TCPHealth())
+	}
+}
+
+func TestProbeLatency_FallsBackWhenPrimaryURLFails(t *testing.T) {
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+	})
+	hash := node.HashFromRawOptions([]byte(`{"type":"latency-fallback"}`))
+	pool.AddNodeFromSub(hash, []byte(`{"type":"latency-fallback"}`), "sub1")
+	entry, ok := pool.GetEntry(hash)
+	if !ok {
+		t.Fatal("entry not found")
+	}
+	storeOutbound(entry)
+
+	var urls []string
+	mgr := NewProbeManager(ProbeConfig{
+		Pool: pool,
+		Fetcher: func(_ node.Hash, url string) ([]byte, time.Duration, error) {
+			urls = append(urls, url)
+			if url == defaultLatencyTestURL {
+				return nil, 0, errors.New("EOF")
+			}
+			return []byte("ok"), 40 * time.Millisecond, nil
+		},
+	})
+	mgr.probeLatency(hash, entry, defaultLatencyTestURL)
+
+	if entry.TCPHealth().FailureCount != 0 {
+		t.Fatalf("expected 0 failures after fallback success, got %d", entry.TCPHealth().FailureCount)
+	}
+	if !entry.HasLatency() {
+		t.Fatal("expected latency data after fallback")
+	}
+	if len(urls) < 2 {
+		t.Fatalf("expected primary then fallback, got %v", urls)
+	}
+}
+
+func TestLatencyProbeURLs_DedupesPrimary(t *testing.T) {
+	got := latencyProbeURLs(defaultLatencyTestURL, false)
+	if len(got) < 2 {
+		t.Fatalf("expected primary plus at least one extra, got %v", got)
+	}
+	if got[0] != defaultLatencyTestURL {
+		t.Fatalf("primary: got %q", got[0])
+	}
+	seen := map[string]struct{}{}
+	for _, url := range got {
+		if _, ok := seen[url]; ok {
+			t.Fatalf("duplicate url %q in %v", url, got)
+		}
+		seen[url] = struct{}{}
+	}
+}
+
+func TestEgressProbeURLs_ChainedPrefersResidentialHTTP(t *testing.T) {
+	direct := egressProbeURLs(false)
+	if len(direct) == 0 || direct[0] != egressTraceURL {
+		t.Fatalf("direct urls: %v", direct)
+	}
+	chained := egressProbeURLs(true)
+	if len(chained) == 0 {
+		t.Fatal("expected chained egress urls")
+	}
+	if chained[0] != "http://ip.3322.net" {
+		t.Fatalf("chained first url: got %q, want http://ip.3322.net", chained[0])
+	}
+	for _, url := range chained {
+		if strings.HasPrefix(url, "https://cloudflare.com") {
+			t.Fatalf("chained urls should not start with cloudflare.com: %v", chained)
+		}
+	}
+}
+
+func TestLatencyProbeURLs_ChainedPutsHTTPFirst(t *testing.T) {
+	got := latencyProbeURLs(defaultLatencyTestURL, true)
+	if len(got) < 2 {
+		t.Fatalf("chained latency urls: %v", got)
+	}
+	if got[0] != "http://connect.rom.miui.com/generate_204" {
+		t.Fatalf("chained first url: got %q", got[0])
+	}
+}
+
+func TestParseEgressBody_TrailingNewline(t *testing.T) {
+	addr, loc, err := ParseEgressBody([]byte("203.0.113.77\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addr != netip.MustParseAddr("203.0.113.77") {
+		t.Fatalf("got %v, want 203.0.113.77", addr)
+	}
+	if loc != nil {
+		t.Fatalf("loc: got %v, want nil", loc)
 	}
 }

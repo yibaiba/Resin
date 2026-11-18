@@ -109,7 +109,7 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 	if m.onProbeEvent != nil {
 		m.onProbeEvent(string(validation.Kind))
 	}
-	body, latency, fetchErr := m.fetcher(task.key.hash, egressTraceURL)
+	body, latency, _, fetchErr := m.fetchEgress(task.key.hash)
 	if fetchErr != nil {
 		if isSkippedProbe(fetchErr) {
 			m.pool.CancelTCPValidation(task.key.hash, validation)
@@ -150,7 +150,7 @@ func (m *ProbeManager) completeSuccessfulTCPValidation(
 	validation node.TCPValidation,
 	result tcpValidationFetchResult,
 ) {
-	ip, loc, traceErr := ParseCloudflareTrace(result.body)
+	ip, loc, traceErr := ParseEgressBody(result.body)
 	applied := m.pool.CompleteTCPValidationWithEffect(hash, topology.TCPValidationCompletion{
 		Validation:    validation,
 		Success:       true,

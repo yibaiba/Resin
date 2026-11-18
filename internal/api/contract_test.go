@@ -1849,6 +1849,50 @@ func TestAPIContract_SubscriptionEphemeralEvictDelayPatchValidation(t *testing.T
 	}
 }
 
+func TestAPIContract_SubscriptionDisableInvalidNodeCheck_DefaultAndPatch(t *testing.T) {
+	srv, _, _ := newControlPlaneTestServer(t)
+
+	createRec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/subscriptions", map[string]any{
+		"name": "home-bb-sub",
+		"url":  "https://example.com/sub-home-bb",
+	}, true)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create subscription status: got %d, want %d, body=%s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+	createBody := decodeJSONMap(t, createRec)
+	if createBody["disable_invalid_node_check"] != false {
+		t.Fatalf("default disable_invalid_node_check: got %v, want false", createBody["disable_invalid_node_check"])
+	}
+	subID, _ := createBody["id"].(string)
+	if subID == "" {
+		t.Fatalf("create subscription missing id: body=%s", createRec.Body.String())
+	}
+
+	enabledRec := doJSONRequest(t, srv, http.MethodPost, "/api/v1/subscriptions", map[string]any{
+		"name":                       "home-bb-on",
+		"url":                        "https://example.com/sub-home-bb-on",
+		"disable_invalid_node_check": true,
+	}, true)
+	if enabledRec.Code != http.StatusCreated {
+		t.Fatalf("create with flag status: got %d, want %d, body=%s", enabledRec.Code, http.StatusCreated, enabledRec.Body.String())
+	}
+	enabledBody := decodeJSONMap(t, enabledRec)
+	if enabledBody["disable_invalid_node_check"] != true {
+		t.Fatalf("create disable_invalid_node_check: got %v, want true", enabledBody["disable_invalid_node_check"])
+	}
+
+	patchRec := doJSONRequest(t, srv, http.MethodPatch, "/api/v1/subscriptions/"+subID, map[string]any{
+		"disable_invalid_node_check": true,
+	}, true)
+	if patchRec.Code != http.StatusOK {
+		t.Fatalf("patch flag status: got %d, want %d, body=%s", patchRec.Code, http.StatusOK, patchRec.Body.String())
+	}
+	patchBody := decodeJSONMap(t, patchRec)
+	if patchBody["disable_invalid_node_check"] != true {
+		t.Fatalf("patched disable_invalid_node_check: got %v, want true", patchBody["disable_invalid_node_check"])
+	}
+}
+
 func TestAPIContract_PreviewFilterUsesPaginationEnvelope(t *testing.T) {
 	srv, _, _ := newControlPlaneTestServer(t)
 

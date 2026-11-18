@@ -256,7 +256,11 @@ func newTopologyRuntime(
 		Pool:        pool,
 		Concurrency: envCfg.ProbeConcurrency,
 		Fetcher: func(hash node.Hash, url string) ([]byte, time.Duration, error) {
-			ctx, cancel := context.WithTimeout(context.Background(), envCfg.ProbeTimeout)
+			timeout := envCfg.ProbeTimeout
+			if pool.HasUniqueLandingChain(hash) && timeout < 30*time.Second {
+				timeout = 30 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			ob, err := outboundMgr.OutboundForProbe(hash)
 			if err != nil {
@@ -264,6 +268,7 @@ func newTopologyRuntime(
 			}
 			return netutil.HTTPGetViaOutbound(ctx, ob, url, netutil.OutboundHTTPOptions{
 				RequireStatusOK: false,
+				DisableHTTP2:    true,
 				OnConnLifecycle: func(op netutil.ConnLifecycleOp) {
 					if onProbeConnLifecycle != nil {
 						onProbeConnLifecycle(op)
@@ -377,6 +382,7 @@ func bootstrapTopology(
 		sub.SetSourceType(ms.SourceType)
 		sub.SetContent(ms.Content)
 		sub.SetIncrementalAliveNodes(ms.IncrementalAliveNodes)
+		sub.SetDisableInvalidNodeCheck(ms.DisableInvalidNodeCheck)
 		sub.SetEphemeralNodeEvictDelayNs(ms.EphemeralNodeEvictDelayNs)
 		sub.CreatedAtNs = ms.CreatedAtNs
 		sub.UpdatedAtNs = ms.UpdatedAtNs

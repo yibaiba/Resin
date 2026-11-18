@@ -98,6 +98,10 @@ export function PlatformPage() {
     control: createForm.control,
     name: "subscription_ids",
   }) ?? [];
+  const createSubscriptionExcludeIDs = useWatch({
+    control: createForm.control,
+    name: "subscription_exclude_ids",
+  }) ?? [];
   const createChainPlatformIDs = useWatch({
     control: createForm.control,
     name: "chain_platform_ids",
@@ -406,9 +410,9 @@ export function PlatformPage() {
                 idPrefix="create-chain"
                 platforms={platformChoicesQuery.data?.items ?? EMPTY_PLATFORMS}
                 ids={createChainPlatformIDs}
-                onChange={(ids) => createForm.setValue("chain_platform_ids", ids, { shouldDirty: true })}
+                onChange={(ids) => createForm.setValue("chain_platform_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
                 heading={t("链式代理")}
-                hint={t("流量按顺序先走这些前置 Platform 的节点，再走本平台落地。空着就是直连。家宽等本机打不通的节点只能放在带前置的落地平台里。")}
+                hint={t("流量按顺序先走这些前置 Platform，再从本平台节点落地。空着就是直连。前置节点不会并进本平台；本平台只用允许的订阅和过滤规则里的节点。")}
                 addLabel={t("添加前置 Platform")}
                 selectLabel={t("选择前置平台")}
                 emptyTitle={t("未配置前置 Platform")}
@@ -419,8 +423,11 @@ export function PlatformPage() {
 
               <PlatformSubscriptionPicker
                 create
-                selectedIDs={createSubscriptionIDs}
-                onChange={(ids) => createForm.setValue("subscription_ids", ids, { shouldDirty: true })}
+                allowIDs={createSubscriptionIDs}
+                excludeIDs={createSubscriptionExcludeIDs}
+                error={createForm.formState.errors.subscription_exclude_ids?.message}
+                onAllowChange={(ids) => createForm.setValue("subscription_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
+                onExcludeChange={(ids) => createForm.setValue("subscription_exclude_ids", ids, { shouldDirty: true, shouldValidate: true, shouldTouch: true })}
               />
 
               <div className="field-group">

@@ -268,6 +268,61 @@ func TestNodeEntry_MatchesSubscriptionAllowlist(t *testing.T) {
 	}
 }
 
+func TestNodeEntry_MatchesSubscriptionFilters_Exclude(t *testing.T) {
+	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
+	e := NewNodeEntry(h, nil, time.Now(), 0)
+	e.AddSubscriptionID("home")
+	e.AddSubscriptionID("vps")
+
+	lookup := func(subID string, hash Hash) (string, bool, []string, bool) {
+		return subID, true, []string{"node"}, true
+	}
+
+	if e.MatchesSubscriptionFilters(nil, []string{"home", "vps"}, lookup) {
+		t.Fatal("node only in excluded subscriptions should not match")
+	}
+	if !e.MatchesSubscriptionFilters(nil, []string{"home"}, lookup) {
+		t.Fatal("node still in vps should match after excluding home")
+	}
+	if e.MatchesSubscriptionFilters([]string{"home"}, []string{"home"}, lookup) {
+		t.Fatal("allow+exclude of the same remaining subscription should not match")
+	}
+	if !e.MatchesSubscriptionFilters([]string{"vps"}, []string{"home"}, lookup) {
+		t.Fatal("allow vps and exclude home should match")
+	}
+
+	homeOnly := NewNodeEntry(HashFromRawOptions([]byte(`{"type":"ss","n":"home"}`)), nil, time.Now(), 0)
+	homeOnly.AddSubscriptionID("home")
+	if homeOnly.MatchesSubscriptionFilters(nil, []string{"home"}, lookup) {
+		t.Fatal("home-only node should be excluded from an unchained catch-all")
+	}
+}
+
+func TestNodeEntry_DisableInvalidNodeCheck(t *testing.T) {
+	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
+	e := NewNodeEntry(h, nil, time.Now(), 0)
+	e.AddSubscriptionID("home")
+	e.AddSubscriptionID("vps")
+
+	lookup := func(subID string, hash Hash) (string, bool, []string, bool) {
+		return subID, subID != "disabled", []string{"node"}, true
+	}
+	flagOn := func(subID string) bool { return subID == "home" }
+
+	if e.DisableInvalidNodeCheck(lookup, nil) {
+		t.Fatal("nil flag lookup should not skip health")
+	}
+	if !e.DisableInvalidNodeCheck(lookup, flagOn) {
+		t.Fatal("enabled home subscription should skip health")
+	}
+
+	disabledHome := NewNodeEntry(HashFromRawOptions([]byte(`{"type":"ss","n":"disabled"}`)), nil, time.Now(), 0)
+	disabledHome.AddSubscriptionID("disabled")
+	if disabledHome.DisableInvalidNodeCheck(lookup, func(string) bool { return true }) {
+		t.Fatal("disabled subscription should not skip health")
+	}
+}
+
 func TestNodeEntry_HasEnabledSubscription(t *testing.T) {
 	h := HashFromRawOptions([]byte(`{"type":"ss"}`))
 	e := NewNodeEntry(h, nil, time.Now(), 0)

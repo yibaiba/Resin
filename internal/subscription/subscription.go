@@ -101,7 +101,8 @@ func (mn *ManagedNodes) RangeNodes(fn func(node.Hash, ManagedNode) bool) {
 // Subscription represents a subscription's runtime state.
 // It has two synchronization layers:
 //   - mu protects mutable config fields
-//     (url/updateInterval/name/enabled/ephemeral/ephemeralNodeEvictDelayNs).
+//     (url/updateInterval/name/enabled/ephemeral/incrementalAliveNodes/
+//     disableInvalidNodeCheck/ephemeralNodeEvictDelayNs).
 //   - opMu serializes high-level operations (update/rename/eviction/delete)
 //     on the same subscription instance.
 //
@@ -126,6 +127,10 @@ type Subscription struct {
 	enabled               bool
 	ephemeral             bool
 	incrementalAliveNodes bool
+	// disableInvalidNodeCheck, when true, lets this subscription's nodes stay
+	// on chained landing platforms even if probes fail. Unchained platforms
+	// still require healthy nodes.
+	disableInvalidNodeCheck bool
 	// ephemeralNodeEvictDelayNs is the per-subscription eviction delay for
 	// circuit-broken nodes when Ephemeral is enabled.
 	ephemeralNodeEvictDelayNs int64
@@ -314,6 +319,21 @@ func (s *Subscription) IncrementalAliveNodes() bool {
 func (s *Subscription) SetIncrementalAliveNodes(v bool) {
 	s.mu.Lock()
 	s.incrementalAliveNodes = v
+	s.mu.Unlock()
+}
+
+// DisableInvalidNodeCheck reports whether this subscription skips invalid-node
+// health gating on chained landing platforms (thread-safe).
+func (s *Subscription) DisableInvalidNodeCheck() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.disableInvalidNodeCheck
+}
+
+// SetDisableInvalidNodeCheck updates the chained-landing health-gating flag.
+func (s *Subscription) SetDisableInvalidNodeCheck(v bool) {
+	s.mu.Lock()
+	s.disableInvalidNodeCheck = v
 	s.mu.Unlock()
 }
 

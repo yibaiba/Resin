@@ -260,7 +260,7 @@ Proxy chain is configured on the **landing Platform**, not on individual nodes. 
 #### Example: reach a home-broadband landing through a VPS hop
 
 1. Prepare a front Platform, usually a VPS. Create a Platform named `VPS`, or reuse `Default`. Limit its allowed subscriptions and filters to those hop nodes.
-2. Create a landing Platform named `HomeBB` for the real exit. Attach the home-broadband subscription only here. Do not also put those nodes on `Default` or another Platform without a proxy chain.
+2. Create a landing Platform named `HomeBB` for the real exit. Put the home-broadband subscription on its allow list. On `Default` or the hop Platform, put that subscription on the exclude list.
 3. Open `HomeBB`, find **Proxy Chain**, click **Add Front Platform**, and select `VPS` (or `Default`). Order is top to bottom; the hop closest to Resin goes first.
    - One front platform A: `Resin → A → HomeBB`
    - A then B: `Resin → A → B → HomeBB`
@@ -289,6 +289,7 @@ Notes:
 - The hop node and the landing node cannot be the same node.
 - Front-platform nodes must already be healthy. If Resin cannot pick a hop, the request fails with `NO_AVAILABLE_NODES`.
 - Landing probes follow the chain. If hops cannot be picked, the probe is skipped; Resin does not fall back to dialing the landing directly.
+- On a home-broadband subscription, enable **Disable invalid-node check**. On a chained landing Platform those nodes stay selectable even if probes fail. Unchained Platforms such as Default still require healthy nodes. Probes still follow the chain.
 - A Platform that is referenced as a front hop cannot be deleted.
 
 In **Routing diagnostics**, the selection result shows **Chain hops**. Request logs still record the landing node hash and egress IP.

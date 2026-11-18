@@ -27,6 +27,10 @@ const (
 // Returns ok=false if the subscription does not exist.
 type SubLookupFunc func(subID string, hash Hash) (name string, enabled bool, tags []string, ok bool)
 
+// DisableInvalidNodeCheckFunc reports whether a subscription opts out of
+// invalid-node health gating on chained landing platforms.
+type DisableInvalidNodeCheckFunc func(subID string) bool
+
 // TagFilter is a compiled set of line-oriented tag regex rules.
 // Any rules are ORed, Must rules are ANDed, and any MustNot match rejects the node.
 type TagFilter struct {
@@ -194,11 +198,42 @@ func (e *NodeEntry) MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bo
 // MatchesSubscriptionAllowlist reports whether the node belongs to at least one
 // enabled subscription in allowIDs. An empty allowlist matches every node.
 func (e *NodeEntry) MatchesSubscriptionAllowlist(allowIDs []string, subLookup SubLookupFunc) bool {
-	if len(allowIDs) == 0 {
-		return true
-	}
+	return e.MatchesSubscriptionFilters(allowIDs, nil, subLookup)
+}
+
+// MatchesSubscriptionFilters drops excluded memberships first, then applies
+// the allowlist. Empty allowlist means all remaining subscriptions. A node
+// still matches if it remains in another enabled subscription.
+func (e *NodeEntry) MatchesSubscriptionFilters(allowIDs, excludeIDs []string, subLookup SubLookupFunc) bool {
 	if e == nil {
 		return false
+	}
+	if len(allowIDs) == 0 && len(excludeIDs) == 0 {
+		return true
+	}
+
+	enabled := e.enabledSubscriptionIDs(subLookup)
+	if len(excludeIDs) > 0 {
+		excl := make(map[string]struct{}, len(excludeIDs))
+		for _, id := range excludeIDs {
+			if id != "" {
+				excl[id] = struct{}{}
+			}
+		}
+		kept := enabled[:0]
+		for _, id := range enabled {
+			if _, skip := excl[id]; skip {
+				continue
+			}
+			kept = append(kept, id)
+		}
+		enabled = kept
+		if len(enabled) == 0 {
+			return false
+		}
+	}
+	if len(allowIDs) == 0 {
+		return true
 	}
 
 	allow := make(map[string]struct{}, len(allowIDs))
@@ -210,25 +245,46 @@ func (e *NodeEntry) MatchesSubscriptionAllowlist(allowIDs []string, subLookup Su
 	if len(allow) == 0 {
 		return true
 	}
+	for _, id := range enabled {
+		if _, ok := allow[id]; ok {
+			return true
+		}
+	}
+	return false
+}
 
+// DisableInvalidNodeCheck reports whether any enabled subscription that still
+// holds this node has opted out of invalid-node health gating.
+func (e *NodeEntry) DisableInvalidNodeCheck(subLookup SubLookupFunc, flagLookup DisableInvalidNodeCheckFunc) bool {
+	if e == nil || flagLookup == nil {
+		return false
+	}
+	for _, id := range e.enabledSubscriptionIDs(subLookup) {
+		if flagLookup(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *NodeEntry) enabledSubscriptionIDs(subLookup SubLookupFunc) []string {
 	e.mu.RLock()
 	subs := make([]string, len(e.subscriptionIDs))
 	copy(subs, e.subscriptionIDs)
 	e.mu.RUnlock()
 
+	out := make([]string, 0, len(subs))
 	for _, subID := range subs {
-		if _, ok := allow[subID]; !ok {
-			continue
-		}
 		if subLookup == nil {
-			return true
+			out = append(out, subID)
+			continue
 		}
 		_, enabled, _, ok := subLookup(subID, e.Hash)
 		if ok && enabled {
-			return true
+			out = append(out, subID)
 		}
 	}
-	return false
+	return out
 }
 
 // HasEnabledSubscription reports whether the node currently has at least one

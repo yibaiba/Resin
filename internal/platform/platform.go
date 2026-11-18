@@ -33,9 +33,10 @@ type Platform struct {
 	Name string
 
 	// Filter configuration.
-	RegexFilters    node.TagFilter
-	RegionFilters   []string // lowercase ISO codes, supports negation "!xx"
-	SubscriptionIDs []string // empty means all subscriptions; otherwise allowlist
+	RegexFilters           node.TagFilter
+	RegionFilters          []string // lowercase ISO codes, supports negation "!xx"
+	SubscriptionIDs        []string // empty means all subscriptions; otherwise allowlist
+	SubscriptionExcludeIDs []string // drop these subscription memberships before the allowlist
 
 	// Other config fields.
 	StickyTTLNs                      int64
@@ -99,13 +100,24 @@ func (p *Platform) FullRebuild(
 	subLookup node.SubLookupFunc,
 	geoLookup GeoLookupFunc,
 ) {
+	p.FullRebuildWithFlags(poolRange, subLookup, geoLookup, nil)
+}
+
+// FullRebuildWithFlags is FullRebuild with a per-subscription
+// disable-invalid-node-check lookup. A nil lookup keeps the default health gate.
+func (p *Platform) FullRebuildWithFlags(
+	poolRange PoolRangeFunc,
+	subLookup node.SubLookupFunc,
+	geoLookup GeoLookupFunc,
+	flags node.DisableInvalidNodeCheckFunc,
+) {
 	p.viewMu.Lock()
 	defer p.viewMu.Unlock()
 
 	p.tcpView.Clear()
 	p.udpView.Clear()
 	poolRange(func(h node.Hash, entry *node.NodeEntry) bool {
-		if p.evaluateNode(entry, subLookup, geoLookup) {
+		if p.evaluateNode(entry, subLookup, geoLookup, flags) {
 			p.updateNetworkViews(h, entry)
 		}
 		return true
@@ -120,6 +132,18 @@ func (p *Platform) NotifyDirty(
 	subLookup node.SubLookupFunc,
 	geoLookup GeoLookupFunc,
 ) {
+	p.NotifyDirtyWithFlags(h, getEntry, subLookup, geoLookup, nil)
+}
+
+// NotifyDirtyWithFlags is NotifyDirty with a per-subscription
+// disable-invalid-node-check lookup. A nil lookup keeps the default health gate.
+func (p *Platform) NotifyDirtyWithFlags(
+	h node.Hash,
+	getEntry GetEntryFunc,
+	subLookup node.SubLookupFunc,
+	geoLookup GeoLookupFunc,
+	flags node.DisableInvalidNodeCheckFunc,
+) {
 	p.viewMu.Lock()
 	defer p.viewMu.Unlock()
 
@@ -130,7 +154,7 @@ func (p *Platform) NotifyDirty(
 		return
 	}
 
-	if p.evaluateNode(entry, subLookup, geoLookup) {
+	if p.evaluateNode(entry, subLookup, geoLookup, flags) {
 		p.updateNetworkViews(h, entry)
 	} else {
 		p.removeFromNetworkViews(h)
@@ -160,18 +184,26 @@ func (p *Platform) evaluateNode(
 	entry *node.NodeEntry,
 	subLookup node.SubLookupFunc,
 	geoLookup GeoLookupFunc,
+	flags node.DisableInvalidNodeCheckFunc,
 ) bool {
 	// 0. Disabled nodes are never routable.
 	if entry.IsDisabledBySubscriptions(subLookup) {
 		return false
 	}
 
-	// 1. Healthy for routing (outbound ready + circuit not open).
-	if !entry.IsHealthy() {
+	skipHealth := len(p.ChainPlatformIDs) > 0 && entry.DisableInvalidNodeCheck(subLookup, flags)
+
+	// 1. Healthy for routing (outbound ready + circuit not open), unless this
+	// chained landing opted out of invalid-node checks. Outbound is still required.
+	if skipHealth {
+		if !entry.HasOutbound() {
+			return false
+		}
+	} else if !entry.IsHealthy() {
 		return false
 	}
 
-	if !entry.MatchesSubscriptionAllowlist(p.SubscriptionIDs, subLookup) {
+	if !entry.MatchesSubscriptionFilters(p.SubscriptionIDs, p.SubscriptionExcludeIDs, subLookup) {
 		return false
 	}
 
@@ -180,23 +212,23 @@ func (p *Platform) evaluateNode(
 		return false
 	}
 
-	// 4. Egress IP must be known.
 	egressIP := entry.GetEgressIP()
-	if !egressIP.IsValid() {
-		return false
-	}
 
-	// 5. Region filter (when configured).
-	if len(p.RegionFilters) > 0 {
-		region := entry.GetRegion(geoLookup)
-		if !MatchRegionFilter(region, p.RegionFilters) {
+	// 4. Egress IP must be known, unless skip-health. Region filters still apply
+	// once egress is known, matching MatchesLandingFilters.
+	if len(p.RegionFilters) > 0 && egressIP.IsValid() {
+		if !MatchRegionFilter(entry.GetRegion(geoLookup), p.RegionFilters) {
 			return false
 		}
 	}
 
-	// 6. Has at least one latency record.
-	if !entry.HasLatency() {
-		return false
+	if !skipHealth {
+		if !egressIP.IsValid() {
+			return false
+		}
+		if !entry.HasLatency() {
+			return false
+		}
 	}
 
 	return true
@@ -217,7 +249,7 @@ func (p *Platform) MatchesLandingFilters(
 	if entry.IsDisabledBySubscriptions(subLookup) {
 		return false
 	}
-	if !entry.MatchesSubscriptionAllowlist(p.SubscriptionIDs, subLookup) {
+	if !entry.MatchesSubscriptionFilters(p.SubscriptionIDs, p.SubscriptionExcludeIDs, subLookup) {
 		return false
 	}
 	if !entry.MatchTagFilter(p.RegexFilters, subLookup) {
@@ -240,7 +272,7 @@ func (p *Platform) HasRestrictiveLandingFilters() bool {
 	if p == nil {
 		return false
 	}
-	return len(p.SubscriptionIDs) > 0 || len(p.RegionFilters) > 0 || !p.RegexFilters.Empty()
+	return len(p.SubscriptionIDs) > 0 || len(p.SubscriptionExcludeIDs) > 0 || len(p.RegionFilters) > 0 || !p.RegexFilters.Empty()
 }
 
 // MatchRegionFilter applies include/exclude region filters.

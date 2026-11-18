@@ -512,7 +512,7 @@ Resin 内置了 GeoIP 服务，用于支持 Platform 的 RegionFilters 功能。
 
 选出落地节点后，若该落地 Platform 的 `chain_platform_ids` 非空，再按顺序为每个前置 Platform 选一个节点（`SkipProxyChain`，沿用该前置 Platform 的粘性、过滤、熔断和它自己的 fallback）。前置没有节点则整次路由失败，错误码仍是 `NO_AVAILABLE_NODES`。`RouteResult.NodeHash` / 租约 / `egress_ip` 仍是落地节点；hop 记在 `ChainHops`。用户流量使用 sing-box `Detour` 链，不用落地节点的直连 Outbound。
 
-前置 Platform 的节点仍直连探测。落地节点只要匹配到任意非空 chain，egress / latency / UDP 探针走链；hop 选不出则跳过该次探针，不记失败、不改走直连。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只选 UDP 可路由 hop。用户链式 UDP `ListenPacket` 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。直连 `NodeEntry.Outbound` 构建时去掉订阅自带的 `detour` / `dialer-proxy`，平台 chain 才是用户链。未链式平台不参与探针选链。家宽等本机不可达节点必须放在带前置的落地 Platform，不要挂到未链式 allowlist 上。
+前置 Platform 的节点仍直连探测。落地节点只要匹配到任意非空 chain，egress / latency / UDP 探针走链；hop 选不出则跳过该次探针，不记失败、不改走直连。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只选 UDP 可路由 hop。用户链式 UDP `ListenPacket` 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。直连 `NodeEntry.Outbound` 构建时去掉订阅自带的 `detour` / `dialer-proxy`，平台 chain 才是用户链。未链式平台不参与探针选链。家宽等本机不可达节点必须放在带前置的落地 Platform，不要挂到未链式 allowlist 上。订阅 `disable_invalid_node_check` 默认关闭；打开后，仅当落地 Platform 有 `chain_platform_ids` 时跳过健康 / 出口 IP / 延迟门槛，未链式 Platform 仍只走健康节点。
 
 ### 随机路由算法
 随机模式采用 **P2C** 算法，结合延迟与负载进行加权选择。
@@ -603,8 +603,8 @@ Resin 项目中所有的数据库都设计为单写，不会有多进程写入�
 ### SQLite 数据模型
 #### state.db
 * system_config(config_json, version, updated_at_ns)
-* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, fallback_platform_ids_json, chain_platform_ids_json, subscription_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns)
-* subscriptions(id PK, name, url, update_interval_ns, enabled, ephemeral, created_at_ns, updated_at_ns)
+* platforms(id PK, name UNIQUE, sticky_ttl_ns, regex_filters_json, region_filters_json, reverse_proxy_miss_action, reverse_proxy_empty_account_behavior, reverse_proxy_fixed_account_header, allocation_policy, passive_circuit_breaker_disabled, fallback_platform_ids_json, chain_platform_ids_json, subscription_ids_json, subscription_exclude_ids_json, rotation_interval_ns, rotation_strategy, updated_at_ns)
+* subscriptions(id PK, name, url, update_interval_ns, enabled, ephemeral, incremental_alive_nodes, disable_invalid_node_check, created_at_ns, updated_at_ns)
 * account_header_rules(url_prefix PK, headers_json, updated_at_ns)
 
 > 订阅的 LastCheck、LastError、LastUpdate 不进行持久化。因为启动时总是会更新一次。
@@ -1219,6 +1219,7 @@ Body（partial patch 示例）：
   "regex_filters": ["*^sub1/.*", ".*hk.*", "!过期"],
   "region_filters": ["hk","us"],
   "subscription_ids": ["uuid-of-exclusive-sub"],
+  "subscription_exclude_ids": [],
   "routable_node_count": 123,
   "reverse_proxy_miss_action": "TREAT_AS_EMPTY|REJECT",
   "reverse_proxy_empty_account_behavior": "RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE",
@@ -1251,6 +1252,7 @@ Body：
   "regex_filters": ["^sub1/.*"],
   "region_filters": ["hk", "us"],
   "subscription_ids": ["uuid-of-exclusive-sub"],
+  "subscription_exclude_ids": [],
   "reverse_proxy_miss_action": "TREAT_AS_EMPTY",
   "reverse_proxy_empty_account_behavior": "ACCOUNT_HEADER_RULE",
   "reverse_proxy_fixed_account_header": "Authorization\nX-Account-Id",
@@ -1263,7 +1265,7 @@ Body：
 字段要求：
 
 * 必填字段：`name`
-* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
+* 可选字段：`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`subscription_exclude_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
 * 不可传字段：`id`、`updated_at`、`routable_node_count`
 * 省略可选字段时，平台策略字段使用当前环境变量默认平台设置（`RESIN_DEFAULT_PLATFORM_*`）对应值；`passive_circuit_breaker_disabled` 默认 `false`
 
@@ -1274,6 +1276,7 @@ Body：
 * `regex_filters`：节点标签过滤规则列表，语义与校验见“节点标签过滤规则”。
 * `region_filters`：每项为 ISO 3166-1 alpha-2 小写代码。
 * `subscription_ids`：允许进入该平台的订阅 ID 列表。空数组或不传表示不限制订阅。非空时每项必须是已存在的订阅 ID，不能为空或重复。节点只要属于其中一个 Enabled 订阅即可进入，再与 `regex_filters`、`region_filters` 取交集。删除订阅时会从所有平台的该列表中移除对应 ID。
+* `subscription_exclude_ids`：不允许进入该平台的订阅 ID 列表。空数组或不传表示不排除。先从节点所属订阅里去掉这些 ID，再用 `subscription_ids` 判断。节点若还属于其他未排除的 Enabled 订阅，仍可进入。不能与 `subscription_ids` 出现同一 ID。删除订阅时同样会从该列表移除。
 * 枚举字段：`reverse_proxy_miss_action` 仅 `TREAT_AS_EMPTY|REJECT`；`reverse_proxy_empty_account_behavior` 仅 `RANDOM|FIXED_HEADER|ACCOUNT_HEADER_RULE`；`allocation_policy` 仅 `BALANCED|PREFER_LOW_LATENCY|PREFER_IDLE_IP`。
 * `passive_circuit_breaker_disabled`：布尔值。设为 `true` 后，此 Platform 的用户代理请求失败不会增加节点熔断计数；主动探测不受影响。成功请求仍会清除节点连续失败计数并可恢复熔断节点。
 * `chain_platform_ids`：有序前置 Platform ID。空数组或不传表示直连。每项必须是已存在的其他 Platform，不能为空、重复或指向自己，全图不能成环，长度最多 8。前置 Platform 自己的 chain 不展开。
@@ -1305,7 +1308,7 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：无
-* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
+* 可改字段：`name`、`sticky_ttl`、`regex_filters`、`region_filters`、`subscription_ids`、`subscription_exclude_ids`、`reverse_proxy_miss_action`、`reverse_proxy_empty_account_behavior`、`reverse_proxy_fixed_account_header`、`allocation_policy`、`passive_circuit_breaker_disabled`、`fallback_platform_ids`、`chain_platform_ids`
 * 不可改字段：`id`、`updated_at`、`routable_node_count`
 
 关键校验：与“创建平台”一致。
@@ -1365,7 +1368,8 @@ Body（partial patch 示例）：
   "platform_spec": {
     "regex_filters": ["^subA/.*"],
     "region_filters": ["hk", "us"],
-    "subscription_ids": ["uuid-of-exclusive-sub"]
+    "subscription_ids": ["uuid-of-exclusive-sub"],
+    "subscription_exclude_ids": []
   }
 }
 ```
@@ -1373,7 +1377,7 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：`platform_id` 与 `platform_spec` 二选一，且只能出现一个。
-* `platform_spec` 仅允许字段：`regex_filters`、`region_filters`、`subscription_ids`。
+* `platform_spec` 仅允许字段：`regex_filters`、`region_filters`、`subscription_ids`、`subscription_exclude_ids`。
 
 关键校验（最小集）：
 
@@ -1381,6 +1385,7 @@ Body（partial patch 示例）：
 * `platform_spec.regex_filters`：同 Platform 的 `regex_filters`。
 * `platform_spec.region_filters`：每项为 ISO 3166-1 alpha-2 小写代码。
 * `platform_spec.subscription_ids`：同 Platform 的 `subscription_ids`。
+* `platform_spec.subscription_exclude_ids`：同 Platform 的 `subscription_exclude_ids`。
 
 错误码映射（最小集）：
 
@@ -1422,6 +1427,8 @@ API 阻塞到重建完成为止。
   "node_count": 1200,
   "healthy_node_count": 980,
   "ephemeral": false,
+  "incremental_alive_nodes": false,
+  "disable_invalid_node_check": false,
   "ephemeral_node_evict_delay": "72h",
   "enabled": true,
   "created_at": "2026-02-10T12:00:00Z",
@@ -1455,6 +1462,8 @@ Body：
   "update_interval": "5m",
   "enabled": true,
   "ephemeral": false,
+  "incremental_alive_nodes": false,
+  "disable_invalid_node_check": false,
   "ephemeral_node_evict_delay": "72h"
 }
 ```
@@ -1470,9 +1479,9 @@ Body：
 字段要求：
 
 * 必填字段：`name`，以及按 `source_type` 决定的源字段（`remote` 需要 `url`，`local` 需要 `content`）。
-* 可选字段：`source_type`、`url`、`content`、`update_interval`、`enabled`、`ephemeral`、`ephemeral_node_evict_delay`
+* 可选字段：`source_type`、`url`、`content`、`update_interval`、`enabled`、`ephemeral`、`incremental_alive_nodes`、`disable_invalid_node_check`、`ephemeral_node_evict_delay`
 * 不可传字段：`id`、`node_count`、`healthy_node_count`、`created_at`、`last_checked`、`last_updated`、`last_error`
-* 默认值：`update_interval="5m"`、`enabled=true`、`ephemeral=false`、`ephemeral_node_evict_delay="72h"`
+* 默认值：`update_interval="5m"`、`enabled=true`、`ephemeral=false`、`incremental_alive_nodes=false`、`disable_invalid_node_check=false`、`ephemeral_node_evict_delay="72h"`
 
 关键校验（最小集）：
 
@@ -1509,7 +1518,7 @@ Body（partial patch 示例）：
 字段要求：
 
 * 必填字段：无
-* 可改字段：`name`、`url`、`content`、`update_interval`、`enabled`、`ephemeral`、`ephemeral_node_evict_delay`
+* 可改字段：`name`、`url`、`content`、`update_interval`、`enabled`、`ephemeral`、`incremental_alive_nodes`、`disable_invalid_node_check`、`ephemeral_node_evict_delay`
 * 不可改字段：`id`、`source_type`、`node_count`、`healthy_node_count`、`created_at`、`last_checked`、`last_updated`、`last_error`
 
 关键校验：与“创建订阅”一致。

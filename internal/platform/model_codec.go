@@ -149,6 +149,7 @@ func BuildFromModel(mp model.Platform) (*Platform, error) {
 	configured.FallbackPlatformIDs = append([]string(nil), mp.FallbackPlatformIDs...)
 	configured.ChainPlatformIDs = append([]string(nil), mp.ChainPlatformIDs...)
 	configured.SubscriptionIDs = append([]string{}, mp.SubscriptionIDs...)
+	configured.SubscriptionExcludeIDs = append([]string{}, mp.SubscriptionExcludeIDs...)
 	configured.RotationIntervalNs = mp.RotationIntervalNs
 	configured.RotationStrategy = ParseRotationStrategy(mp.RotationStrategy)
 	if configured.RotationStrategy == "" {
