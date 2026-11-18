@@ -12,6 +12,46 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 )
 
+func TestStripOutboundDetourRemovesDetourKeepsTag(t *testing.T) {
+	raw := json.RawMessage(`{"type":"socks","tag":"node","server":"127.0.0.1","server_port":1,"detour":"clash-hop"}`)
+	stripped, err := stripOutboundDetour(raw)
+	if err != nil {
+		t.Fatalf("strip: %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(stripped, &object); err != nil {
+		t.Fatal(err)
+	}
+	if object["tag"] != "node" {
+		t.Fatalf("tag = %v", object["tag"])
+	}
+	if _, ok := object["detour"]; ok {
+		t.Fatalf("detour survived strip: %v", object["detour"])
+	}
+
+	unchanged := json.RawMessage(`{"type":"direct","tag":"plain"}`)
+	got, err := stripOutboundDetour(unchanged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(unchanged) {
+		t.Fatalf("strip without detour rewrote json: %s", got)
+	}
+}
+
+func TestBuildStripsInheritedDetour(t *testing.T) {
+	b := newTestSingboxBuilder(t)
+	defer b.Close()
+
+	ob, err := b.Build(json.RawMessage(`{"type":"socks","tag":"imported","server":"127.0.0.1","server_port":1,"version":"5","detour":"clash-hop"}`))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if deps := ob.Dependencies(); len(deps) != 0 {
+		t.Fatalf("direct build kept detour dependencies %v", deps)
+	}
+}
+
 func TestWithDialerOverrideSetsTagAndDetour(t *testing.T) {
 	raw := json.RawMessage(`{"type":"direct","tag":"old","detour":"clash-hop"}`)
 

@@ -271,7 +271,7 @@ func newTopologyRuntime(
 				},
 			})
 		},
-		Outbound: outboundMgr.OutboundForProbe,
+		Outbound: outboundMgr.OutboundForUDPProbe,
 		MaxEgressTestInterval: func() time.Duration {
 			return time.Duration(runtimeConfigSnapshot(runtimeCfg).MaxEgressTestInterval)
 		},

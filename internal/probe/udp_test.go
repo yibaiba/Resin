@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
 	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
 )
 
 func TestProbeManager_UDPResponseValidationAndHealth(t *testing.T) {
@@ -186,6 +188,30 @@ func TestProbeManager_UDPProbeUsesHotTarget(t *testing.T) {
 	}
 	if entry.LastUDPProbeSuccess.Load() == 0 {
 		t.Fatal("hot target probe did not record success")
+	}
+}
+
+func TestProbeManager_UDPProbeSkipDoesNotRecordHealth(t *testing.T) {
+	server := newUDPProbeResponder(t, func(query *dns.Msg) ([]byte, bool) {
+		return validDNSResponse(query), false
+	})
+	manager, entry, hash := newUDPProbeTestManager(t, server.target, "tcp", "udp")
+	manager.outbound = func(node.Hash) (adapter.Outbound, error) {
+		return nil, outbound.ErrSkipUDPProbe
+	}
+
+	manager.probeUDP(hash, entry)
+	if entry.LastUDPProbeAttempt.Load() != 0 || entry.LastUDPProbeSuccess.Load() != 0 {
+		t.Fatalf("skip recorded probe result: attempt=%d success=%d",
+			entry.LastUDPProbeAttempt.Load(), entry.LastUDPProbeSuccess.Load())
+	}
+	if entry.UDPHealthState().FailureCount != 0 {
+		t.Fatalf("skip recorded UDP failure: %+v", entry.UDPHealthState())
+	}
+	select {
+	case <-server.requests:
+		t.Fatal("skipped UDP probe still dialed the target")
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

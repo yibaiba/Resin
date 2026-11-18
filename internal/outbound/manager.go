@@ -16,7 +16,10 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 )
 
-var ErrOutboundNotReady = errors.New("outbound not ready")
+var (
+	ErrOutboundNotReady = errors.New("outbound not ready")
+	ErrSkipUDPProbe     = errors.New("unique landing chain has no udp hop")
+)
 
 // PoolAccessor provides read-only access to the node pool.
 type PoolAccessor interface {

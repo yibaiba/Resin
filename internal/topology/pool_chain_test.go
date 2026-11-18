@@ -171,6 +171,12 @@ func TestUniqueLandingChain_EmptyHopViewIsNotUnique(t *testing.T) {
 	if hops, ok := pool.UniqueLandingChain(landHash); ok {
 		t.Fatalf("empty hop view should not chain-probe, hops=%v", hops)
 	}
+	if !pool.HasUniqueLandingChain(landHash) {
+		t.Fatal("empty hop view still belongs to a unique chain")
+	}
+	if hops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp"); ok {
+		t.Fatalf("empty hop UDP chain = %v", hops)
+	}
 }
 
 type networkLimitedOutbound struct {
@@ -214,5 +220,44 @@ func TestUniqueLandingChain_PrefersUDPCapableHop(t *testing.T) {
 	hops, ok := pool.UniqueLandingChain(landHash)
 	if !ok || len(hops) != 1 || hops[0] != udpHash {
 		t.Fatalf("unique chain = %v ok=%v, want UDP hop %s", hops, ok, udpHash.Hex())
+	}
+	udpHops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp")
+	if !ok || len(udpHops) != 1 || udpHops[0] != udpHash {
+		t.Fatalf("udp chain = %v ok=%v, want UDP hop %s", udpHops, ok, udpHash.Hex())
+	}
+}
+
+func TestUniqueLandingChainForNetwork_UDPRequiresUDPHop(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.SubscriptionIDs = []string{"hop-sub"}
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	tcpHash := addHealthyChainNode(t, pool, subMgr, "hop-sub", `{"role":"hop-tcp-only"}`, "198.51.100.1")
+	landHash := addHealthyChainNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
+	tcpEntry, _ := pool.GetEntry(tcpHash)
+	var tcpOut adapter.Outbound = &networkLimitedOutbound{
+		NoopOutbound: &testutil.NoopOutbound{},
+		networks:     []string{"tcp"},
+	}
+	tcpEntry.Outbound.Store(&tcpOut)
+	pool.RebuildPlatform(hop)
+	pool.RebuildPlatform(landing)
+
+	if !pool.HasUniqueLandingChain(landHash) {
+		t.Fatal("tcp-only hop platform is still a unique chain")
+	}
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != tcpHash {
+		t.Fatalf("http chain = %v ok=%v, want TCP hop %s", hops, ok, tcpHash.Hex())
+	}
+	if udpHops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp"); ok {
+		t.Fatalf("udp chain should be unavailable, hops=%v", udpHops)
 	}
 }

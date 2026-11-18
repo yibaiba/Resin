@@ -280,7 +280,43 @@ func (p *GlobalNodePool) RangePlatforms(fn func(*platform.Platform) bool) {
 
 // UniqueLandingChain returns hop node hashes when the node belongs to exactly
 // one non-empty platform chain. Ambiguous or unchained nodes return ok=false.
+// Hop pick prefers a UDP-capable node, then falls back to the TCP view so HTTP
+// unique-chain probes still work on TCP-only hop platforms.
 func (p *GlobalNodePool) UniqueLandingChain(hash node.Hash) ([]node.Hash, bool) {
+	return p.UniqueLandingChainForNetwork(hash, "")
+}
+
+// HasUniqueLandingChain reports unique-chain membership without requiring hops
+// to be currently routable.
+func (p *GlobalNodePool) HasUniqueLandingChain(hash node.Hash) bool {
+	_, ok := p.uniqueLandingChainIDs(hash)
+	return ok
+}
+
+// UniqueLandingChainForNetwork picks hops from the requested network view.
+// UDP uses only the UDP view (plus hop fallback). Other networks keep the
+// UDP-then-TCP pick used by HTTP probes.
+func (p *GlobalNodePool) UniqueLandingChainForNetwork(hash node.Hash, network string) ([]node.Hash, bool) {
+	chainIDs, ok := p.uniqueLandingChainIDs(hash)
+	if !ok {
+		return nil, false
+	}
+	hops := make([]node.Hash, 0, len(chainIDs))
+	for _, hopID := range chainIDs {
+		hopPlat, ok := p.GetPlatform(hopID)
+		if !ok {
+			return nil, false
+		}
+		hopHash, ok := p.pickStableHopHash(hopPlat, network)
+		if !ok {
+			return nil, false
+		}
+		hops = append(hops, hopHash)
+	}
+	return hops, true
+}
+
+func (p *GlobalNodePool) uniqueLandingChainIDs(hash node.Hash) ([]string, bool) {
 	entry, ok := p.GetEntry(hash)
 	if !ok || entry == nil {
 		return nil, false
@@ -312,22 +348,11 @@ func (p *GlobalNodePool) UniqueLandingChain(hash node.Hash) ([]node.Hash, bool) 
 	if !found {
 		return nil, false
 	}
-	hops := make([]node.Hash, 0, len(chainIDs))
-	for _, hopID := range chainIDs {
-		hopPlat, ok := p.GetPlatform(hopID)
-		if !ok {
-			return nil, false
-		}
-		hopHash, ok := p.pickStableHopHash(hopPlat)
-		if !ok {
-			return nil, false
-		}
-		hops = append(hops, hopHash)
-	}
-	return hops, true
+	return chainIDs, true
 }
 
-func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform) (node.Hash, bool) {
+func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform, network string) (node.Hash, bool) {
+	udpOnly := N.NetworkName(network) == N.NetworkUDP
 	visited := make(map[string]struct{})
 	var walk func(*platform.Platform) (node.Hash, bool)
 	walk = func(plat *platform.Platform) (node.Hash, bool) {
@@ -341,8 +366,10 @@ func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform) (node.Has
 		if hash, ok := stableViewHash(plat.NetworkView(N.NetworkUDP)); ok {
 			return hash, true
 		}
-		if hash, ok := stableViewHash(plat.View()); ok {
-			return hash, true
+		if !udpOnly {
+			if hash, ok := stableViewHash(plat.View()); ok {
+				return hash, true
+			}
 		}
 		for _, fallbackID := range plat.FallbackPlatformIDs {
 			fallback, ok := p.GetPlatform(fallbackID)

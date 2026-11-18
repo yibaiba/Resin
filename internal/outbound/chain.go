@@ -60,6 +60,25 @@ func chainLandingTag(hops []node.Hash, landing node.Hash) string {
 	return b.String()
 }
 
+func stripOutboundDetour(raw json.RawMessage) (json.RawMessage, error) {
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, fmt.Errorf("parse outbound json: %w", err)
+	}
+	if object == nil {
+		return raw, nil
+	}
+	if _, ok := object["detour"]; !ok {
+		return raw, nil
+	}
+	delete(object, "detour")
+	out, err := json.Marshal(object)
+	if err != nil {
+		return nil, fmt.Errorf("encode outbound json: %w", err)
+	}
+	return out, nil
+}
+
 func withDialerOverride(raw json.RawMessage, tag, detour string) (json.RawMessage, error) {
 	var object map[string]any
 	if err := json.Unmarshal(raw, &object); err != nil {

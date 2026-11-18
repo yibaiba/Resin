@@ -83,6 +83,14 @@ func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
 	})
 }
 
+func (f *requestHealthFeedback) recordDialFailure() {
+	if f != nil && len(f.route.ChainHops) > 0 {
+		f.record(passiveHealthNeutral)
+		return
+	}
+	f.record(passiveHealthFailure)
+}
+
 func (f *requestHealthFeedback) outcome() passiveHealthOutcome {
 	if f == nil {
 		return passiveHealthNeutral
@@ -138,4 +146,11 @@ func recordPassiveUDPResultAsync(health HealthRecorder, route routing.RouteResul
 	if recorder, ok := health.(passiveNetworkHealthRecorder); ok {
 		go recorder.RecordPassiveNetworkResult(route.PlatformID, route.NodeHash, N.NetworkUDP, success)
 	}
+}
+
+func recordUDPOutboundListenFailure(health HealthRecorder, route routing.RouteResult) {
+	if len(route.ChainHops) > 0 {
+		return
+	}
+	recordPassiveUDPResultAsync(health, route, false)
 }

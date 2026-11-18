@@ -259,3 +259,58 @@ func TestRouteDiagnosticAttachesChainHops(t *testing.T) {
 		t.Fatalf("chain = %+v, want hop %s", diagnostic.Selection.Chain, hashH.Hex())
 	}
 }
+
+func TestPlatformChainUDPAttachesUDPHops(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := newChainPlatform("hop", "Hop", "sub-hop")
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+	hashH, entryH := newIsolatedRoutableEntry(t, `{"chain":"hop-udp"}`, "198.51.100.70", "sub-hop")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-udp"}`, "198.51.100.71", "sub-land")
+	setRouteEntryNetworks(entryH, "tcp", "udp")
+	setRouteEntryNetworks(entryL, "tcp", "udp")
+	pool.addEntry(hashH, entryH)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	result, err := newTestRouter(pool, nil).RouteWithOptions(RouteOptions{
+		PlatformName:    landing.Name,
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if err != nil {
+		t.Fatalf("udp chain: %v", err)
+	}
+	if result.NodeHash != hashL || len(result.ChainHops) != 1 || result.ChainHops[0].NodeHash != hashH {
+		t.Fatalf("udp chain result = %+v, want landing %s hop %s", result, hashL.Hex(), hashH.Hex())
+	}
+}
+
+func TestPlatformChainUDPHopNotInUDPView(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := newChainPlatform("hop", "Hop", "sub-hop")
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+	hashH, entryH := newIsolatedRoutableEntry(t, `{"chain":"hop-tcp"}`, "198.51.100.72", "sub-hop")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-udp-only"}`, "198.51.100.73", "sub-land")
+	setRouteEntryNetworks(entryH, "tcp")
+	setRouteEntryNetworks(entryL, "tcp", "udp")
+	pool.addEntry(hashH, entryH)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	_, err := newTestRouter(pool, nil).RouteWithOptions(RouteOptions{
+		PlatformName:    landing.Name,
+		Target:          "example.com:53",
+		RequiredNetwork: "udp",
+	})
+	if !errors.Is(err, ErrNoAvailableNodes) {
+		t.Fatalf("tcp-only hop error = %v, want ErrNoAvailableNodes", err)
+	}
+}

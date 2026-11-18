@@ -63,6 +63,29 @@ func TestRequestHealthFeedback_SubmitsAtMostOnce(t *testing.T) {
 	})
 }
 
+func TestRequestHealthFeedback_ChainedDialFailureIsNeutral(t *testing.T) {
+	hash := node.HashFromRawOptions([]byte(`{"type":"chain-dial"}`))
+	chained := routing.RouteResult{
+		NodeHash:  hash,
+		ChainHops: []routing.RouteChainHop{{PlatformID: "hop", NodeHash: hash}},
+	}
+	recorder := &mockHealthRecorder{}
+	feedback := newRequestHealthFeedback(recorder, chained, "request-chain-dial")
+	feedback.recordDialFailure()
+	if recorder.resultCalls.Load() != 0 {
+		t.Fatalf("chained dial failure recorded %d results", recorder.resultCalls.Load())
+	}
+	if feedback.outcome() != passiveHealthNeutral {
+		t.Fatalf("outcome = %d, want neutral", feedback.outcome())
+	}
+
+	direct := newRequestHealthFeedback(&mockHealthRecorder{}, routing.RouteResult{NodeHash: hash}, "request-direct-dial")
+	direct.recordDialFailure()
+	if direct.outcome() != passiveHealthFailure {
+		t.Fatalf("direct dial outcome = %d, want failure", direct.outcome())
+	}
+}
+
 type suppressedPassiveHealthRecorder struct {
 	mockHealthRecorder
 }

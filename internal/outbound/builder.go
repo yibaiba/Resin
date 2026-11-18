@@ -262,10 +262,14 @@ func (b *SingboxBuilder) ensureDNSTransportLocked(uri string) (string, error) {
 // type/tag fields) into a real adapter.Outbound and runs it through the
 // lifecycle stages.
 func (b *SingboxBuilder) Build(rawOptions json.RawMessage) (adapter.Outbound, error) {
+	stripped, err := stripOutboundDetour(rawOptions)
+	if err != nil {
+		return nil, err
+	}
 	// 1. Parse via official option.Outbound path (strips type/tag, creates
 	//    typed options via OutboundOptionsRegistry + badjson.UnmarshallExcluded).
 	var outboundConfig option.Outbound
-	if err := sJson.UnmarshalContext(b.ctx, rawOptions, &outboundConfig); err != nil {
+	if err := sJson.UnmarshalContext(b.ctx, stripped, &outboundConfig); err != nil {
 		return nil, fmt.Errorf("parse outbound options: %w", err)
 	}
 

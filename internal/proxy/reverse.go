@@ -403,7 +403,7 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if hasRoute && upstreamTrace.sawFirstResponseByte() && !isClientOwnedReverseProxyFailure(failure) {
 				feedback.record(passiveHealthSuccess)
 			} else if hasRoute && !isClientOwnedReverseProxyFailure(failure) {
-				feedback.record(passiveHealthFailure)
+				feedback.recordDialFailure()
 			} else {
 				feedback.record(passiveHealthNeutral)
 			}

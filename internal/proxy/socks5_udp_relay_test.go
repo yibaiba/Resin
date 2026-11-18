@@ -13,6 +13,7 @@ import (
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/outbound"
+	"github.com/Resinat/Resin/internal/platform"
 	"github.com/sagernet/sing-box/adapter"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -450,6 +451,69 @@ func TestSocks5UDPRelayOnlyPenalizesExplicitOutboundFailures(t *testing.T) {
 				t.Fatalf("passive failure calls: got %d, want %d", got, testCase.wantFailures)
 			}
 		})
+	}
+}
+
+type staticChainResolver struct {
+	ob    adapter.Outbound
+	calls atomic.Int32
+}
+
+func (s *staticChainResolver) EnsureChainedOutbound([]node.Hash, node.Hash) (adapter.Outbound, error) {
+	s.calls.Add(1)
+	return s.ob, nil
+}
+
+func TestSocks5UDPChainedListenFailureDoesNotPenalizeLanding(t *testing.T) {
+	routeEnv := newProxyE2EEnv(t)
+	landing, ok := routeEnv.pool.GetPlatformByName("plat")
+	if !ok {
+		t.Fatal("landing platform missing")
+	}
+	landing.SubscriptionIDs = []string{"sub-1"}
+
+	hop := platform.NewPlatform("hop-id", "hop", nil, nil)
+	hop.StickyTTLNs = int64(time.Hour)
+	hop.SubscriptionIDs = []string{"sub-1"}
+	routeEnv.pool.RegisterPlatform(hop)
+	landing.ChainPlatformIDs = []string{hop.ID}
+
+	raw := json.RawMessage(`{"type":"stub","server":"127.0.0.1","server_port":1}`)
+	hash := node.HashFromRawOptions(raw)
+	routeEnv.pool.RebuildPlatform(hop)
+	routeEnv.pool.RebuildPlatform(landing)
+	if !hop.NetworkView("udp").Contains(hash) || !landing.NetworkView("udp").Contains(hash) {
+		t.Fatal("expected hop and landing UDP views to contain the node")
+	}
+
+	health := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+	chain := &staticChainResolver{ob: &udpListenFailureOutbound{err: errors.New("chained listen failed")}}
+	inbound := NewSocks5Inbound(Socks5InboundConfig{
+		Router: routeEnv.router, Pool: routeEnv.pool, Health: health, Chain: chain,
+	})
+	t.Cleanup(func() { _ = inbound.CloseUDPAssociations() })
+	clientConn := listenLocalUDP(t)
+	defer clientConn.Close()
+	registerRelayTestAssociation(t, inbound, "chain-health-scope", clientConn, landing.Name, nil)
+	packet, err := encodeSocks5UDPDatagram("127.0.0.1:53", []byte("health"))
+	if err != nil {
+		t.Fatalf("encode UDP datagram: %v", err)
+	}
+	inbound.handleUDPDatagram(socks5UDPInboundPacket{
+		ctx: context.Background(), associationScope: "chain-health-scope",
+		client: &socks5UDPClientWriter{packetConn: clientConn},
+		source: clientConn.LocalAddr(), packet: packet,
+	})
+	select {
+	case <-health.done:
+		t.Fatal("chained listen failure recorded landing UDP health")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if chain.calls.Load() != 1 {
+		t.Fatalf("EnsureChainedOutbound calls=%d, want 1", chain.calls.Load())
+	}
+	if health.passiveCalls.Load() != 0 {
+		t.Fatalf("passive calls=%d", health.passiveCalls.Load())
 	}
 }
 

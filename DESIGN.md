@@ -275,7 +275,7 @@ No available proxy nodes
 	* MatchTagFilter(filter TagFilter, subLookup SubLookupFunc) bool：按“节点标签过滤规则”判断节点是否匹配。
 	* MatchesSubscriptionAllowlist(allowIDs []string, subLookup SubLookupFunc) bool：空 allowlist 匹配全部节点；非空时节点必须属于其中至少一个 Enabled 订阅。
 
-直连节点由 Resin 自己的 OutboundManager 持有，不写入 sing-box OutboundManager。链式出站把 hop / landing 注册进已创建但未 Start 的 sing-box OutboundManager，只用来解析 `detour` tag；`NodeEntry.Outbound` 始终是直连探测实例。
+直连节点由 Resin 自己的 OutboundManager 持有，不写入 sing-box OutboundManager。构建直连 outbound 时去掉订阅自带的 `detour`。链式出站把 hop / landing 注册进已创建但未 Start 的 sing-box OutboundManager，只用来解析平台 chain 写入的 `detour` tag；`NodeEntry.Outbound` 始终是直连探测实例。
 
 #### Platform 可路由视图
 * 结构：`Custom Set：64 分片 * (RWMutex + Slice + Map)`
@@ -512,7 +512,7 @@ Resin 内置了 GeoIP 服务，用于支持 Platform 的 RegionFilters 功能。
 
 选出落地节点后，若该落地 Platform 的 `chain_platform_ids` 非空，再按顺序为每个前置 Platform 选一个节点（`SkipProxyChain`，沿用该前置 Platform 的粘性、过滤、熔断和它自己的 fallback）。前置没有节点则整次路由失败，错误码仍是 `NO_AVAILABLE_NODES`。`RouteResult.NodeHash` / 租约 / `egress_ip` 仍是落地节点；hop 记在 `ChainHops`。用户流量使用 sing-box `Detour` 链，不用落地节点的直连 Outbound。
 
-前置 Platform 的节点仍直连探测。落地节点仅当它只匹配一条非空 chain 时，egress / latency / UDP 探针走该链。Default 等无过滤的未链式平台不参与“唯一链”判定。落地节点同时挂在带过滤的未链式平台、或两条不同 chain 上时，探针走直连。落地订阅应单独放在链式平台里。
+前置 Platform 的节点仍直连探测。落地节点仅当它只匹配一条非空 chain 时，egress / latency / UDP 探针走该链。落地 UDP 探针只选 UDP 可路由 hop；唯一 chain 但没有 UDP hop 时跳过该次 UDP 探针，不记失败、不改走直连。用户链式 UDP `ListenPacket` 失败、以及链式 TCP/HTTP 拨号失败，都不记落地熔断。直连 `NodeEntry.Outbound` 构建时去掉订阅自带的 `detour` / `dialer-proxy`，平台 chain 才是用户链。Default 等无过滤的未链式平台不参与“唯一链”判定。落地节点同时挂在带过滤的未链式平台、或两条不同 chain 上时，探针走直连。落地订阅应单独放在链式平台里。
 
 ### 随机路由算法
 随机模式采用 **P2C** 算法，结合延迟与负载进行加权选择。

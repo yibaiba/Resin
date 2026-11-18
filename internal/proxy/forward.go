@@ -304,7 +304,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		lifecycle.setUpstreamError("forward_roundtrip", err)
 		lifecycle.setHTTPStatus(proxyErr.HTTPCode)
 		if hasRoute {
-			feedback.record(passiveHealthFailure)
+			feedback.recordDialFailure()
 		}
 		writeProxyError(w, proxyErr)
 		return

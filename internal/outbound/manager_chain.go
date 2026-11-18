@@ -9,10 +9,13 @@ import (
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/sagernet/sing-box/adapter"
+	N "github.com/sagernet/sing/common/network"
 )
 
 type landingChainResolver interface {
+	HasUniqueLandingChain(hash node.Hash) bool
 	UniqueLandingChain(hash node.Hash) ([]node.Hash, bool)
+	UniqueLandingChainForNetwork(hash node.Hash, network string) ([]node.Hash, bool)
 }
 
 func chainCacheKey(hops []node.Hash, landing node.Hash) string {
@@ -205,12 +208,27 @@ func (m *OutboundManager) OutboundForProbe(hash node.Hash) (adapter.Outbound, er
 	return m.outboundForProbe(hash)
 }
 
+func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound, error) {
+	if resolver, ok := m.pool.(landingChainResolver); ok && resolver.HasUniqueLandingChain(hash) {
+		hops, found := resolver.UniqueLandingChainForNetwork(hash, N.NetworkUDP)
+		if !found {
+			return nil, ErrSkipUDPProbe
+		}
+		return m.EnsureChainedOutbound(hops, hash)
+	}
+	return m.directProbeOutbound(hash)
+}
+
 func (m *OutboundManager) outboundForProbe(hash node.Hash) (adapter.Outbound, error) {
 	if resolver, ok := m.pool.(landingChainResolver); ok {
 		if hops, found := resolver.UniqueLandingChain(hash); found {
 			return m.EnsureChainedOutbound(hops, hash)
 		}
 	}
+	return m.directProbeOutbound(hash)
+}
+
+func (m *OutboundManager) directProbeOutbound(hash node.Hash) (adapter.Outbound, error) {
 	entry, exists := m.pool.GetEntry(hash)
 	if !exists {
 		return nil, fmt.Errorf("node not found")

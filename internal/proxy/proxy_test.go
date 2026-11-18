@@ -176,6 +176,36 @@ func TestRecordPassiveResult_UsesPlatformAwareRecorder(t *testing.T) {
 	}
 }
 
+func TestRecordUDPOutboundListenFailure_SkipsChainedLanding(t *testing.T) {
+	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"udp-chain-listen"}`))
+	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}
+	chained := routing.RouteResult{
+		PlatformID: "land",
+		NodeHash:   h,
+		ChainHops:  []routing.RouteChainHop{{PlatformID: "hop", NodeHash: h}},
+	}
+	recordUDPOutboundListenFailure(rec, chained)
+	select {
+	case <-rec.done:
+		t.Fatal("chained listen failure recorded landing UDP health")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if rec.passiveCalls.Load() != 0 {
+		t.Fatalf("chained listen failure calls=%d", rec.passiveCalls.Load())
+	}
+
+	recordUDPOutboundListenFailure(rec, routing.RouteResult{PlatformID: "land", NodeHash: h})
+	select {
+	case <-rec.done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("direct listen failure was not recorded")
+	}
+	if rec.passiveCalls.Load() != 1 || rec.success || rec.nodeHash != h {
+		t.Fatalf("direct listen failure: calls=%d success=%v hash=%s",
+			rec.passiveCalls.Load(), rec.success, rec.nodeHash.Hex())
+	}
+}
+
 func TestRecordPassiveUDPResultAsync_UsesNetworkAwareRecorder(t *testing.T) {
 	h := node.HashFromRawOptions([]byte(`{"type":"ss","n":"udp-aware"}`))
 	rec := &mockPassiveHealthRecorder{done: make(chan struct{}, 1)}

@@ -2,13 +2,46 @@ package outbound
 
 import (
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/testutil"
 	"github.com/sagernet/sing-box/adapter"
+	N "github.com/sagernet/sing/common/network"
 )
+
+type chainAwarePool struct {
+	mockPool
+	hasChain bool
+	tcpHops  []node.Hash
+	udpHops  []node.Hash
+}
+
+func (p *chainAwarePool) HasUniqueLandingChain(node.Hash) bool {
+	return p.hasChain
+}
+
+func (p *chainAwarePool) UniqueLandingChain(node.Hash) ([]node.Hash, bool) {
+	if !p.hasChain || len(p.tcpHops) == 0 {
+		return nil, false
+	}
+	return append([]node.Hash(nil), p.tcpHops...), true
+}
+
+func (p *chainAwarePool) UniqueLandingChainForNetwork(_ node.Hash, network string) ([]node.Hash, bool) {
+	if !p.hasChain {
+		return nil, false
+	}
+	if N.NetworkName(network) == N.NetworkUDP {
+		if len(p.udpHops) == 0 {
+			return nil, false
+		}
+		return append([]node.Hash(nil), p.udpHops...), true
+	}
+	return p.UniqueLandingChain(node.Hash{})
+}
 
 type recordingChainBuilder struct {
 	builds atomic.Int32
@@ -179,5 +212,41 @@ func TestEnsureChainedOutboundEvictsOldest(t *testing.T) {
 	}
 	if builder.builds.Load() != 3 {
 		t.Fatalf("evicted chain was not rebuilt, builds=%d", builder.builds.Load())
+	}
+}
+
+func TestOutboundForUDPProbeSkipsWhenUniqueChainHasNoUDPHop(t *testing.T) {
+	hop := newTestEntry(`{"type":"direct","role":"hop-tcp"}`)
+	landing := newTestEntry(`{"type":"direct","role":"land-skip"}`)
+	pool := &chainAwarePool{hasChain: true, tcpHops: []node.Hash{hop.Hash}}
+	pool.addEntry(hop)
+	pool.addEntry(landing)
+	mgr := NewOutboundManager(pool, &recordingChainBuilder{})
+
+	_, err := mgr.OutboundForUDPProbe(landing.Hash)
+	if !errors.Is(err, ErrSkipUDPProbe) {
+		t.Fatalf("UDP probe = %v, want ErrSkipUDPProbe", err)
+	}
+	ob, err := mgr.OutboundForProbe(landing.Hash)
+	if err != nil || ob == nil {
+		t.Fatalf("HTTP probe: ob=%v err=%v", ob, err)
+	}
+}
+
+func TestOutboundForUDPProbeUsesUDPHops(t *testing.T) {
+	hop := newTestEntry(`{"type":"direct","role":"hop-udp"}`)
+	landing := newTestEntry(`{"type":"direct","role":"land-udp"}`)
+	pool := &chainAwarePool{hasChain: true, udpHops: []node.Hash{hop.Hash}}
+	pool.addEntry(hop)
+	pool.addEntry(landing)
+	builder := &recordingChainBuilder{}
+	mgr := NewOutboundManager(pool, builder)
+
+	ob, err := mgr.OutboundForUDPProbe(landing.Hash)
+	if err != nil || ob == nil {
+		t.Fatalf("UDP probe: ob=%v err=%v", ob, err)
+	}
+	if builder.builds.Load() != 1 {
+		t.Fatalf("BuildChained calls = %d, want 1", builder.builds.Load())
 	}
 }

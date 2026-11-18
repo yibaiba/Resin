@@ -89,7 +89,7 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 				canceled:      true,
 			}
 		}
-		health.record(passiveHealthFailure)
+		health.recordDialFailure()
 		return tunnelPrepareResult{
 			route:         routed.Route,
 			health:        health,

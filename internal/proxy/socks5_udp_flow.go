@@ -116,8 +116,8 @@ func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPF
 		stage:       "udp_outbound_listen",
 		err:         err,
 	})
-	if result.flow == nil && result.proxyErr != nil && s.tunnel.health != nil {
-		recordPassiveUDPResultAsync(s.tunnel.health, routed.Route, false)
+	if result.flow == nil && result.proxyErr != nil {
+		recordUDPOutboundListenFailure(s.tunnel.health, routed.Route)
 	}
 	return result
 }
