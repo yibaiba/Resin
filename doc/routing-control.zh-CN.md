@@ -5,7 +5,7 @@ Resin 的路由控制按以下顺序执行：目标路由规则、Platform fallb
 ## WebUI 入口
 
 - `/ui/routing-rules`：创建、启停、排序和预览目标路由规则。
-- `/ui/platforms`：在 Platform 详情的配置页维护 fallback 顺序、轮换间隔和轮换策略；在租约页手动轮换单个账号。
+- `/ui/platforms`：在 Platform 详情的配置页维护链式前置、fallback 顺序、轮换间隔和轮换策略；在租约页手动轮换单个账号。
 - `/ui/egress-ips`：维护出口 IP 生命周期、容量、恢复时间，执行批量排空和按出口 IP 轮换。
 - `/ui/routing-diagnostics`：执行可复现的 dry-run 或一次真实 TCP 建连测试。
 

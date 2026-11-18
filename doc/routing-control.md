@@ -5,7 +5,7 @@ Resin applies routing controls in this order: target rules, Platform fallback, g
 ## WebUI
 
 - `/ui/routing-rules`: create, enable, reorder, and preview target rules.
-- `/ui/platforms`: configure ordered fallbacks and rotation on a Platform, or rotate one account lease.
+- `/ui/platforms`: configure proxy chain, ordered fallbacks, and rotation on a Platform, or rotate one account lease.
 - `/ui/egress-ips`: manage egress lifecycle, capacity, resume time, draining, and rotations.
 - `/ui/routing-diagnostics`: run a reproducible dry-run or one real TCP connection test.
 

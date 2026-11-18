@@ -37,6 +37,7 @@ It helps shield your services from unstable underlying proxy nodes by aggregatin
 - **Zero-intrusion sticky access**: Can extract account identity from existing request headers (for example API keys), so clients often need no code changes.
 - **Incremental subscription refresh**: Syncs subscription updates without interrupting current connections.
 - **Flexible node isolation**: Use Platform rules (regex, region, etc.) to build independent proxy pools for different business scenarios.
+- **Platform proxy chain**: Send traffic through front Platforms before the landing node. Put home-broadband exits on a chained landing Platform.
 
 > [!TIP]
 > You can feed this README and [`DESIGN.md`](DESIGN.md) to AI and ask it anything about the project.
@@ -252,6 +253,48 @@ Replace `my-token` with `RESIN_PROXY_TOKEN`. When the token is explicitly empty,
 
 If the new Platform shows zero routable nodes, first confirm that the filter is exactly `gb` (not `gk`). A node must also be enabled and healthy, have a working outbound, a known egress IP, and at least one latency record before it becomes routable.
 
+### Proxy chain
+
+Proxy chain is configured on the **landing Platform**, not on individual nodes. Traffic goes `client → Resin → front Platform node(s) → landing Platform node → destination`. Leave the front-platform list empty for a direct exit.
+
+#### Example: reach a home-broadband landing through a VPS hop
+
+1. Prepare a front Platform, usually a VPS. Create a Platform named `VPS`, or reuse `Default`. Limit its allowed subscriptions and filters to those hop nodes.
+2. Create a landing Platform named `HomeBB` for the real exit. Attach the home-broadband subscription only here. Do not also put those nodes on `Default` or another Platform without a proxy chain.
+3. Open `HomeBB`, find **Proxy Chain**, click **Add Front Platform**, and select `VPS` (or `Default`). Order is top to bottom; the hop closest to Resin goes first.
+   - One front platform A: `Resin → A → HomeBB`
+   - A then B: `Resin → A → B → HomeBB`
+4. Save. Send traffic with the landing Platform in the identity, same as any other Platform.
+
+A front Platform's own chain is not expanded. To get A→B→C, add A then B on C. The limit is 8 hops. Proxy chain and fallback are independent: fallback replaces the landing Platform; chain adds hops in front of the current landing.
+
+HTTP, SOCKS5, and reverse-proxy examples:
+
+```bash
+curl -x http://127.0.0.1:2260 \
+  -U "HomeBB:my-token" \
+  https://api.ipify.org
+
+curl --proxy socks5h://127.0.0.1:2260 \
+  -U "HomeBB:my-token" \
+  https://api.ipify.org
+
+curl http://127.0.0.1:2260/my-token/HomeBB/https/api.ipify.org
+```
+
+Reuse `HomeBB.client01` as the username when you also want sticky routing.
+
+Notes:
+
+- The hop node and the landing node cannot be the same node.
+- Front-platform nodes must already be healthy. If Resin cannot pick a hop, the request fails with `NO_AVAILABLE_NODES`.
+- Landing probes follow the chain. If hops cannot be picked, the probe is skipped; Resin does not fall back to dialing the landing directly.
+- A Platform that is referenced as a front hop cannot be deleted.
+
+In **Routing diagnostics**, the selection result shows **Chain hops**. Request logs still record the landing node hash and egress IP.
+
+See [Routing Control and Diagnostics](doc/routing-control.md) for API fields.
+
 ## 📖 Advanced Usage: Sticky Session Proxy
 
 When your business depends on IP continuity or long-lived interactions, use Resin's core feature: **sticky proxying**.
@@ -339,7 +382,7 @@ In this example, Resin uses `sk-abc123` as Account. Future requests with the sam
 
 ## 🧭 Routing Control and Diagnostics
 
-The WebUI now exposes five connected controls: target rules, Platform fallback, the global egress-IP pool, sticky rotation, and routing diagnostics. Rules can route to a Platform, connect directly, or reject; fallback selects a Platform only before dialing and never replays an in-flight request; egress policy and capacity apply globally; rotation can preserve, prefer changing, or require changing the IP; diagnostics explain the full selection and can run a health-neutral LIVE_TCP check.
+The WebUI now exposes target rules, Platform fallback, Platform proxy chain, the global egress-IP pool, sticky rotation, and routing diagnostics. Rules can route to a Platform, connect directly, or reject; fallback selects a Platform only before dialing and never replays an in-flight request; proxy chain adds front hops before the landing Platform; egress policy and capacity apply globally; rotation can preserve, prefer changing, or require changing the IP; diagnostics explain the full selection and can run a health-neutral LIVE_TCP check.
 
 See [Routing Control and Diagnostics](doc/routing-control.md) for behavior, WebUI paths, API fields, and executable examples. Existing default-Platform and sticky-routing behavior is unchanged until these controls are configured.
 

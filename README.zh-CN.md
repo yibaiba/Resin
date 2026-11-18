@@ -35,6 +35,7 @@
 - **零侵入粘性接入**：支持从业务原有请求头（如 API Key）自动提取账号身份，在常见接入方式下可尽量减少代码改动。
 - **订阅热更新**：节点订阅刷新时增量同步，不中断现有连接。
 - **灵活的节点隔离**：通过 Platform 概念，按正则表达式、地区等规则筛选节点，为不同业务构建独立的代理池。
+- **Platform 链式代理**：流量可以先走前置 Platform，再从落地节点出站。家宽等需要走前置的节点放在带链式的落地 Platform 里即可。
 
 
 > [!TIP]
@@ -243,6 +244,48 @@ curl --proxy socks5h://127.0.0.1:2260 \
 
 如果新建后显示 0 个可路由节点，先确认地区筛选填写的是 `gb`，不是 `gk`。节点还必须处于启用且健康状态，并且已有可用出站、已识别出口 IP 和至少一条延迟记录，才会进入 Platform。
 
+### 链式代理
+
+链式代理配置在**落地 Platform** 上，不是配置在单个节点上。流量路径是：`客户端 → Resin → 前置 Platform 节点 → 落地 Platform 节点 → 目标`。前置列表留空就是直连。
+
+#### 示例：用 VPS 前置打家宽落地
+
+1. 准备前置 Platform：一般是 VPS。可以新建名为 `VPS` 的平台，也可以直接用 `Default`。订阅和过滤只圈这些前置节点。
+2. 新建落地 Platform，名称例如 `家宽`。家宽订阅只挂在这里，不要再挂到 `Default` 或其他未配置链式的平台。
+3. 打开 `家宽`，找到 **链式代理**，点 **添加前置 Platform**，选择 `VPS`（或 `Default`）。顺序从上到下，离 Resin 最近的放第一。
+   - 只填 A：`Resin → A → 家宽`
+   - 先填 A 再填 B：`Resin → A → B → 家宽`
+4. 落地 Platform 勾上家宽那份订阅，保存。客户端指定落地 Platform 即可，和筛选节点一样。
+
+前置 Platform 自己的链式不会再展开。要 A→B→C，把 A、B 写在 C 上。最多 8 跳。链式和 fallback 互相独立：fallback 是换落地 Platform，链式是给当前落地加前置。
+
+HTTP、SOCKS5 和反向代理示例：
+
+```bash
+curl -x http://127.0.0.1:2260 \
+  -U "家宽:my-token" \
+  https://api.ipify.org
+
+curl --proxy socks5h://127.0.0.1:2260 \
+  -U "家宽:my-token" \
+  https://api.ipify.org
+
+curl http://127.0.0.1:2260/my-token/家宽/https/api.ipify.org
+```
+
+需要粘性时，用户名写成 `家宽.client01`。
+
+注意：
+
+- 前置节点和落地节点不能是同一个节点。
+- 前置节点要先探测健康。选不出 hop 时整次请求失败，错误仍是 `NO_AVAILABLE_NODES`。
+- 落地探针会走链；hop 选不出就跳过，不会改成直连打家宽。
+- 被当成前置引用的 Platform 不能删除。
+
+在 **路由诊断** 里看选择结果是否出现 **链式前置**。请求日志里的节点 / 出口 IP 仍是落地节点。
+
+API 字段见 [路由控制与诊断文档](doc/routing-control.zh-CN.md)。
+
 ## 📖 进阶使用：粘性代理
 
 当业务遇到**对 IP 变化敏感**的服务，或者需要持续交互时，你需要使用 Resin 的核心特性：**粘性代理**。
@@ -325,7 +368,7 @@ curl "http://127.0.0.1:2260/my-token/MyPlatform/https/api.example.com/v1/orders"
 
 ## 🧭 路由控制与诊断
 
-WebUI 已提供目标路由规则、Platform fallback、出口 IP 池、粘性轮换和路由诊断五个连续控制层。目标规则可以把流量送往指定 Platform、直接连接或拒绝；fallback 只在拨号前选择可用 Platform，不会重放已经开始的请求；出口策略与容量在所有 Platform 间全局生效；轮换支持保持 IP、优先或强制更换 IP；诊断工作台可以解释完整选择过程并执行无健康副作用的 LIVE_TCP。
+WebUI 已提供目标路由规则、Platform fallback、Platform 链式代理、出口 IP 池、粘性轮换和路由诊断。目标规则可以把流量送往指定 Platform、直接连接或拒绝；fallback 只在拨号前选择可用 Platform，不会重放已经开始的请求；链式代理在落地 Platform 前加前置跳；出口策略与容量在所有 Platform 间全局生效；轮换支持保持 IP、优先或强制更换 IP；诊断工作台可以解释完整选择过程并执行无健康副作用的 LIVE_TCP。
 
 完整行为、WebUI 路径、API 字段和可执行示例见 [路由控制与诊断文档](doc/routing-control.zh-CN.md)。未配置上述功能时，现有默认 Platform 和粘性路由行为保持不变。
 
