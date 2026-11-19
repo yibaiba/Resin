@@ -336,7 +336,8 @@ func (p *ReverseProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		transport = p.outboundHTTPTransport(routed)
 	}
-	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
+	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID).
+		bindChainFailover(account, p.router)
 	lifecycle.setHealthFeedback(feedback)
 	upgradeRequest := isHTTPUpgradeRequest(r.Header)
 	upstreamTrace := newUpstreamRequestTrace(func() {

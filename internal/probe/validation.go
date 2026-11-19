@@ -115,6 +115,7 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 			m.pool.CancelTCPValidation(task.key.hash, validation)
 			return
 		}
+		m.noteChainProbeFailure(task.key.hash)
 		m.completeFailedTCPValidation(task.key.hash, entry, validation, fetchErr)
 		return
 	}

@@ -46,6 +46,8 @@ type Router struct {
 	p2cWindow        func() time.Duration
 	onLeaseEvent     LeaseEventFunc
 	nodeTagResolver  func(node.Hash) string
+	hopFailMu        sync.Mutex
+	hopFails         map[string]map[node.Hash]time.Time
 }
 
 type RouterConfig struct {
@@ -75,6 +77,7 @@ func NewRouter(cfg RouterConfig) *Router {
 		p2cWindow:       cfg.P2CWindow,
 		onLeaseEvent:    cfg.OnLeaseEvent,
 		nodeTagResolver: cfg.NodeTagResolver,
+		hopFails:        make(map[string]map[node.Hash]time.Time),
 	}
 }
 
@@ -245,6 +248,7 @@ func (r *Router) candidateView(request routeRequest, selected *platform.Platform
 	}
 	view := selected.NetworkView(request.network)
 	view = platform.ExcludeHash(view, request.excludeNode)
+	view = platform.ExcludeHashes(view, r.failedHopHashes(request.account))
 	if request.hopPick {
 		view = platform.PreferNonVision(view, r.nodeHasVisionFlow)
 	}

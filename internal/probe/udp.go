@@ -43,6 +43,9 @@ func (m *ProbeManager) probeUDP(hash node.Hash, entry *node.NodeEntry) {
 	if errors.Is(err, context.Canceled) || isSkippedProbe(err) {
 		return
 	}
+	if err != nil {
+		m.noteChainProbeFailure(hash)
+	}
 	m.pool.RecordUDPProbeResult(hash, err == nil)
 	if err != nil {
 		m.logUDPProbeFailure(hash, err)

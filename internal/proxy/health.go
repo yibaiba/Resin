@@ -47,12 +47,18 @@ const (
 	passiveHealthFailure
 )
 
+type chainDialFailover interface {
+	NoteChainDialFailure(account string, route routing.RouteResult)
+}
+
 type requestHealthFeedback struct {
 	once      sync.Once
 	recorded  atomic.Uint32
 	health    HealthRecorder
 	route     routing.RouteResult
 	requestID string
+	account   string
+	failover  chainDialFailover
 }
 
 func newRequestHealthFeedback(
@@ -61,6 +67,15 @@ func newRequestHealthFeedback(
 	requestID string,
 ) *requestHealthFeedback {
 	return &requestHealthFeedback{health: health, route: route, requestID: requestID}
+}
+
+func (f *requestHealthFeedback) bindChainFailover(account string, failover chainDialFailover) *requestHealthFeedback {
+	if f == nil {
+		return nil
+	}
+	f.account = account
+	f.failover = failover
+	return f
 }
 
 func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
@@ -86,6 +101,9 @@ func (f *requestHealthFeedback) record(outcome passiveHealthOutcome) {
 func (f *requestHealthFeedback) recordDialFailure() {
 	if f != nil && len(f.route.ChainHops) > 0 {
 		f.record(passiveHealthNeutral)
+		if f.failover != nil {
+			f.failover.NoteChainDialFailure(f.account, f.route)
+		}
 		return
 	}
 	f.record(passiveHealthFailure)
@@ -148,8 +166,11 @@ func recordPassiveUDPResultAsync(health HealthRecorder, route routing.RouteResul
 	}
 }
 
-func recordUDPOutboundListenFailure(health HealthRecorder, route routing.RouteResult) {
+func recordUDPOutboundListenFailure(health HealthRecorder, route routing.RouteResult, account string, failover chainDialFailover) {
 	if len(route.ChainHops) > 0 {
+		if failover != nil {
+			failover.NoteChainDialFailure(account, route)
+		}
 		return
 	}
 	recordPassiveUDPResultAsync(health, route, false)

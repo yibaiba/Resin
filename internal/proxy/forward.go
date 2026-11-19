@@ -259,7 +259,8 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		transport = p.outboundHTTPTransport(routed)
 	}
-	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID)
+	feedback := newRequestHealthFeedback(p.health, route, lifecycle.log.ID).
+		bindChainFailover(account, p.router)
 	lifecycle.setHealthFeedback(feedback)
 	outReq := prepareForwardOutboundRequest(r)
 	upstreamTrace := newUpstreamRequestTrace(func() {

@@ -70,7 +70,9 @@ func TestRequestHealthFeedback_ChainedDialFailureIsNeutral(t *testing.T) {
 		ChainHops: []routing.RouteChainHop{{PlatformID: "hop", NodeHash: hash}},
 	}
 	recorder := &mockHealthRecorder{}
-	feedback := newRequestHealthFeedback(recorder, chained, "request-chain-dial")
+	failover := &mockChainDialFailover{}
+	feedback := newRequestHealthFeedback(recorder, chained, "request-chain-dial").
+		bindChainFailover("acct-1", failover)
 	feedback.recordDialFailure()
 	if recorder.resultCalls.Load() != 0 {
 		t.Fatalf("chained dial failure recorded %d results", recorder.resultCalls.Load())
@@ -78,12 +80,27 @@ func TestRequestHealthFeedback_ChainedDialFailureIsNeutral(t *testing.T) {
 	if feedback.outcome() != passiveHealthNeutral {
 		t.Fatalf("outcome = %d, want neutral", feedback.outcome())
 	}
+	if failover.calls != 1 || failover.account != "acct-1" || len(failover.route.ChainHops) != 1 {
+		t.Fatalf("failover calls=%d account=%q hops=%d", failover.calls, failover.account, len(failover.route.ChainHops))
+	}
 
 	direct := newRequestHealthFeedback(&mockHealthRecorder{}, routing.RouteResult{NodeHash: hash}, "request-direct-dial")
 	direct.recordDialFailure()
 	if direct.outcome() != passiveHealthFailure {
 		t.Fatalf("direct dial outcome = %d, want failure", direct.outcome())
 	}
+}
+
+type mockChainDialFailover struct {
+	calls   int
+	account string
+	route   routing.RouteResult
+}
+
+func (m *mockChainDialFailover) NoteChainDialFailure(account string, route routing.RouteResult) {
+	m.calls++
+	m.account = account
+	m.route = route
 }
 
 type suppressedPassiveHealthRecorder struct {

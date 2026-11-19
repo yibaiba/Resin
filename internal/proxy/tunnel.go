@@ -69,7 +69,8 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 	}
 	routed := plan.Routed
 	defer routed.Release()
-	health := newRequestHealthFeedback(request.deps.health, routed.Route, request.requestID)
+	health := newRequestHealthFeedback(request.deps.health, routed.Route, request.requestID).
+		bindChainFailover(request.account, request.deps.router)
 
 	domain := netutil.ExtractDomain(request.target)
 	nodeHashRaw := routed.Route.NodeHash

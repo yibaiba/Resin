@@ -184,7 +184,8 @@ func TestRecordUDPOutboundListenFailure_SkipsChainedLanding(t *testing.T) {
 		NodeHash:   h,
 		ChainHops:  []routing.RouteChainHop{{PlatformID: "hop", NodeHash: h}},
 	}
-	recordUDPOutboundListenFailure(rec, chained)
+	failover := &mockChainDialFailover{}
+	recordUDPOutboundListenFailure(rec, chained, "acct-udp", failover)
 	select {
 	case <-rec.done:
 		t.Fatal("chained listen failure recorded landing UDP health")
@@ -193,8 +194,11 @@ func TestRecordUDPOutboundListenFailure_SkipsChainedLanding(t *testing.T) {
 	if rec.passiveCalls.Load() != 0 {
 		t.Fatalf("chained listen failure calls=%d", rec.passiveCalls.Load())
 	}
+	if failover.calls != 1 || failover.account != "acct-udp" {
+		t.Fatalf("chained listen failover calls=%d account=%q", failover.calls, failover.account)
+	}
 
-	recordUDPOutboundListenFailure(rec, routing.RouteResult{PlatformID: "land", NodeHash: h})
+	recordUDPOutboundListenFailure(rec, routing.RouteResult{PlatformID: "land", NodeHash: h}, "", nil)
 	select {
 	case <-rec.done:
 	case <-time.After(100 * time.Millisecond):

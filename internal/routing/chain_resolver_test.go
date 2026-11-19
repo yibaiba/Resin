@@ -144,3 +144,46 @@ func TestRouterUniqueLandingChainUDPRequiresUDPHop(t *testing.T) {
 		t.Fatalf("udp probe hops = %v, want skip", udpHops)
 	}
 }
+
+func TestRouterNoteProbeChainFailureRotatesProbeHop(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
+	})
+	hop := platform.NewPlatform("hop", "Hop", nil, nil)
+	hop.StickyTTLNs = int64(time.Hour)
+	hop.SubscriptionIDs = []string{"hop-sub"}
+	landing := platform.NewPlatform("landing", "Landing", nil, nil)
+	landing.SubscriptionIDs = []string{"land-sub"}
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.RegisterPlatform(hop)
+	pool.RegisterPlatform(landing)
+
+	hashH1 := addChainResolverNode(t, pool, subMgr, "hop-sub", `{"role":"hop-a"}`, "198.51.100.1")
+	hashH2 := addChainResolverNode(t, pool, subMgr, "hop-sub", `{"role":"hop-b"}`, "198.51.100.3")
+	landHash := addChainResolverNode(t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.2")
+	pool.RebuildPlatform(hop)
+	pool.RebuildPlatform(landing)
+
+	router := routing.NewRouter(routing.RouterConfig{
+		Pool:        pool,
+		Authorities: func() []string { return []string{"cloudflare.com"} },
+		P2CWindow:   func() time.Duration { return 10 * time.Minute },
+	})
+	first, ok := router.UniqueLandingChain(landHash)
+	if !ok || len(first) != 1 {
+		t.Fatalf("first probe hops = %v ok=%v", first, ok)
+	}
+	failed := first[0]
+	router.NoteProbeChainFailure(landHash)
+	second, ok := router.UniqueLandingChain(landHash)
+	if !ok || len(second) != 1 {
+		t.Fatalf("second probe hops = %v ok=%v", second, ok)
+	}
+	if second[0] == failed {
+		t.Fatalf("probe reused failed hop %s (candidates %s %s)", failed.Hex(), hashH1.Hex(), hashH2.Hex())
+	}
+}
