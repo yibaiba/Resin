@@ -35,19 +35,19 @@ type chainRelease struct {
 	done  chan struct{}
 }
 
-func (m *OutboundManager) EnsureChainedOutbound(hops []node.Hash, landing node.Hash) (adapter.Outbound, error) {
+func (m *OutboundManager) EnsureChainedOutbound(hops []node.Hash, landing node.Hash) (adapter.Outbound, func(), error) {
 	if len(hops) == 0 {
-		return nil, fmt.Errorf("chained outbound requires at least one hop")
+		return nil, nopChainRelease, fmt.Errorf("chained outbound requires at least one hop")
 	}
 	if landing.IsZero() {
-		return nil, fmt.Errorf("chained outbound requires a landing node")
+		return nil, nopChainRelease, fmt.Errorf("chained outbound requires a landing node")
 	}
 	key := chainCacheKey(hops, landing)
 	for {
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
-			return nil, ErrOutboundNotReady
+			return nil, nopChainRelease, ErrOutboundNotReady
 		}
 		if tombstone, ok := m.chainTombstones[key]; ok {
 			m.mu.Unlock()
@@ -57,14 +57,15 @@ func (m *OutboundManager) EnsureChainedOutbound(hops []node.Hash, landing node.H
 		if existing, ok := m.chains[key]; ok {
 			existing.lastUsed = time.Now().UnixNano()
 			ob := existing.outbound
+			release := m.holdChainLocked(key)
 			m.mu.Unlock()
-			return ob, nil
+			return ob, release, nil
 		}
 		if waiter, ok := m.chainInflight[key]; ok {
 			m.mu.Unlock()
 			<-waiter.done
 			if waiter.err != nil {
-				return nil, waiter.err
+				return nil, nopChainRelease, waiter.err
 			}
 			continue
 		}
@@ -80,7 +81,7 @@ func (m *OutboundManager) EnsureChainedOutbound(hops []node.Hash, landing node.H
 			waiter.err = err
 			close(waiter.done)
 			m.mu.Unlock()
-			return nil, err
+			return nil, nopChainRelease, err
 		}
 		if m.closed || !m.chainHashesPresent(hashes) {
 			if m.closed {
@@ -92,15 +93,17 @@ func (m *OutboundManager) EnsureChainedOutbound(hops []node.Hash, landing node.H
 			close(waiter.done)
 			m.mu.Unlock()
 			m.finishChainReleases([]chainRelease{job})
-			return nil, waiter.err
+			return nil, nopChainRelease, waiter.err
 		}
 		now := time.Now().UnixNano()
-		m.chains[key] = &chainedOutbound{outbound: ob, tags: tags, hashes: hashes, lastUsed: now}
+		wrapped := m.wrapCachedChain(key, ob)
+		m.chains[key] = &chainedOutbound{outbound: wrapped, tags: tags, hashes: hashes, lastUsed: now}
+		release := m.holdChainLocked(key)
 		stale := m.evictExcessChainsLocked(key)
 		close(waiter.done)
 		m.mu.Unlock()
 		m.finishChainReleases(stale)
-		return ob, nil
+		return wrapped, release, nil
 	}
 }
 
@@ -156,7 +159,7 @@ func (m *OutboundManager) evictExcessChainsLocked(keepKey string) []chainRelease
 	}
 	items := make([]ranked, 0, len(m.chains))
 	for key, chain := range m.chains {
-		if key == keepKey {
+		if key == keepKey || chain.refs > 0 {
 			continue
 		}
 		items = append(items, ranked{key: key, used: chain.lastUsed})
@@ -217,7 +220,11 @@ func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound,
 			return nil, ErrSkipUDPProbe
 		}
 		log.Printf("[probe] node %s udp using chain hops %s", hash.Hex(), formatHopHashes(hops))
-		return m.EnsureChainedOutbound(hops, hash)
+		ob, release, err := m.EnsureChainedOutbound(hops, hash)
+		if err != nil {
+			return nil, err
+		}
+		return bindChainLease(ob, release), nil
 	}
 	return m.directProbeOutbound(hash)
 }
@@ -226,7 +233,11 @@ func (m *OutboundManager) outboundForProbe(hash node.Hash) (adapter.Outbound, er
 	if resolver, ok := m.pool.(landingChainResolver); ok {
 		if hops, found := resolver.UniqueLandingChain(hash); found {
 			log.Printf("[probe] node %s using chain hops %s", hash.Hex(), formatHopHashes(hops))
-			return m.EnsureChainedOutbound(hops, hash)
+			ob, release, err := m.EnsureChainedOutbound(hops, hash)
+			if err != nil {
+				return nil, err
+			}
+			return bindChainLease(ob, release), nil
 		}
 		if resolver.HasUniqueLandingChain(hash) {
 			log.Printf("[probe] skip node %s: chained landing has no usable hops", hash.Hex())

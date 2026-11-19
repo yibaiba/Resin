@@ -15,12 +15,32 @@ import (
 
 func addHealthyChainNode(t *testing.T, pool *GlobalNodePool, subMgr *SubscriptionManager, subID, raw, ip string) node.Hash {
 	t.Helper()
+	return addHealthyChainNodeWithTags(t, pool, subMgr, subID, raw, ip, []string{subID})
+}
+
+func mustTagFilter(t *testing.T, rules ...string) node.TagFilter {
+	t.Helper()
+	filter, err := platform.CompileRegexFilters(rules)
+	if err != nil {
+		t.Fatalf("compile regex filters %v: %v", rules, err)
+	}
+	return filter
+}
+
+func addHealthyChainNodeWithTags(
+	t *testing.T,
+	pool *GlobalNodePool,
+	subMgr *SubscriptionManager,
+	subID, raw, ip string,
+	tags []string,
+) node.Hash {
+	t.Helper()
 	sub := subscription.NewSubscription(subID, subID, "url", true, false)
 	subMgr.Register(sub)
 	rawOpts := json.RawMessage(raw)
 	hash := node.HashFromRawOptions(rawOpts)
 	managed := subscription.NewManagedNodes()
-	managed.StoreNode(hash, subscription.ManagedNode{Tags: []string{subID}})
+	managed.StoreNode(hash, subscription.ManagedNode{Tags: append([]string(nil), tags...)})
 	sub.SwapManagedNodes(managed)
 	pool.AddNodeFromSub(hash, rawOpts, subID)
 
@@ -92,6 +112,53 @@ func TestUniqueLandingChain_CompetingAllowlistStillChains(t *testing.T) {
 	hops, ok := pool.UniqueLandingChain(landHash)
 	if !ok || len(hops) != 1 || hops[0] != hopHash {
 		t.Fatalf("competing unchained allowlist should still chain, hops=%v ok=%v", hops, ok)
+	}
+}
+
+func TestUniqueLandingChain_PrefersRegionPlatformOverCatchAll(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	pool := newTestPool(subMgr)
+
+	hopBroad := platform.NewPlatform("hop-broad", "HopBroad", nil, nil)
+	hopBroad.SubscriptionIDs = []string{"hop-broad"}
+	hopRole := platform.NewPlatform("hop-role", "HopRole", nil, nil)
+	hopRole.SubscriptionIDs = []string{"hop-role"}
+	hopRegion := platform.NewPlatform("hop-region", "HopRegion", nil, nil)
+	hopRegion.SubscriptionIDs = []string{"hop-region"}
+
+	landBroad := platform.NewPlatform("aaa-broad", "LandBroad", nil, nil)
+	landBroad.SubscriptionIDs = []string{"land-sub"}
+	landBroad.ChainPlatformIDs = []string{hopBroad.ID}
+	landBroad.RegexFilters = mustTagFilter(t, "%")
+
+	landRole := platform.NewPlatform("aab-role", "LandRole", nil, nil)
+	landRole.SubscriptionIDs = []string{"land-sub"}
+	landRole.ChainPlatformIDs = []string{hopRole.ID}
+	landRole.RegexFilters = mustTagFilter(t, subscription.RoleTagLanding)
+
+	landRegion := platform.NewPlatform("zzz-region", "LandRegion", nil, nil)
+	landRegion.SubscriptionIDs = []string{"land-sub"}
+	landRegion.ChainPlatformIDs = []string{hopRegion.ID}
+	landRegion.RegexFilters = mustTagFilter(t, subscription.RegionFilterPattern("日本"))
+
+	for _, plat := range []*platform.Platform{hopBroad, hopRole, hopRegion, landBroad, landRole, landRegion} {
+		pool.RegisterPlatform(plat)
+	}
+
+	_ = addHealthyChainNode(t, pool, subMgr, "hop-broad", `{"role":"hop-broad"}`, "198.51.100.1")
+	_ = addHealthyChainNode(t, pool, subMgr, "hop-role", `{"role":"hop-role"}`, "198.51.100.2")
+	regionHop := addHealthyChainNode(t, pool, subMgr, "hop-region", `{"role":"hop-region"}`, "198.51.100.3")
+	landHash := addHealthyChainNodeWithTags(
+		t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.4",
+		[]string{"日本-4% 198.51.100.4", subscription.RoleTagLanding, subscription.RegionTag("日本")},
+	)
+	for _, plat := range []*platform.Platform{hopBroad, hopRole, hopRegion, landBroad, landRole, landRegion} {
+		pool.RebuildPlatform(plat)
+	}
+
+	hops, ok := pool.UniqueLandingChain(landHash)
+	if !ok || len(hops) != 1 || hops[0] != regionHop {
+		t.Fatalf("region chain should win over catch-all, hops=%v ok=%v want %s", hops, ok, regionHop.Hex())
 	}
 }
 

@@ -461,9 +461,9 @@ type staticChainResolver struct {
 	calls atomic.Int32
 }
 
-func (s *staticChainResolver) EnsureChainedOutbound([]node.Hash, node.Hash) (adapter.Outbound, error) {
+func (s *staticChainResolver) EnsureChainedOutbound([]node.Hash, node.Hash) (adapter.Outbound, func(), error) {
 	s.calls.Add(1)
-	return s.ob, nil
+	return s.ob, func() {}, nil
 }
 
 func TestSocks5UDPChainedListenFailureDoesNotPenalizeLanding(t *testing.T) {

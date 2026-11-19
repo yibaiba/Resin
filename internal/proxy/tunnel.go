@@ -68,6 +68,7 @@ func prepareConnectTunnel(request connectTunnelRequest) tunnelPrepareResult {
 		return prepareDirectConnectTunnel(request.ctx, request.deps, request.target)
 	}
 	routed := plan.Routed
+	defer routed.Release()
 	health := newRequestHealthFeedback(request.deps.health, routed.Route, request.requestID)
 
 	domain := netutil.ExtractDomain(request.target)

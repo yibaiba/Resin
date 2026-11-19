@@ -10,6 +10,13 @@ import (
 type routedOutbound struct {
 	Route    routing.RouteResult
 	Outbound adapter.Outbound
+	release  func()
+}
+
+func (r routedOutbound) Release() {
+	if r.release != nil {
+		r.release()
+	}
 }
 
 type RouteDecisioner interface {
@@ -48,7 +55,7 @@ func (d compatibilityDecisioner) Decide(input routing.DecisionInput) (routing.De
 }
 
 type chainOutboundResolver interface {
-	EnsureChainedOutbound(hops []node.Hash, landing node.Hash) (adapter.Outbound, error)
+	EnsureChainedOutbound(hops []node.Hash, landing node.Hash) (adapter.Outbound, func(), error)
 }
 
 func resolveOutboundPlan(
@@ -115,11 +122,11 @@ func resolveRoutedOutboundWithOptions(
 		for _, hop := range result.ChainHops {
 			hops = append(hops, hop.NodeHash)
 		}
-		ob, chainErr := chain.EnsureChainedOutbound(hops, result.NodeHash)
+		ob, release, chainErr := chain.EnsureChainedOutbound(hops, result.NodeHash)
 		if chainErr != nil {
 			return routedOutbound{}, ErrNoAvailableNodes
 		}
-		return routedOutbound{Route: result, Outbound: ob}, nil
+		return routedOutbound{Route: result, Outbound: ob, release: release}, nil
 	}
 
 	entry, ok := pool.GetEntry(result.NodeHash)

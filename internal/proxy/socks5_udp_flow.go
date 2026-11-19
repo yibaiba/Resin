@@ -101,6 +101,7 @@ func (s *Socks5Inbound) newUDPRelayFlow(request socks5UDPFlowRequest) socks5UDPF
 		})
 	}
 	routed := plan.Routed
+	defer routed.Release()
 	packetConn, err := routed.Outbound.ListenPacket(request.ctx, destination)
 	var upstream net.Addr = destination
 	if destination.IsIP() {

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -297,8 +298,9 @@ func (p *GlobalNodePool) HasUniqueLandingChain(hash node.Hash) bool {
 // UniqueLandingChainForNetwork picks hops from the requested network view.
 // UDP uses only the UDP view (plus hop fallback). Other networks keep the
 // UDP-then-TCP pick used by HTTP probes. Unchained platforms do not compete.
-// When several chained platforms match, platforms are tried in ID order and
-// the first chain with routable hops (excluding the landing) is used.
+// When several chained platforms match, the most specific landing view is
+// tried first (country region, then resin-role:landing, then other filters)
+// so probe hops follow the same chain_platform_ids a client uses on that view.
 func (p *GlobalNodePool) UniqueLandingChainForNetwork(hash node.Hash, network string) ([]node.Hash, bool) {
 	platforms := p.matchingChainedPlatforms(hash)
 	if len(platforms) == 0 {
@@ -329,8 +331,41 @@ func (p *GlobalNodePool) matchingChainedPlatforms(hash node.Hash) []*platform.Pl
 		}
 		matched = append(matched, plat)
 	}
-	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+	sort.Slice(matched, func(i, j int) bool {
+		ri, rj := chainedLandingSpecificity(matched[i]), chainedLandingSpecificity(matched[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return matched[i].ID < matched[j].ID
+	})
 	return matched
+}
+
+// chainedLandingSpecificity ranks a chained platform so probe hops follow the
+// view a client is most likely to select: 0 country region, 1 role landing,
+// 2 any other chained filter. Lower is more specific.
+func chainedLandingSpecificity(plat *platform.Platform) int {
+	if plat == nil {
+		return 2
+	}
+	rank := 2
+	for _, re := range chainedFilterRegexes(plat.RegexFilters) {
+		pattern := re.String()
+		if strings.Contains(pattern, subscription.RoleTagRegionPrefix) {
+			return 0
+		}
+		if strings.Contains(pattern, subscription.RoleTagLanding) {
+			rank = 1
+		}
+	}
+	return rank
+}
+
+func chainedFilterRegexes(filter node.TagFilter) []*regexp.Regexp {
+	out := make([]*regexp.Regexp, 0, len(filter.Any)+len(filter.Must))
+	out = append(out, filter.Any...)
+	out = append(out, filter.Must...)
+	return out
 }
 
 func (p *GlobalNodePool) pickChainHops(chainIDs []string, network string, exclude node.Hash) ([]node.Hash, bool) {

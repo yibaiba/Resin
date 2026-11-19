@@ -250,6 +250,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		transport = p.directHTTPTransport()
 	} else {
 		routed := plan.Routed
+		defer routed.Release()
 		route = routed.Route
 		hasRoute = true
 		lifecycle.setRouteResult(route)

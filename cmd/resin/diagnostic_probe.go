@@ -32,10 +32,11 @@ func (p runtimeDiagnosticTCPProber) ProbeRouted(
 	hops []node.Hash,
 	target string,
 ) error {
-	ob, err := p.routedDiagnosticOutbound(hash, hops)
+	ob, release, err := p.routedDiagnosticOutbound(hash, hops)
 	if err != nil {
 		return err
 	}
+	defer release()
 	conn, err := ob.DialContext(ctx, "tcp", M.ParseSocksaddr(target))
 	if err != nil {
 		return err
@@ -44,20 +45,20 @@ func (p runtimeDiagnosticTCPProber) ProbeRouted(
 	return nil
 }
 
-func (p runtimeDiagnosticTCPProber) routedDiagnosticOutbound(hash node.Hash, hops []node.Hash) (adapter.Outbound, error) {
+func (p runtimeDiagnosticTCPProber) routedDiagnosticOutbound(hash node.Hash, hops []node.Hash) (adapter.Outbound, func(), error) {
 	if len(hops) > 0 {
 		if p.outboundMgr == nil {
-			return nil, errors.New("chained outbound manager is not ready")
+			return nil, func() {}, errors.New("chained outbound manager is not ready")
 		}
 		return p.outboundMgr.EnsureChainedOutbound(hops, hash)
 	}
 	entry, ok := p.pool.GetEntry(hash)
 	if !ok {
-		return nil, errors.New("selected node is no longer available")
+		return nil, func() {}, errors.New("selected node is no longer available")
 	}
 	outboundPtr := entry.Outbound.Load()
 	if outboundPtr == nil {
-		return nil, errors.New("selected node outbound is not ready")
+		return nil, func() {}, errors.New("selected node outbound is not ready")
 	}
-	return *outboundPtr, nil
+	return *outboundPtr, func() {}, nil
 }

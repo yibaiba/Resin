@@ -85,14 +85,16 @@ func TestEnsureChainedOutboundCachesByHopAndLanding(t *testing.T) {
 
 	builder := &recordingChainBuilder{}
 	mgr := NewOutboundManager(pool, builder)
-	first, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
+	first, releaseFirst, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
 	if err != nil {
 		t.Fatalf("first chain: %v", err)
 	}
-	second, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
+	defer releaseFirst()
+	second, releaseSecond, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
 	if err != nil {
 		t.Fatalf("second chain: %v", err)
 	}
+	defer releaseSecond()
 	if first != second {
 		t.Fatal("expected cached chained outbound")
 	}
@@ -101,10 +103,11 @@ func TestEnsureChainedOutboundCachesByHopAndLanding(t *testing.T) {
 	}
 
 	mgr.RemoveNodeOutbound(landing)
-	third, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
+	third, releaseThird, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
 	if err != nil {
 		t.Fatalf("rebuild after invalidate: %v", err)
 	}
+	defer releaseThird()
 	if third == nil || builder.builds.Load() != 2 {
 		t.Fatalf("expected a new chain build after invalidate, builds=%d", builder.builds.Load())
 	}
@@ -157,23 +160,30 @@ func TestEnsureChainedOutboundSingleFlight(t *testing.T) {
 	mgr := NewOutboundManager(pool, builder)
 
 	type result struct {
-		ob  adapter.Outbound
-		err error
+		ob      adapter.Outbound
+		release func()
+		err     error
 	}
 	results := make(chan result, 2)
 	go func() {
-		ob, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
-		results <- result{ob, err}
+		ob, release, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
+		results <- result{ob, release, err}
 	}()
 	<-builder.started
 	go func() {
-		ob, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
-		results <- result{ob, err}
+		ob, release, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, landing.Hash)
+		results <- result{ob, release, err}
 	}()
 	close(builder.release)
 
 	first := <-results
 	second := <-results
+	if first.release != nil {
+		defer first.release()
+	}
+	if second.release != nil {
+		defer second.release()
+	}
 	if first.err != nil || second.err != nil {
 		t.Fatalf("single-flight errors: %v %v", first.err, second.err)
 	}
@@ -198,20 +208,74 @@ func TestEnsureChainedOutboundEvictsOldest(t *testing.T) {
 	mgr := NewOutboundManager(pool, builder)
 	mgr.maxCachedChains = 1
 
-	if _, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash); err != nil {
+	_, releaseFirst, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash)
+	if err != nil {
 		t.Fatalf("first chain: %v", err)
 	}
-	if _, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, secondLanding.Hash); err != nil {
+	releaseFirst()
+	_, releaseSecond, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, secondLanding.Hash)
+	if err != nil {
+		t.Fatalf("second chain: %v", err)
+	}
+	defer releaseSecond()
+	if builder.builds.Load() != 2 {
+		t.Fatalf("builds after second insert = %d, want 2", builder.builds.Load())
+	}
+	_, releaseThird, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash)
+	if err != nil {
+		t.Fatalf("rebuild evicted chain: %v", err)
+	}
+	defer releaseThird()
+	if builder.builds.Load() != 3 {
+		t.Fatalf("evicted chain was not rebuilt, builds=%d", builder.builds.Load())
+	}
+}
+
+func TestEnsureChainedOutboundKeepsInUseChain(t *testing.T) {
+	hop := newTestEntry(`{"type":"direct","role":"hop-pin"}`)
+	firstLanding := newTestEntry(`{"type":"direct","role":"land-pin-1"}`)
+	secondLanding := newTestEntry(`{"type":"direct","role":"land-pin-2"}`)
+	pool := &mockPool{}
+	pool.addEntry(hop)
+	pool.addEntry(firstLanding)
+	pool.addEntry(secondLanding)
+
+	builder := &recordingChainBuilder{}
+	mgr := NewOutboundManager(pool, builder)
+	mgr.maxCachedChains = 1
+
+	first, releaseFirst, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash)
+	if err != nil {
+		t.Fatalf("first chain: %v", err)
+	}
+	_, releaseSecond, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, secondLanding.Hash)
+	if err != nil {
 		t.Fatalf("second chain: %v", err)
 	}
 	if builder.builds.Load() != 2 {
 		t.Fatalf("builds after second insert = %d, want 2", builder.builds.Load())
 	}
-	if _, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash); err != nil {
-		t.Fatalf("rebuild evicted chain: %v", err)
+	again, releaseAgain, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash)
+	if err != nil {
+		t.Fatalf("reuse in-use chain: %v", err)
 	}
+	if again != first {
+		t.Fatal("in-use chain was closed and rebuilt")
+	}
+	if builder.builds.Load() != 2 {
+		t.Fatalf("in-use chain rebuilt, builds=%d", builder.builds.Load())
+	}
+
+	releaseFirst()
+	releaseAgain()
+	releaseSecond()
+	_, releaseRebuilt, err := mgr.EnsureChainedOutbound([]node.Hash{hop.Hash}, firstLanding.Hash)
+	if err != nil {
+		t.Fatalf("rebuild after release: %v", err)
+	}
+	defer releaseRebuilt()
 	if builder.builds.Load() != 3 {
-		t.Fatalf("evicted chain was not rebuilt, builds=%d", builder.builds.Load())
+		t.Fatalf("idle chain was not evicted after release, builds=%d", builder.builds.Load())
 	}
 }
 

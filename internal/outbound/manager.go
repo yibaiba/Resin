@@ -77,6 +77,7 @@ type chainedOutbound struct {
 	tags     []string
 	hashes   []node.Hash
 	lastUsed int64
+	refs     int
 }
 
 type detachedOutbound struct {
