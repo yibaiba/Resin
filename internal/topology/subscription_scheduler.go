@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,7 +29,8 @@ type SubscriptionScheduler struct {
 	Fetcher func(url string) ([]byte, error)
 
 	// For persistence.
-	onSubUpdated func(sub *subscription.Subscription)
+	onSubUpdatedMu sync.RWMutex
+	onSubUpdated   func(sub *subscription.Subscription)
 	// onSubReenabledNode is called for each non-evicted node hash when a
 	// subscription transitions from disabled to enabled.
 	onSubReenabledNode func(hash node.Hash)
@@ -67,6 +69,28 @@ func NewSubscriptionScheduler(cfg SchedulerConfig) *SubscriptionScheduler {
 		sched.Fetcher = sched.fetchViaDownloader
 	}
 	return sched
+}
+
+// SetOnSubUpdated replaces the post-update callback. Safe to call before Start.
+func (s *SubscriptionScheduler) SetOnSubUpdated(fn func(sub *subscription.Subscription)) {
+	if s == nil {
+		return
+	}
+	s.onSubUpdatedMu.Lock()
+	s.onSubUpdated = fn
+	s.onSubUpdatedMu.Unlock()
+}
+
+func (s *SubscriptionScheduler) notifySubUpdated(sub *subscription.Subscription) {
+	if s == nil {
+		return
+	}
+	s.onSubUpdatedMu.RLock()
+	fn := s.onSubUpdated
+	s.onSubUpdatedMu.RUnlock()
+	if fn != nil {
+		fn(sub)
+	}
 }
 
 // Start launches the background scheduler goroutine.
@@ -227,6 +251,13 @@ func (s *SubscriptionScheduler) UpdateSubscription(sub *subscription.Subscriptio
 		h := node.HashFromRawOptions(p.RawOptions)
 		existing, _ := refreshedManagedNodes.LoadNode(h)
 		existing.Tags = append(existing.Tags, p.Tag)
+		for _, extra := range p.ExtraTags {
+			extra = strings.TrimSpace(extra)
+			if extra == "" {
+				continue
+			}
+			existing.Tags = append(existing.Tags, extra)
+		}
 		refreshedManagedNodes.StoreNode(h, existing)
 		if _, ok := rawByHash[h]; !ok {
 			rawByHash[h] = p.RawOptions
@@ -332,9 +363,7 @@ func (s *SubscriptionScheduler) UpdateSubscription(sub *subscription.Subscriptio
 		return
 	}
 
-	if s.onSubUpdated != nil {
-		s.onSubUpdated(sub)
-	}
+	s.notifySubUpdated(sub)
 }
 
 // handleUpdateFailure applies a fetch/parse failure to subscription state.
@@ -376,9 +405,7 @@ func (s *SubscriptionScheduler) handleUpdateFailure(
 	}
 
 	log.Printf("[scheduler] %s %s failed: %v", stage, sub.ID, err)
-	if s.onSubUpdated != nil {
-		s.onSubUpdated(sub)
-	}
+	s.notifySubUpdated(sub)
 }
 
 // SetSubscriptionEnabled updates the enabled flag and rebuilds all platform
@@ -423,9 +450,7 @@ func (s *SubscriptionScheduler) SetSubscriptionEnabled(sub *subscription.Subscri
 		}
 	}
 
-	if s.onSubUpdated != nil {
-		s.onSubUpdated(sub)
-	}
+	s.notifySubUpdated(sub)
 }
 
 // RenameSubscription updates the subscription name and re-triggers platform

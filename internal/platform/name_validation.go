@@ -16,6 +16,31 @@ func NormalizePlatformName(raw string) string {
 	return strings.TrimSpace(raw)
 }
 
+// SanitizeNameFragment turns a subscription name into a platform-name-safe fragment.
+// Forbidden characters and whitespace become a single hyphen.
+func SanitizeNameFragment(raw string) string {
+	raw = strings.TrimSpace(raw)
+	var b strings.Builder
+	b.Grow(len(raw))
+	prevDash := false
+	for _, r := range raw {
+		if strings.ContainsRune(platformNameForbiddenChars, r) || strings.ContainsRune(platformNameForbiddenSpacing, r) {
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevDash = false
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "sub"
+	}
+	return out
+}
+
 // ValidatePlatformName validates platform naming rules required by proxy auth parsing.
 func ValidatePlatformName(name string) error {
 	if name == "" {

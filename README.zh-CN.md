@@ -248,6 +248,10 @@ curl --proxy socks5h://127.0.0.1:2260 \
 
 链式代理配置在**落地 Platform** 上，不是配置在单个节点上。流量路径是：`客户端 → Resin → 前置 Platform 节点 → 落地 Platform 节点 → 目标`。前置列表留空就是直连。
 
+Clash 订阅如果同时有前置节点（被 `dialer-proxy` 指向，或没有 `dialer-proxy`）和落地节点（带 `dialer-proxy`），刷新后会自动打上 `resin-role:hop` / `resin-role:landing`，并创建 `{订阅名}-前置`、`{订阅名}-落地`。落地节点名是 `日本-4% …` 这种时，还会再拆 `{订阅名}-落地-日本`。落地 Platform 的链式指向前置，该订阅会从 Default 排除，并打开「关闭检查失效节点」。已有同角色的 Platform 不会覆盖。流量仍走 Platform 链式，不会按节点上的 `dialer-proxy` 拨号。
+
+粘性代理绑的是 **Platform + Account → 同一个出口 IP**，不会在一个混了多国的落地池里帮你选国家。要固定出口国家，用对应的 `{订阅名}-落地-日本`，账号写在这个 Platform 上。
+
 #### 示例：用 VPS 前置打家宽落地
 
 1. 准备前置 Platform：一般是 VPS。可以新建名为 `VPS` 的平台，也可以直接用 `Default`。订阅和过滤只圈这些前置节点。

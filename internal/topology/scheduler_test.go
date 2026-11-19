@@ -1046,6 +1046,57 @@ func TestScheduler_StopCancelsInFlightForceRefreshDownload(t *testing.T) {
 
 // --- Test: Persistence callback invoked ---
 
+func TestScheduler_UpdateSubscription_ClashChainRoleTags(t *testing.T) {
+	subMgr := NewSubscriptionManager()
+	sub := subscription.NewSubscription("s1", "ChainSub", "http://example.com", true, false)
+	sub.SetFetchConfig(sub.URL(), int64(time.Hour))
+	subMgr.Register(sub)
+
+	pool := newTestPool(subMgr)
+	body := []byte(`
+proxies:
+  - name: hop-jp
+    type: ss
+    server: 1.2.3.4
+    port: 443
+    cipher: aes-256-gcm
+    password: hop-pass
+  - name: land-home
+    type: http
+    server: 5.6.7.8
+    port: 8080
+    username: user
+    password: land-pass
+    dialer-proxy: hop-jp
+`)
+	sched := newTestScheduler(subMgr, pool, makeMockFetcher(body, nil))
+	sched.UpdateSubscription(sub)
+	if sub.GetLastError() != "" {
+		t.Fatalf("last error: %s", sub.GetLastError())
+	}
+
+	hops, landings := subscription.CountChainRoles(sub.ManagedNodes())
+	if hops != 1 || landings != 1 {
+		t.Fatalf("role counts hop=%d landing=%d, want 1, 1", hops, landings)
+	}
+
+	foundHop, foundLanding := false, false
+	sub.ManagedNodes().RangeNodes(func(_ node.Hash, managed subscription.ManagedNode) bool {
+		for _, tag := range managed.Tags {
+			if tag == subscription.RoleTagHop {
+				foundHop = true
+			}
+			if tag == subscription.RoleTagLanding {
+				foundLanding = true
+			}
+		}
+		return true
+	})
+	if !foundHop || !foundLanding {
+		t.Fatalf("managed tags missing roles hop=%v landing=%v", foundHop, foundLanding)
+	}
+}
+
 func TestScheduler_OnSubUpdated_Called(t *testing.T) {
 	subMgr := NewSubscriptionManager()
 	sub := subscription.NewSubscription("s1", "TestSub", "http://example.com", true, false)

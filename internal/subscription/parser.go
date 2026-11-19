@@ -39,6 +39,8 @@ var supportedOutboundTypes = map[string]bool{
 type ParsedNode struct {
 	Tag        string          // original tag from the outbound config
 	RawOptions json.RawMessage // full outbound JSON (including tag)
+	// ExtraTags are additional managed-node tags, such as Clash hop/landing roles.
+	ExtraTags []string
 }
 
 // subscriptionResponse is the top-level structure of a sing-box subscription.
@@ -147,7 +149,7 @@ func parseJSONSubscription(data []byte) ([]ParsedNode, bool, error) {
 			return nodes, true, err
 		}
 		if proxiesRaw, ok := obj["proxies"]; ok {
-			nodes, err := parseClashProxiesJSON(proxiesRaw)
+			nodes, err := parseClashProxiesJSONWithGroups(proxiesRaw, parseClashGroupsJSON(obj))
 			return nodes, true, err
 		}
 		return nil, false, nil
@@ -193,11 +195,32 @@ func parseRawOutbounds(outbounds []json.RawMessage) []ParsedNode {
 }
 
 func parseClashProxiesJSON(raw json.RawMessage) ([]ParsedNode, error) {
+	return parseClashProxiesJSONWithGroups(raw, nil)
+}
+
+func parseClashProxiesJSONWithGroups(raw json.RawMessage, groups []map[string]any) ([]ParsedNode, error) {
 	var proxies []map[string]any
 	if err := json.Unmarshal(raw, &proxies); err != nil {
 		return nil, fmt.Errorf("subscription: unmarshal clash proxies: %w", err)
 	}
-	return parseClashProxies(proxies), nil
+	return parseClashProxiesWithGroups(proxies, groups), nil
+}
+
+func parseClashGroupsJSON(obj map[string]json.RawMessage) []map[string]any {
+	for _, key := range []string{"proxy-groups", "proxy-group", "Proxy Group"} {
+		raw, ok := obj[key]
+		if !ok {
+			continue
+		}
+		var groups []map[string]any
+		if err := json.Unmarshal(raw, &groups); err != nil {
+			continue
+		}
+		if len(groups) > 0 {
+			return groups
+		}
+	}
+	return nil
 }
 
 func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
@@ -206,9 +229,12 @@ func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
 	}
 
 	var cfg struct {
-		Proxies    []map[string]any `yaml:"proxies"`
-		ProxyUpper []map[string]any `yaml:"Proxy"`
-		ProxyLower []map[string]any `yaml:"proxy"`
+		Proxies         []map[string]any `yaml:"proxies"`
+		ProxyUpper      []map[string]any `yaml:"Proxy"`
+		ProxyLower      []map[string]any `yaml:"proxy"`
+		ProxyGroups     []map[string]any `yaml:"proxy-groups"`
+		ProxyGroupUpper []map[string]any `yaml:"Proxy Group"`
+		ProxyGroupLower []map[string]any `yaml:"proxy-group"`
 	}
 	if err := yaml.Unmarshal([]byte(text), &cfg); err != nil {
 		return nil, true, fmt.Errorf("subscription: unmarshal clash yaml: %w", err)
@@ -220,16 +246,28 @@ func parseClashYAMLSubscription(text string) ([]ParsedNode, bool, error) {
 	if len(proxies) == 0 && len(cfg.ProxyLower) > 0 {
 		proxies = cfg.ProxyLower
 	}
-	return parseClashProxies(proxies), true, nil
+	groups := cfg.ProxyGroups
+	if len(groups) == 0 && len(cfg.ProxyGroupUpper) > 0 {
+		groups = cfg.ProxyGroupUpper
+	}
+	if len(groups) == 0 && len(cfg.ProxyGroupLower) > 0 {
+		groups = cfg.ProxyGroupLower
+	}
+	return parseClashProxiesWithGroups(proxies, groups), true, nil
 }
 
 func parseClashProxies(proxies []map[string]any) []ParsedNode {
+	return parseClashProxiesWithGroups(proxies, nil)
+}
+
+func parseClashProxiesWithGroups(proxies []map[string]any, groups []map[string]any) []ParsedNode {
 	nodes := make([]ParsedNode, 0, len(proxies))
 	for _, proxy := range proxies {
 		if node, ok := convertClashProxyToNode(proxy); ok {
 			nodes = append(nodes, node)
 		}
 	}
+	applyClashChainRoleTags(nodes, proxies, groups)
 	return nodes
 }
 

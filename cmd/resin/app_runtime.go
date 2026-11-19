@@ -441,6 +441,9 @@ func (a *resinApp) buildNetworkServers(engine *state.StateEngine) error {
 			return a.topoRuntime.singboxBuilder.SetDNSUpstreams(upstreams)
 		},
 	}
+	if a.topoRuntime != nil && a.topoRuntime.scheduler != nil {
+		a.topoRuntime.scheduler.SetOnSubUpdated(cpService.EnsureClashChainPlatforms)
+	}
 	if err := cpService.InitializeRoutingDecisions(); err != nil {
 		return fmt.Errorf("initialize routing decisions: %w", err)
 	}

@@ -257,6 +257,10 @@ If the new Platform shows zero routable nodes, first confirm that the filter is 
 
 Proxy chain is configured on the **landing Platform**, not on individual nodes. Traffic goes `client → Resin → front Platform node(s) → landing Platform node → destination`. Leave the front-platform list empty for a direct exit.
 
+A Clash subscription that contains both hop nodes (targets of `dialer-proxy`, or nodes without it) and landing nodes (nodes with `dialer-proxy`) is split on refresh. Resin tags them `resin-role:hop` / `resin-role:landing` and creates `{subscription}-前置` and `{subscription}-落地`. Landing names like `日本-4% …` also get `{subscription}-落地-日本`. The landing Platform chains through the hop Platform, the subscription is excluded from Default, and **Disable invalid-node check** is turned on. Existing hop/landing Platforms for that subscription are left as they are. Traffic still follows the Platform chain; leftover per-node `dialer-proxy` is not the user path.
+
+Sticky routing binds **Platform + Account → one egress IP**. It does not pick a country inside a mixed landing pool. To pin an exit country, send traffic to `{subscription}-落地-日本` and put the Account on that Platform.
+
 #### Example: reach a home-broadband landing through a VPS hop
 
 1. Prepare a front Platform, usually a VPS. Create a Platform named `VPS`, or reuse `Default`. Limit its allowed subscriptions and filters to those hop nodes.
