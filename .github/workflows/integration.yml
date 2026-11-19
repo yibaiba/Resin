@@ -35,6 +35,9 @@ jobs:
         with:
           go-version: '1.25.x'
 
+      - name: Prepare patched sing-box
+        run: ./scripts/prepare-sing-box.sh
+
       - name: Run Unit Tests
         run: go test -count=1 -timeout=60s ./...
 
@@ -78,6 +81,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.25.x'
+
+      - name: Prepare patched sing-box
+        run: ./scripts/prepare-sing-box.sh
 
       - name: Run Real Protocol Test
         run: >-

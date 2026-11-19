@@ -898,6 +898,46 @@ func TestParseGeneralSubscription_ClashJSON_VLESSRealityOpts(t *testing.T) {
 	if got := reality["short_id"]; got != "0123456789abcd" {
 		t.Fatalf("tls.reality.short_id: got %v", got)
 	}
+	assertRealityMLKEM(t, reality, false)
+}
+
+func TestParseGeneralSubscription_ClashJSON_VLESSRealityMLKEM(t *testing.T) {
+	data := []byte(`{
+		"proxies": [
+				{
+					"name": "vless-reality-mlkem",
+					"type": "vless",
+					"server": "203.0.113.10",
+					"port": 2053,
+					"uuid": "11111111-2222-3333-4444-555555555555",
+					"tls": true,
+					"client-fingerprint": "chrome",
+					"network": "tcp",
+					"servername": "reality.example.com",
+					"reality-opts": {
+						"public-key": "test-public-key-abcdef1234567890",
+						"short-id": "0123456789abcd",
+						"support-x25519mlkem768": true
+					}
+				}
+		]
+	}`)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	tls := mustMapField(t, obj, "tls")
+	reality := mustMapField(t, tls, "reality")
+	if got := reality["public_key"]; got != "test-public-key-abcdef1234567890" {
+		t.Fatalf("tls.reality.public_key: got %v", got)
+	}
+	assertRealityMLKEM(t, reality, true)
 }
 
 func TestParseGeneralSubscription_ClashJSON_VLESSFlowNoneIgnored(t *testing.T) {
@@ -1498,6 +1538,32 @@ func TestParseGeneralSubscription_VLESSURIRealityFields(t *testing.T) {
 	if got := utls["fingerprint"]; got != "chrome" {
 		t.Fatalf("tls.utls.fingerprint: got %v, want chrome default", got)
 	}
+	assertRealityMLKEM(t, reality, false)
+}
+
+func TestParseGeneralSubscription_VLESSURIRealityMLKEM(t *testing.T) {
+	data := []byte(
+		"vless://11111111-2222-3333-4444-555555555555@example.com:443?type=tcp&security=reality&sni=example.com&pbk=R1f59A5fR4m6SZHjH2lSQw4mYcpq2bHKuX1N0rD2wQ0&sid=11aa&support-x25519mlkem768=true",
+	)
+
+	nodes, err := ParseGeneralSubscription(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 parsed node, got %d", len(nodes))
+	}
+
+	obj := parseNodeRaw(t, nodes[0].RawOptions)
+	tls := mustMapField(t, obj, "tls")
+	reality := mustMapField(t, tls, "reality")
+	if got := reality["public_key"]; got != "R1f59A5fR4m6SZHjH2lSQw4mYcpq2bHKuX1N0rD2wQ0" {
+		t.Fatalf("tls.reality.public_key: got %v", got)
+	}
+	if got := reality["short_id"]; got != "11aa" {
+		t.Fatalf("tls.reality.short_id: got %v", got)
+	}
+	assertRealityMLKEM(t, reality, true)
 }
 
 func TestParseGeneralSubscription_VLESSURIExtendedTransports(t *testing.T) {
@@ -2879,6 +2945,20 @@ func TestParseGeneralSubscription_UnknownFormatReturnsError(t *testing.T) {
 	_, err := ParseGeneralSubscription([]byte("this is not a subscription format"))
 	if err == nil {
 		t.Fatal("expected error for unknown subscription format")
+	}
+}
+
+func assertRealityMLKEM(t *testing.T, reality map[string]any, want bool) {
+	t.Helper()
+	got, ok := reality["support_x25519mlkem768"]
+	if !want {
+		if ok {
+			t.Fatalf("tls.reality.support_x25519mlkem768: got %v, want omitted", got)
+		}
+		return
+	}
+	if got != true {
+		t.Fatalf("tls.reality.support_x25519mlkem768: got %v, want true", got)
 	}
 }
 

@@ -14,3 +14,6 @@ start-instance.sh
 # Local SQLite/cache and release binaries (keep webui/dist/.gitkeep tracked)
 /data/
 /dist/
+
+# Generated from patches/sing-box-v1.12.21 via scripts/prepare-sing-box.sh
+/third_party/sing-box/

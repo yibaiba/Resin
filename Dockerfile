@@ -13,6 +13,9 @@ FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
+COPY scripts/prepare-sing-box.sh ./scripts/prepare-sing-box.sh
+COPY patches/sing-box-v1.12.21 ./patches/sing-box-v1.12.21
+RUN chmod +x ./scripts/prepare-sing-box.sh && ./scripts/prepare-sing-box.sh
 RUN go mod download
 
 COPY . ./

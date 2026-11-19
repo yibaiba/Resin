@@ -461,6 +461,7 @@ npm install && npm run build
 cd ..
 
 # 3. Build Resin core
+./scripts/prepare-sing-box.sh
 go build -tags "with_quic with_wireguard with_grpc with_utls" -o resin ./cmd/resin
 
 # 4. Run

@@ -18,6 +18,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	sJson "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 
 	mDNS "github.com/miekg/dns"
@@ -42,6 +43,76 @@ func TestNewSingboxBuilderWithConfig(t *testing.T) {
 	b := newTestSingboxBuilder(t)
 	if err := b.Close(); err != nil {
 		t.Fatalf("SingboxBuilder.Close() error: %v", err)
+	}
+}
+
+func TestOutboundRealityOptionsKeepMLKEMFlag(t *testing.T) {
+	var enabled option.OutboundTLSOptions
+	if err := json.Unmarshal([]byte(`{
+		"enabled": true,
+		"reality": {
+			"enabled": true,
+			"public_key": "xqckCTBRXOHSbgNEAFHpm2DWvEbefHewgpgrmjChv0Y",
+			"short_id": "0f",
+			"support_x25519mlkem768": true
+		}
+	}`), &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Reality == nil || !enabled.Reality.SupportX25519MLKEM768 {
+		t.Fatal("support_x25519mlkem768 was dropped; sing-box Reality ML-KEM patch is not in use")
+	}
+
+	var omitted option.OutboundTLSOptions
+	if err := json.Unmarshal([]byte(`{
+		"enabled": true,
+		"reality": {"enabled": true, "public_key": "x", "short_id": "0f"}
+	}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.Reality == nil {
+		t.Fatal("tls.reality missing")
+	}
+	if omitted.Reality.SupportX25519MLKEM768 {
+		t.Fatal("support_x25519mlkem768 must default to false when omitted")
+	}
+}
+
+func TestSingboxUnmarshalKeepsRealityMLKEM(t *testing.T) {
+	b := newTestSingboxBuilder(t)
+	defer b.Close()
+
+	raw := json.RawMessage(`{
+		"type": "vless",
+		"tag": "mlkem-node",
+		"server": "example.com",
+		"server_port": 443,
+		"uuid": "11111111-2222-3333-4444-555555555555",
+		"tls": {
+			"enabled": true,
+			"server_name": "www.nvidia.com",
+			"utls": {"enabled": true, "fingerprint": "chrome"},
+			"reality": {
+				"enabled": true,
+				"public_key": "xqckCTBRXOHSbgNEAFHpm2DWvEbefHewgpgrmjChv0Y",
+				"short_id": "0f",
+				"support_x25519mlkem768": true
+			}
+		}
+	}`)
+	var outboundConfig option.Outbound
+	if err := sJson.UnmarshalContext(b.ctx, raw, &outboundConfig); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	vless, ok := outboundConfig.Options.(*option.VLESSOutboundOptions)
+	if !ok {
+		t.Fatalf("options type %T", outboundConfig.Options)
+	}
+	if vless.TLS == nil || vless.TLS.Reality == nil {
+		t.Fatal("tls.reality missing after sing-box unmarshal")
+	}
+	if !vless.TLS.Reality.SupportX25519MLKEM768 {
+		t.Fatal("support_x25519mlkem768 dropped by sing-box outbound unmarshal")
 	}
 }
 

@@ -446,6 +446,7 @@ npm install && npm run build
 cd ..
 
 # 3. 编译 resin 核心
+./scripts/prepare-sing-box.sh
 go build -tags "with_quic with_wireguard with_grpc with_utls" -o resin ./cmd/resin
 
 # 4. 运行程序

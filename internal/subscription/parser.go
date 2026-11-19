@@ -3175,6 +3175,10 @@ func parseVlessURI(uri string) (ParsedNode, bool) {
 			)); shortID != "" {
 				reality["short_id"] = shortID
 			}
+			applyRealityMLKEMSupport(reality, queryBool(query,
+				"support-x25519mlkem768",
+				"support_x25519mlkem768",
+			))
 			tls["reality"] = reality
 			if fingerprint == "" {
 				fingerprint = "chrome"
@@ -3895,6 +3899,11 @@ func applyClashRealityToTLS(tls map[string]any, proxy map[string]any) {
 	if shortID != "" {
 		reality["short_id"] = shortID
 	}
+	mlkem, ok := getBool(realitySource, "support-x25519mlkem768", "support_x25519mlkem768")
+	if !ok {
+		mlkem, ok = getBool(proxy, "support-x25519mlkem768", "support_x25519mlkem768")
+	}
+	applyRealityMLKEMSupport(reality, ok && mlkem)
 	tls["reality"] = reality
 
 	if _, hasUTLS := tls["utls"]; !hasUTLS {
@@ -3902,6 +3911,12 @@ func applyClashRealityToTLS(tls map[string]any, proxy map[string]any) {
 			"enabled":     true,
 			"fingerprint": "chrome",
 		}
+	}
+}
+
+func applyRealityMLKEMSupport(reality map[string]any, enabled bool) {
+	if enabled {
+		reality["support_x25519mlkem768"] = true
 	}
 }
 
