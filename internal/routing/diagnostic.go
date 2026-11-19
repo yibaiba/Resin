@@ -179,6 +179,7 @@ func (r *Router) diagnosticRequest(
 		root: root, candidates: candidates, state: state, network: network,
 		account: options.Account, targetDomain: netutil.ExtractDomain(options.Target), now: time.Now(),
 		excludeNode: options.ExcludeNodeHash,
+		hopPick:     options.SkipProxyChain,
 	}
 	if options.Account == "" {
 		return request, nil
@@ -214,7 +215,7 @@ func (r *Router) diagnosticAttempt(request routeRequest, selected *platform.Plat
 	return routeAttempt{
 		ownerPlatform: request.root, platform: selected, state: request.state,
 		allocationStats: stats,
-		view:            platform.ExcludeHash(selected.NetworkView(request.network), request.excludeNode),
+		view:            r.candidateView(request, selected),
 		account:         request.account, targetDomain: request.targetDomain, now: request.now,
 	}
 }

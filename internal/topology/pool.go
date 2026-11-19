@@ -4,7 +4,6 @@
 package topology
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"net/netip"
@@ -281,12 +280,13 @@ func (p *GlobalNodePool) RangePlatforms(fn func(*platform.Platform) bool) {
 }
 
 // UniqueLandingChain returns hop node hashes when the node matches at least
-// one platform with a non-empty chain and those hops are currently routable.
-// Hop pick prefers a UDP-capable node, then falls back to the TCP view so HTTP
-// chain probes still work on TCP-only hop platforms. The landing node itself
-// is never selected as a hop.
+// one platform with a non-empty chain and those hops are currently routable
+// on the TCP view. Production probes go through Router so hop pick matches
+// user traffic (P2C/sticky + Vision filter). This fallback is for tests and
+// OutboundManager when no chain resolver is set. The landing node itself is
+// never selected as a hop.
 func (p *GlobalNodePool) UniqueLandingChain(hash node.Hash) ([]node.Hash, bool) {
-	return p.UniqueLandingChainForNetwork(hash, "")
+	return p.UniqueLandingChainForNetwork(hash, N.NetworkTCP)
 }
 
 // HasUniqueLandingChain reports that the node matches at least one non-empty
@@ -296,13 +296,16 @@ func (p *GlobalNodePool) HasUniqueLandingChain(hash node.Hash) bool {
 }
 
 // UniqueLandingChainForNetwork picks hops from the requested network view.
-// UDP uses only the UDP view (plus hop fallback). Other networks keep the
-// UDP-then-TCP pick used by HTTP probes. Unchained platforms do not compete.
+// UDP uses only the UDP view (plus hop fallback). Other networks use the TCP
+// view, matching user TCP hop pick. Unchained platforms do not compete.
 // When several chained platforms match, the most specific landing view is
 // tried first (country region, then resin-role:landing, then other filters)
 // so probe hops follow the same chain_platform_ids a client uses on that view.
 func (p *GlobalNodePool) UniqueLandingChainForNetwork(hash node.Hash, network string) ([]node.Hash, bool) {
-	platforms := p.matchingChainedPlatforms(hash)
+	if network == "" {
+		network = N.NetworkTCP
+	}
+	platforms := p.MatchingChainedPlatforms(hash)
 	if len(platforms) == 0 {
 		return nil, false
 	}
@@ -313,6 +316,12 @@ func (p *GlobalNodePool) UniqueLandingChainForNetwork(hash node.Hash, network st
 		}
 	}
 	return nil, false
+}
+
+// MatchingChainedPlatforms returns chained landing platforms that accept this
+// node, most specific first. Used by Router probe hop pick.
+func (p *GlobalNodePool) MatchingChainedPlatforms(hash node.Hash) []*platform.Platform {
+	return p.matchingChainedPlatforms(hash)
 }
 
 func (p *GlobalNodePool) matchingChainedPlatforms(hash node.Hash) []*platform.Platform {
@@ -375,7 +384,7 @@ func (p *GlobalNodePool) pickChainHops(chainIDs []string, network string, exclud
 		if !ok {
 			return nil, false
 		}
-		hopHash, ok := p.pickStableHopHash(hopPlat, network, exclude)
+		hopHash, ok := p.pickAnyHopHash(hopPlat, network, exclude)
 		if !ok {
 			return nil, false
 		}
@@ -384,8 +393,11 @@ func (p *GlobalNodePool) pickChainHops(chainIDs []string, network string, exclud
 	return hops, true
 }
 
-func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform, network string, exclude node.Hash) (node.Hash, bool) {
-	udpOnly := N.NetworkName(network) == N.NetworkUDP
+func (p *GlobalNodePool) pickAnyHopHash(hopPlat *platform.Platform, network string, exclude node.Hash) (node.Hash, bool) {
+	required := N.NetworkTCP
+	if N.NetworkName(network) == N.NetworkUDP {
+		required = N.NetworkUDP
+	}
 	visited := make(map[string]struct{})
 	var walk func(*platform.Platform) (node.Hash, bool)
 	walk = func(plat *platform.Platform) (node.Hash, bool) {
@@ -396,8 +408,21 @@ func (p *GlobalNodePool) pickStableHopHash(hopPlat *platform.Platform, network s
 			return node.Zero, false
 		}
 		visited[plat.ID] = struct{}{}
-		if hash, ok := p.bestChainHopHash(plat, exclude, udpOnly); ok {
-			return hash, true
+		view := platform.PreferNonVision(
+			platform.ExcludeHash(plat.NetworkView(required), exclude),
+			p.hopHasVisionFlow,
+		)
+		var found node.Hash
+		ok := false
+		if view != nil {
+			view.Range(func(h node.Hash) bool {
+				found = h
+				ok = true
+				return false
+			})
+		}
+		if ok {
+			return found, true
 		}
 		for _, fallbackID := range plat.FallbackPlatformIDs {
 			fallback, ok := p.GetPlatform(fallbackID)
@@ -419,45 +444,6 @@ func (p *GlobalNodePool) hopHasVisionFlow(hash node.Hash) bool {
 		return false
 	}
 	return node.HasXTLSVisionFlow(entry.RawOptions)
-}
-
-// bestChainHopHash prefers a non-Vision hop over XTLS-Vision. Vision splices
-// inner TLS and breaks a Reality landing dialed through that hop. Rank order:
-// UDP plain, TCP plain, UDP vision, TCP vision. udpOnly keeps UDP ranks only.
-func (p *GlobalNodePool) bestChainHopHash(plat *platform.Platform, exclude node.Hash, udpOnly bool) (node.Hash, bool) {
-	if plat == nil {
-		return node.Zero, false
-	}
-	var (
-		best  node.Hash
-		rank  int
-		found bool
-	)
-	consider := func(view platform.ReadOnlyView, baseRank int) {
-		if view == nil {
-			return
-		}
-		view.Range(func(h node.Hash) bool {
-			if !exclude.IsZero() && h == exclude {
-				return true
-			}
-			itemRank := baseRank
-			if p.hopHasVisionFlow(h) {
-				itemRank += 2
-			}
-			if !found || itemRank < rank || (itemRank == rank && bytes.Compare(h[:], best[:]) < 0) {
-				best = h
-				rank = itemRank
-				found = true
-			}
-			return true
-		})
-	}
-	consider(plat.NetworkView(N.NetworkUDP), 0)
-	if !udpOnly {
-		consider(plat.View(), 1)
-	}
-	return best, found
 }
 
 func (p *GlobalNodePool) platformSnapshot() []*platform.Platform {

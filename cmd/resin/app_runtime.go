@@ -191,6 +191,7 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 		return nil, fmt.Errorf("initialize egress IP policies: %w", err)
 	}
 	a.topoRuntime.leaseCleaner = routing.NewLeaseCleaner(a.topoRuntime.router)
+	a.topoRuntime.outboundMgr.SetChainResolver(a.topoRuntime.router)
 	log.Println("Router and LeaseCleaner initialized")
 	return retryDL, nil
 }

@@ -22,6 +22,10 @@ var (
 	ErrUnsupportedNetwork = errors.New("unsupported required network")
 )
 
+// ProbeAccount is the reserved sticky account used when probes pick hops so
+// probe hop selection shares the user hop algorithm without mixing user leases.
+const ProbeAccount = "__resin_probe__"
+
 type PoolAccessor interface {
 	GetEntry(hash node.Hash) (*node.NodeEntry, bool)
 	GetPlatform(id string) (*platform.Platform, bool)
@@ -166,6 +170,7 @@ func (r *Router) routeWithOptionsLocked(options RouteOptions) (RouteResult, erro
 		network: requiredNetwork, account: options.Account,
 		targetDomain: netutil.ExtractDomain(options.Target), now: time.Now(),
 		excludeNode: options.ExcludeNodeHash,
+		hopPick:     options.SkipProxyChain,
 	}
 	var result RouteResult
 	if options.Account == "" {
@@ -231,13 +236,34 @@ type routeRequest struct {
 	targetDomain string
 	now          time.Time
 	excludeNode  node.Hash
+	hopPick      bool
+}
+
+func (r *Router) candidateView(request routeRequest, selected *platform.Platform) platform.ReadOnlyView {
+	if selected == nil {
+		return nil
+	}
+	view := selected.NetworkView(request.network)
+	view = platform.ExcludeHash(view, request.excludeNode)
+	if request.hopPick {
+		view = platform.PreferNonVision(view, r.nodeHasVisionFlow)
+	}
+	return view
+}
+
+func (r *Router) nodeHasVisionFlow(hash node.Hash) bool {
+	entry, ok := r.pool.GetEntry(hash)
+	if !ok || entry == nil {
+		return false
+	}
+	return node.HasXTLSVisionFlow(entry.RawOptions)
 }
 
 func (r *Router) attemptFor(request routeRequest, selected *platform.Platform) routeAttempt {
 	return routeAttempt{
 		ownerPlatform: request.root, platform: selected, state: request.state,
 		allocationStats: r.ensureSelectedStats(selected.ID),
-		view:            platform.ExcludeHash(selected.NetworkView(request.network), request.excludeNode),
+		view:            r.candidateView(request, selected),
 		account:         request.account,
 		targetDomain:    request.targetDomain, now: request.now,
 	}

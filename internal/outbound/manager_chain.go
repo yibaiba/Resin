@@ -213,7 +213,7 @@ func (m *OutboundManager) OutboundForProbe(hash node.Hash) (adapter.Outbound, er
 }
 
 func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound, error) {
-	if resolver, ok := m.pool.(landingChainResolver); ok && resolver.HasUniqueLandingChain(hash) {
+	if resolver := m.landingResolver(); resolver != nil && resolver.HasUniqueLandingChain(hash) {
 		hops, found := resolver.UniqueLandingChainForNetwork(hash, N.NetworkUDP)
 		if !found {
 			log.Printf("[probe] skip udp node %s: chained landing has no usable udp hops", hash.Hex())
@@ -230,7 +230,7 @@ func (m *OutboundManager) OutboundForUDPProbe(hash node.Hash) (adapter.Outbound,
 }
 
 func (m *OutboundManager) outboundForProbe(hash node.Hash) (adapter.Outbound, error) {
-	if resolver, ok := m.pool.(landingChainResolver); ok {
+	if resolver := m.landingResolver(); resolver != nil {
 		if hops, found := resolver.UniqueLandingChain(hash); found {
 			log.Printf("[probe] node %s using chain hops %s", hash.Hex(), formatHopHashes(hops))
 			ob, release, err := m.EnsureChainedOutbound(hops, hash)

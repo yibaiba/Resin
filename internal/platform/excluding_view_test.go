@@ -65,3 +65,60 @@ func TestExcludeHash_ZeroSkipReturnsInner(t *testing.T) {
 		t.Fatal("zero skip should return the original view")
 	}
 }
+
+func TestExcludeHashes_OmitsAllSkipped(t *testing.T) {
+	inner := NewRoutableView()
+	keep := node.HashFromRawOptions([]byte(`{"keep":true}`))
+	skipA := node.HashFromRawOptions([]byte(`{"skip":"a"}`))
+	skipB := node.HashFromRawOptions([]byte(`{"skip":"b"}`))
+	inner.Add(keep)
+	inner.Add(skipA)
+	inner.Add(skipB)
+
+	view := ExcludeHashes(inner, []node.Hash{skipA, skipB, node.Zero})
+	if view.Contains(skipA) || view.Contains(skipB) {
+		t.Fatal("excluded hashes still contained")
+	}
+	if !view.Contains(keep) {
+		t.Fatal("kept hash missing")
+	}
+	if view.Size() != 1 {
+		t.Fatalf("size = %d, want 1", view.Size())
+	}
+	rng := rand.New(rand.NewPCG(5, 6))
+	for i := 0; i < 20; i++ {
+		h, ok := view.RandomPick(rng)
+		if !ok || h != keep {
+			t.Fatalf("random pick = %v ok=%v, want keep", h, ok)
+		}
+	}
+}
+
+func TestPreferNonVision_HidesVisionWhenPlainExists(t *testing.T) {
+	inner := NewRoutableView()
+	plain := node.HashFromRawOptions([]byte(`{"flow":""}`))
+	vision := node.HashFromRawOptions([]byte(`{"flow":"xtls-rprx-vision"}`))
+	inner.Add(plain)
+	inner.Add(vision)
+
+	view := PreferNonVision(inner, func(h node.Hash) bool { return h == vision })
+	if view.Contains(vision) {
+		t.Fatal("vision hop still contained")
+	}
+	if !view.Contains(plain) {
+		t.Fatal("plain hop missing")
+	}
+	if view.Size() != 1 {
+		t.Fatalf("size = %d, want 1", view.Size())
+	}
+}
+
+func TestPreferNonVision_KeepsVisionWhenOnlyVisionRemains(t *testing.T) {
+	inner := NewRoutableView()
+	vision := node.HashFromRawOptions([]byte(`{"only":"vision"}`))
+	inner.Add(vision)
+	view := PreferNonVision(inner, func(node.Hash) bool { return true })
+	if !view.Contains(vision) || view.Size() != 1 {
+		t.Fatal("vision-only view should stay selectable")
+	}
+}

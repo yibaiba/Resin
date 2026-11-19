@@ -367,3 +367,53 @@ func TestPlatformChainUDPHopNotInUDPView(t *testing.T) {
 		t.Fatalf("tcp-only hop error = %v, want ErrNoAvailableNodes", err)
 	}
 }
+
+func TestPlatformChainPrefersNonVisionHop(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := newChainPlatform("hop", "Hop", "sub-hop")
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+
+	visionHash, visionEntry := newIsolatedRoutableEntry(t, `{"chain":"hop-vision","flow":"xtls-rprx-vision"}`, "198.51.100.50", "sub-hop")
+	plainHash, plainEntry := newIsolatedRoutableEntry(t, `{"chain":"hop-plain","transport":{"type":"ws"}}`, "198.51.100.51", "sub-hop")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-vision"}`, "198.51.100.52", "sub-land")
+	pool.addEntry(visionHash, visionEntry)
+	pool.addEntry(plainHash, plainEntry)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	result, err := newTestRouter(pool, nil).RouteRequest(landing.Name, "acct-vision", "example.com:443")
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if len(result.ChainHops) != 1 || result.ChainHops[0].NodeHash != plainHash {
+		t.Fatalf("hop = %+v, want plain %s (vision=%s)", result.ChainHops, plainHash.Hex(), visionHash.Hex())
+	}
+}
+
+func TestPlatformChainAllowsVisionHopWhenOnlyOption(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := newChainPlatform("hop", "Hop", "sub-hop")
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(landing)
+
+	visionHash, visionEntry := newIsolatedRoutableEntry(t, `{"chain":"hop-only-vision","flow":"xtls-rprx-vision"}`, "198.51.100.60", "sub-hop")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-only-vision"}`, "198.51.100.61", "sub-land")
+	pool.addEntry(visionHash, visionEntry)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(landing)
+
+	result, err := newTestRouter(pool, nil).RouteRequest(landing.Name, "", "example.com:443")
+	if err != nil {
+		t.Fatalf("route: %v", err)
+	}
+	if len(result.ChainHops) != 1 || result.ChainHops[0].NodeHash != visionHash {
+		t.Fatalf("vision-only hop = %+v, want %s", result.ChainHops, visionHash.Hex())
+	}
+}

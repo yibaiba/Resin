@@ -51,8 +51,9 @@ func buildOutboundSafely(builder OutboundBuilder, rawOptions json.RawMessage) (o
 
 // OutboundManager manages outbound lifecycle and provides unified HTTP execution.
 type OutboundManager struct {
-	pool    PoolAccessor
-	builder OutboundBuilder
+	pool          PoolAccessor
+	builder       OutboundBuilder
+	chainResolver landingChainResolver
 
 	mu              sync.Mutex
 	closed          bool
@@ -95,6 +96,28 @@ func NewOutboundManager(pool PoolAccessor, builder OutboundBuilder) *OutboundMan
 		chainTombstones: make(map[string]chan struct{}),
 		maxCachedChains: defaultMaxCachedChains,
 	}
+}
+
+// SetChainResolver overrides hop pick for chained probes. Production wires
+// Router so probe hops use the same P2C/sticky path as user traffic.
+func (m *OutboundManager) SetChainResolver(resolver landingChainResolver) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.chainResolver = resolver
+}
+
+func (m *OutboundManager) landingResolver() landingChainResolver {
+	m.mu.Lock()
+	resolver := m.chainResolver
+	m.mu.Unlock()
+	if resolver != nil {
+		return resolver
+	}
+	r, _ := m.pool.(landingChainResolver)
+	return r
 }
 
 func (m *OutboundManager) isLiveEntry(hash node.Hash, entry *node.NodeEntry) bool {

@@ -175,7 +175,7 @@ func (r *Router) canRetainLease(request routeRequest, lease Lease) bool {
 		return false
 	}
 	entry, ok := r.pool.GetEntry(lease.NodeHash)
-	return ok && platform.ExcludeHash(selected.NetworkView(request.network), request.excludeNode).Contains(lease.NodeHash) &&
+	return ok && r.candidateView(request, selected).Contains(lease.NodeHash) &&
 		entry.GetEgressIP() == lease.EgressIP
 }
 

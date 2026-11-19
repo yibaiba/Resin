@@ -332,8 +332,11 @@ func TestUniqueLandingChain_PrefersUDPCapableHop(t *testing.T) {
 	pool.RebuildPlatform(landing)
 
 	hops, ok := pool.UniqueLandingChain(landHash)
-	if !ok || len(hops) != 1 || hops[0] != udpHash {
-		t.Fatalf("unique chain = %v ok=%v, want UDP hop %s", hops, ok, udpHash.Hex())
+	if !ok || len(hops) != 1 {
+		t.Fatalf("http chain = %v ok=%v, want one TCP hop", hops, ok)
+	}
+	if hops[0] != tcpHash && hops[0] != udpHash {
+		t.Fatalf("http chain hop = %s, want tcp %s or udp %s", hops[0].Hex(), tcpHash.Hex(), udpHash.Hex())
 	}
 	udpHops, ok := pool.UniqueLandingChainForNetwork(landHash, "udp")
 	if !ok || len(udpHops) != 1 || udpHops[0] != udpHash {
