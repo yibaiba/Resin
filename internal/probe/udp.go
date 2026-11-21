@@ -44,7 +44,7 @@ func (m *ProbeManager) probeUDP(hash node.Hash, entry *node.NodeEntry) {
 		return
 	}
 	if err != nil {
-		m.noteChainProbeFailure(hash)
+		m.noteChainProbeFailure(hash, N.NetworkUDP)
 	}
 	m.pool.RecordUDPProbeResult(hash, err == nil)
 	if err != nil {

@@ -29,10 +29,10 @@ func (r *Router) NoteChainDialFailure(account string, route RouteResult) {
 	if account == "" || hop.PlatformID == "" {
 		return
 	}
-	r.rotateHopLease(hop.PlatformID, account)
+	r.rotateHopLease(hop.PlatformID, account, route.Network)
 }
 
-func (r *Router) rotateHopLease(platformID, account string) {
+func (r *Router) rotateHopLease(platformID, account, network string) {
 	r.leaseLifecycleMu.RLock()
 	defer r.leaseLifecycleMu.RUnlock()
 
@@ -44,9 +44,12 @@ func (r *Router) rotateHopLease(platformID, account string) {
 	if err != nil {
 		return
 	}
+	if network == "" {
+		network = N.NetworkTCP
+	}
 	request := routeRequest{
 		root: root, candidates: candidates, state: r.ensurePlatformState(root.ID),
-		network: N.NetworkTCP, account: account, now: time.Now(),
+		network: network, account: account, now: time.Now(),
 		hopPick: true,
 	}
 	_, _ = r.rotateLeaseRequest(request, rotationTrigger{
@@ -54,36 +57,30 @@ func (r *Router) rotateHopLease(platformID, account string) {
 	})
 }
 
-// NoteProbeChainFailure rotates the reserved probe hop sticky for a chained
-// landing after a non-skip probe failure, so the next probe can try another hop.
+// NoteProbeChainFailure rotates the TCP probe hop that UniqueLandingChain
+// actually used (not necessarily MatchingChainedPlatforms()[0]).
 func (r *Router) NoteProbeChainFailure(landing node.Hash) {
+	r.NoteProbeChainFailureForNetwork(landing, N.NetworkTCP)
+}
+
+// NoteProbeChainFailureForNetwork excludes the hop UniqueLandingChain would
+// pick on this network, then rotates that hop platform's probe sticky.
+func (r *Router) NoteProbeChainFailureForNetwork(landing node.Hash, network string) {
 	if r == nil || landing.IsZero() {
 		return
 	}
-	finder, ok := r.pool.(chainedLandingFinder)
-	if !ok || !finder.HasUniqueLandingChain(landing) {
-		return
+	if network == "" {
+		network = N.NetworkTCP
 	}
-	plats := finder.MatchingChainedPlatforms(landing)
-	if len(plats) == 0 || len(plats[0].ChainPlatformIDs) == 0 {
-		return
-	}
-	hopPlat, ok := r.pool.GetPlatform(plats[0].ChainPlatformIDs[0])
-	if !ok || hopPlat == nil {
-		return
-	}
-	state, loaded := r.states.Load(hopPlat.ID)
-	if !loaded || state == nil {
-		return
-	}
-	lease, ok := state.Leases.GetLease(ProbeAccount)
-	if !ok || lease.NodeHash.IsZero() {
+	hops, hopPlatID, ok := r.uniqueLandingChain(landing, network)
+	if !ok || hopPlatID == "" || len(hops) == 0 || hops[0].IsZero() {
 		return
 	}
 	r.NoteChainDialFailure(ProbeAccount, RouteResult{
+		Network: network,
 		ChainHops: []RouteChainHop{{
-			PlatformID: hopPlat.ID,
-			NodeHash:   lease.NodeHash,
+			PlatformID: hopPlatID,
+			NodeHash:   hops[0],
 		}},
 	})
 }

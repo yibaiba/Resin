@@ -9,6 +9,7 @@ import (
 	"github.com/Resinat/Resin/internal/diagnosticlog"
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/topology"
+	N "github.com/sagernet/sing/common/network"
 )
 
 var (
@@ -115,7 +116,7 @@ func (m *ProbeManager) executeTCPValidation(task probeTask) {
 			m.pool.CancelTCPValidation(task.key.hash, validation)
 			return
 		}
-		m.noteChainProbeFailure(task.key.hash)
+		m.noteChainProbeFailure(task.key.hash, N.NetworkTCP)
 		m.completeFailedTCPValidation(task.key.hash, entry, validation, fetchErr)
 		return
 	}

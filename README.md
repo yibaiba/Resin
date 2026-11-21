@@ -293,7 +293,7 @@ Notes:
 - The hop node and the landing node cannot be the same node.
 - Front-platform nodes must already be healthy. If Resin cannot pick a hop, the request fails with `NO_AVAILABLE_NODES`.
 - Landing probes follow the chain with the same hop pick as user traffic (probe account `__resin_probe__`). If hops cannot be picked, the probe is skipped; Resin does not fall back to dialing the landing directly.
-- A chained Dial or UDP listen failure does not trip the landing circuit. The next request excludes that first hop for about 30 seconds and rotates hop sticky when an Account is set.
+- A chained Dial or UDP listen failure does not trip the landing circuit. The next request excludes that first hop from hop selection for about 30 seconds and rotates hop sticky when an Account is set.
 - On a home-broadband subscription, enable **Disable invalid-node check**. On a chained landing Platform those nodes stay selectable even if probes fail. Unchained Platforms such as Default still require healthy nodes. Probes still follow the chain.
 - A Platform that is referenced as a front hop cannot be deleted.
 

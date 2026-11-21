@@ -17,6 +17,7 @@ import (
 	"github.com/Resinat/Resin/internal/topology"
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/sagernet/sing-box/adapter"
+	N "github.com/sagernet/sing/common/network"
 )
 
 // Fetcher executes an HTTP request through the given node, returning
@@ -53,8 +54,8 @@ type ProbeConfig struct {
 	OnProbeEvent func(kind string)
 
 	// OnChainProbeFailure is called after a chained landing probe fails
-	// (not ErrSkipProbe) so hop sticky can rotate.
-	OnChainProbeFailure func(hash node.Hash)
+	// (not ErrSkipProbe) so hop sticky can rotate. network is tcp or udp.
+	OnChainProbeFailure func(hash node.Hash, network string)
 
 	// ChooseNormalWhenBoth chooses whether to pop normal-priority queue when
 	// both high and normal queues are non-empty.
@@ -86,7 +87,7 @@ type ProbeManager struct {
 	udpProbeTarget                  func() string
 	timeout                         func() time.Duration
 	onProbeEvent                    func(kind string)
-	onChainProbeFailure             func(hash node.Hash)
+	onChainProbeFailure             func(hash node.Hash, network string)
 }
 
 const (
@@ -348,18 +349,18 @@ func (m *ProbeManager) SetOnProbeEvent(fn func(kind string)) {
 }
 
 // SetOnChainProbeFailure sets the chained-probe failure callback. Call before Start.
-func (m *ProbeManager) SetOnChainProbeFailure(fn func(hash node.Hash)) {
+func (m *ProbeManager) SetOnChainProbeFailure(fn func(hash node.Hash, network string)) {
 	m.onChainProbeFailure = fn
 }
 
-func (m *ProbeManager) noteChainProbeFailure(hash node.Hash) {
+func (m *ProbeManager) noteChainProbeFailure(hash node.Hash, network string) {
 	if m == nil || m.onChainProbeFailure == nil {
 		return
 	}
 	if !m.landingChainProbe(hash) {
 		return
 	}
-	m.onChainProbeFailure(hash)
+	m.onChainProbeFailure(hash, network)
 }
 
 // Start launches the background probe workers.
@@ -917,7 +918,7 @@ func (m *ProbeManager) probeEgress(hash node.Hash, entry *node.NodeEntry) {
 		if isSkippedProbe(err) {
 			return
 		}
-		m.noteChainProbeFailure(hash)
+		m.noteChainProbeFailure(hash, N.NetworkTCP)
 		if stage == egressProbeParseError {
 			logProbeFailure(topology.HealthSourceEgressProbe, hash, "trace_parse_failed", err)
 			return
@@ -947,7 +948,7 @@ func (m *ProbeManager) probeLatency(hash node.Hash, entry *node.NodeEntry, testU
 		if isSkippedProbe(err) {
 			return
 		}
-		m.noteChainProbeFailure(hash)
+		m.noteChainProbeFailure(hash, N.NetworkTCP)
 		logProbeFailure(topology.HealthSourceLatencyProbe, hash, "transport_failed", err)
 		return
 	}

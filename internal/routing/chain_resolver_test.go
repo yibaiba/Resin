@@ -17,6 +17,11 @@ import (
 
 func addChainResolverNode(t *testing.T, pool *topology.GlobalNodePool, subMgr *topology.SubscriptionManager, subID, raw, ip string) node.Hash {
 	t.Helper()
+	return addChainResolverNodeWithTags(t, pool, subMgr, subID, raw, ip, []string{subID})
+}
+
+func addChainResolverNodeWithTags(t *testing.T, pool *topology.GlobalNodePool, subMgr *topology.SubscriptionManager, subID, raw, ip string, tags []string) node.Hash {
+	t.Helper()
 	sub, ok := subMgr.Get(subID)
 	if !ok {
 		sub = subscription.NewSubscription(subID, subID, "url", true, false)
@@ -31,7 +36,7 @@ func addChainResolverNode(t *testing.T, pool *topology.GlobalNodePool, subMgr *t
 			return true
 		})
 	}
-	next.StoreNode(hash, subscription.ManagedNode{Tags: []string{subID}})
+	next.StoreNode(hash, subscription.ManagedNode{Tags: append([]string(nil), tags...)})
 	sub.SwapManagedNodes(next)
 	pool.AddNodeFromSub(hash, rawOpts, subID)
 	entry, ok := pool.GetEntry(hash)
@@ -185,5 +190,69 @@ func TestRouterNoteProbeChainFailureRotatesProbeHop(t *testing.T) {
 	}
 	if second[0] == failed {
 		t.Fatalf("probe reused failed hop %s (candidates %s %s)", failed.Hex(), hashH1.Hex(), hashH2.Hex())
+	}
+}
+
+func TestRouterNoteProbeChainFailureUsesActualUniqueChain(t *testing.T) {
+	subMgr := topology.NewSubscriptionManager()
+	pool := topology.NewGlobalNodePool(topology.PoolConfig{
+		SubLookup:              subMgr.Lookup,
+		MaxLatencyTableEntries: 16,
+		MaxConsecutiveFailures: func() int { return 3 },
+		LatencyDecayWindow:     func() time.Duration { return 10 * time.Minute },
+	})
+	hopEmpty := platform.NewPlatform("hop-empty", "HopEmpty", nil, nil)
+	hopEmpty.SubscriptionIDs = []string{"hop-empty"}
+	hopUsed := platform.NewPlatform("hop-used", "HopUsed", nil, nil)
+	hopUsed.StickyTTLNs = int64(time.Hour)
+	hopUsed.SubscriptionIDs = []string{"hop-used"}
+
+	landRegion := platform.NewPlatform("zzz-region", "LandRegion", nil, nil)
+	landRegion.SubscriptionIDs = []string{"land-sub"}
+	landRegion.ChainPlatformIDs = []string{hopEmpty.ID}
+	filter, err := platform.CompileRegexFilters([]string{subscription.RegionFilterPattern("日本")})
+	if err != nil {
+		t.Fatalf("compile region filter: %v", err)
+	}
+	landRegion.RegexFilters = filter
+
+	landCatchAll := platform.NewPlatform("aaa-broad", "LandBroad", nil, nil)
+	landCatchAll.SubscriptionIDs = []string{"land-sub"}
+	landCatchAll.ChainPlatformIDs = []string{hopUsed.ID}
+
+	for _, plat := range []*platform.Platform{hopEmpty, hopUsed, landRegion, landCatchAll} {
+		pool.RegisterPlatform(plat)
+	}
+
+	hashH1 := addChainResolverNode(t, pool, subMgr, "hop-used", `{"role":"hop-a"}`, "198.51.100.11")
+	hashH2 := addChainResolverNode(t, pool, subMgr, "hop-used", `{"role":"hop-b"}`, "198.51.100.12")
+	landHash := addChainResolverNodeWithTags(
+		t, pool, subMgr, "land-sub", `{"role":"land"}`, "198.51.100.13",
+		[]string{"land-sub", "日本-4% 198.51.100.13", subscription.RoleTagLanding, subscription.RegionTag("日本")},
+	)
+	for _, plat := range []*platform.Platform{hopEmpty, hopUsed, landRegion, landCatchAll} {
+		pool.RebuildPlatform(plat)
+	}
+
+	router := routing.NewRouter(routing.RouterConfig{
+		Pool:        pool,
+		Authorities: func() []string { return []string{"cloudflare.com"} },
+		P2CWindow:   func() time.Duration { return 10 * time.Minute },
+	})
+	first, ok := router.UniqueLandingChain(landHash)
+	if !ok || len(first) != 1 {
+		t.Fatalf("first probe hops = %v ok=%v", first, ok)
+	}
+	if first[0] != hashH1 && first[0] != hashH2 {
+		t.Fatalf("probe hop %s is not on hop-used", first[0].Hex())
+	}
+	failed := first[0]
+	router.NoteProbeChainFailure(landHash)
+	second, ok := router.UniqueLandingChain(landHash)
+	if !ok || len(second) != 1 {
+		t.Fatalf("second probe hops = %v ok=%v", second, ok)
+	}
+	if second[0] == failed {
+		t.Fatalf("probe reused failed hop %s; catch-all chain should rotate hop-used", failed.Hex())
 	}
 }

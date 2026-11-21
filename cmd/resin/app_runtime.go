@@ -192,7 +192,7 @@ func (a *resinApp) initTopologyRuntime(engine *state.StateEngine) (*netutil.Retr
 	}
 	a.topoRuntime.leaseCleaner = routing.NewLeaseCleaner(a.topoRuntime.router)
 	a.topoRuntime.outboundMgr.SetChainResolver(a.topoRuntime.router)
-	a.topoRuntime.probeMgr.SetOnChainProbeFailure(a.topoRuntime.router.NoteProbeChainFailure)
+	a.topoRuntime.probeMgr.SetOnChainProbeFailure(a.topoRuntime.router.NoteProbeChainFailureForNetwork)
 	log.Println("Router and LeaseCleaner initialized")
 	return retryDL, nil
 }

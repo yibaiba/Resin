@@ -27,34 +27,40 @@ func (r *Router) UniqueLandingChain(hash node.Hash) ([]node.Hash, bool) {
 
 // UniqueLandingChainForNetwork picks hops from the requested network view.
 func (r *Router) UniqueLandingChainForNetwork(hash node.Hash, network string) ([]node.Hash, bool) {
+	hops, _, ok := r.uniqueLandingChain(hash, network)
+	return hops, ok
+}
+
+func (r *Router) uniqueLandingChain(hash node.Hash, network string) ([]node.Hash, string, bool) {
 	if r == nil {
-		return nil, false
+		return nil, "", false
 	}
 	finder, ok := r.pool.(chainedLandingFinder)
 	if !ok || !finder.HasUniqueLandingChain(hash) {
-		return nil, false
+		return nil, "", false
 	}
 	if network == "" {
 		network = N.NetworkTCP
 	}
 	for _, plat := range finder.MatchingChainedPlatforms(hash) {
-		hops, ok := r.pickProbeChainHops(plat.ChainPlatformIDs, network, hash)
+		hops, hopPlatID, ok := r.pickProbeChainHops(plat.ChainPlatformIDs, network, hash)
 		if ok {
-			return hops, true
+			return hops, hopPlatID, true
 		}
 	}
-	return nil, false
+	return nil, "", false
 }
 
-func (r *Router) pickProbeChainHops(chainIDs []string, network string, landing node.Hash) ([]node.Hash, bool) {
+func (r *Router) pickProbeChainHops(chainIDs []string, network string, landing node.Hash) ([]node.Hash, string, bool) {
 	if len(chainIDs) == 0 {
-		return nil, false
+		return nil, "", false
 	}
 	hops := make([]node.Hash, 0, len(chainIDs))
+	firstHopPlat := ""
 	for _, hopID := range chainIDs {
 		hopPlat, ok := r.pool.GetPlatform(hopID)
 		if !ok || hopPlat == nil {
-			return nil, false
+			return nil, "", false
 		}
 		result, err := r.RouteWithOptions(RouteOptions{
 			PlatformName:    hopPlat.Name,
@@ -64,9 +70,15 @@ func (r *Router) pickProbeChainHops(chainIDs []string, network string, landing n
 			ExcludeNodeHash: landing,
 		})
 		if err != nil || result.NodeHash.IsZero() {
-			return nil, false
+			return nil, "", false
+		}
+		if firstHopPlat == "" {
+			firstHopPlat = result.SelectedPlatformID
+			if firstHopPlat == "" {
+				firstHopPlat = hopPlat.ID
+			}
 		}
 		hops = append(hops, result.NodeHash)
 	}
-	return hops, true
+	return hops, firstHopPlat, true
 }

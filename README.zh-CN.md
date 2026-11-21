@@ -284,7 +284,7 @@ curl http://127.0.0.1:2260/my-token/家宽/https/api.ipify.org
 - 前置节点和落地节点不能是同一个节点。
 - 前置节点要先探测健康。选不出 hop 时整次请求失败，错误仍是 `NO_AVAILABLE_NODES`。
 - 落地探针会走链，hop 选择和用户流量同一套算法（探针账号 `__resin_probe__`）；hop 选不出就跳过，不会改成直连打家宽。
-- 链式 Dial 或 UDP listen 失败不记落地熔断。下一请求大约 30 秒内不再用失败的第一跳，有 Account 时同时轮换 hop 粘性。
+- 链式 Dial 或 UDP listen 失败不记落地熔断。下一请求大约 30 秒内 hop 选择不再用失败的第一跳，有 Account 时同时轮换 hop 粘性。
 - 家宽订阅可打开「关闭检查失效节点」。落地 Platform 有前置时，探活失败也不会把节点剔出可路由集合；Default 等没有链式的平台仍只走健康节点。探活仍会走链。
 - 被当成前置引用的 Platform 不能删除。
 

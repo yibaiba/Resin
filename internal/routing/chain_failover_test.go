@@ -113,3 +113,53 @@ func TestChainDialFailureSingleHopUnavailableUntilTTL(t *testing.T) {
 		t.Fatalf("after ttl hops = %+v, want %s", again.ChainHops, hashH.Hex())
 	}
 }
+
+func TestChainDialFailureKeepsHopSelectableAsLanding(t *testing.T) {
+	pool := newRouterTestPool()
+	hop := newChainPlatform("hop", "Hop", "sub-hop")
+	direct := newChainPlatform("direct-hop", "DirectHop", "sub-direct")
+	landing := newChainPlatform("landing", "Landing", "sub-land")
+	landing.ChainPlatformIDs = []string{hop.ID}
+	pool.addPlatform(hop)
+	pool.addPlatform(direct)
+	pool.addPlatform(landing)
+
+	hashH1, entryH1 := newIsolatedRoutableEntry(t, `{"chain":"hop-keep-1"}`, "198.51.100.50", "sub-hop")
+	entryH1.AddSubscriptionID("sub-direct")
+	hashL, entryL := newIsolatedRoutableEntry(t, `{"chain":"land-keep"}`, "198.51.100.52", "sub-land")
+	pool.addEntry(hashH1, entryH1)
+	pool.addEntry(hashL, entryL)
+	pool.rebuildPlatformView(hop)
+	pool.rebuildPlatformView(direct)
+	pool.rebuildPlatformView(landing)
+
+	router := newTestRouter(pool, nil)
+	first, err := router.RouteRequest(landing.Name, "acct-keep", "example.com:443")
+	if err != nil || len(first.ChainHops) != 1 || first.ChainHops[0].NodeHash != hashH1 {
+		t.Fatalf("first route = %+v err=%v, want hop %s", first, err, hashH1.Hex())
+	}
+	hashH2, entryH2 := newIsolatedRoutableEntry(t, `{"chain":"hop-keep-2"}`, "198.51.100.51", "sub-hop")
+	pool.addEntry(hashH2, entryH2)
+	pool.rebuildPlatformView(hop)
+	failed := first.ChainHops[0].NodeHash
+	router.NoteChainDialFailure("acct-keep", first)
+
+	asLanding, err := router.RouteRequest(direct.Name, "acct-keep", "example.com:443")
+	if err != nil {
+		t.Fatalf("direct hop as landing: %v", err)
+	}
+	if asLanding.NodeHash != hashH1 {
+		t.Fatalf("landing pick = %s, want hop node %s (failed hop %s)", asLanding.NodeHash.Hex(), hashH1.Hex(), failed.Hex())
+	}
+	if len(asLanding.ChainHops) != 0 {
+		t.Fatalf("direct platform should not chain, hops=%+v", asLanding.ChainHops)
+	}
+
+	second, err := router.RouteRequest(landing.Name, "acct-keep", "example.com:443")
+	if err != nil || len(second.ChainHops) != 1 {
+		t.Fatalf("second chained route = %+v err=%v", second, err)
+	}
+	if second.ChainHops[0].NodeHash == failed {
+		t.Fatalf("chained hop reused failed hop %s", failed.Hex())
+	}
+}

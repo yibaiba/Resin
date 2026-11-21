@@ -98,6 +98,7 @@ type RouteResult struct {
 	EgressIP             netip.Addr
 	NodeTag              string // display tag: "<Subscription>/<Tag>" (DESIGN.md §601)
 	ChainHops            []RouteChainHop
+	Network              string
 	LeaseCreated         bool
 	RotationStatus       string
 	RotationReason       string
@@ -192,6 +193,7 @@ func (r *Router) routeWithOptionsLocked(options RouteOptions) (RouteResult, erro
 			return RouteResult{}, err
 		}
 	}
+	result.Network = requiredNetwork
 	return result, nil
 }
 
@@ -248,8 +250,8 @@ func (r *Router) candidateView(request routeRequest, selected *platform.Platform
 	}
 	view := selected.NetworkView(request.network)
 	view = platform.ExcludeHash(view, request.excludeNode)
-	view = platform.ExcludeHashes(view, r.failedHopHashes(request.account))
 	if request.hopPick {
+		view = platform.ExcludeHashes(view, r.failedHopHashes(request.account))
 		view = platform.PreferNonVision(view, r.nodeHasVisionFlow)
 	}
 	return view

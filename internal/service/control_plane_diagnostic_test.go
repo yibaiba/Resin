@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Resinat/Resin/internal/node"
 	"github.com/Resinat/Resin/internal/routing"
@@ -51,5 +52,29 @@ func TestDiagnosticSelectionHopsParsesChain(t *testing.T) {
 		Chain: []routing.DiagnosticChainHop{{NodeHash: "not-a-hash"}},
 	}); err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestLiveTCPTimeoutDefaults(t *testing.T) {
+	unchained := &routing.RouteDiagnostic{
+		Selection: &routing.DiagnosticSelection{NodeHash: "land"},
+	}
+	timeout, err := liveTCPTimeout("", unchained)
+	if err != nil || timeout != defaultDiagnosticTCPTimeout {
+		t.Fatalf("unchained timeout=%v err=%v, want %s", timeout, err, defaultDiagnosticTCPTimeout)
+	}
+	chained := &routing.RouteDiagnostic{
+		Selection: &routing.DiagnosticSelection{
+			NodeHash: "land",
+			Chain:    []routing.DiagnosticChainHop{{PlatformID: "hop", NodeHash: "abc"}},
+		},
+	}
+	timeout, err = liveTCPTimeout("", chained)
+	if err != nil || timeout != chainedDiagnosticTCPTimeout {
+		t.Fatalf("chained timeout=%v err=%v, want %s", timeout, err, chainedDiagnosticTCPTimeout)
+	}
+	timeout, err = liveTCPTimeout("8s", chained)
+	if err != nil || timeout != 8*time.Second {
+		t.Fatalf("explicit timeout=%v err=%v, want 8s", timeout, err)
 	}
 }

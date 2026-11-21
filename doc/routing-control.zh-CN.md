@@ -62,7 +62,7 @@ curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<owner-platform-id> \
 
 真链式是 sing-box `detour`：用前置 outbound 去拨落地服务器，再在隧道上做落地协议。前置 Platform 沿用自己的粘性、过滤、熔断和 fallback。前置没有节点时整次请求失败，错误码仍是 `NO_AVAILABLE_NODES`。被引用的前置 Platform 不能删除。
 
-前置节点直连探测。落地节点只要匹配到任意非空 chain，探针走链；hop 选不出则跳过，不记失败、不直连。探针 hop 和用户 hop 走同一套 P2C/粘性，探针账号是 `__resin_probe__`。前置视图里还有明文节点时不用 Vision。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只走 UDP hop。用户链式 UDP listen 失败、以及链式 TCP/HTTP 拨号失败，都不记落地或 hop 熔断；下一请求排除失败的第一跳约 30 秒，有 Account 时同时轮换 hop 粘性。订阅自带的 `dialer-proxy` 不会进入直连 outbound。家宽订阅勾在落地 Platform 的允许列表；`Default` 或其他前置把这份订阅放进排除订阅。订阅打开 `disable_invalid_node_check` 后，带前置的落地 Platform 不因探活失败剔除这些节点；未链式 Platform 仍只走健康节点。
+前置节点直连探测。落地节点只要匹配到任意非空 chain，探针走链；hop 选不出则跳过，不记失败、不直连。探针 hop 和用户 hop 走同一套 P2C/粘性，探针账号是 `__resin_probe__`。前置视图里还有明文节点时不用 Vision。给落地选 hop 时排除落地自己；排除后没 hop，探针 skip，用户流量 `NO_AVAILABLE_NODES`。落地 UDP 探针只走 UDP hop。用户链式 UDP listen 失败、以及链式 TCP/HTTP 拨号失败，都不记落地或 hop 熔断；下一请求只在 hop 选择里排除失败的第一跳约 30 秒（落地/直连选择不受影响），有 Account 时同时轮换 hop 粘性。探针换 hop 跟随 UniqueLandingChain 实际用到的那条落地链。订阅自带的 `dialer-proxy` 不会进入直连 outbound。家宽订阅勾在落地 Platform 的允许列表；`Default` 或其他前置把这份订阅放进排除订阅。订阅打开 `disable_invalid_node_check` 后，带前置的落地 Platform 不因探活失败剔除这些节点；未链式 Platform 仍只走健康节点。
 
 ```bash
 curl -X PATCH http://127.0.0.1:2260/api/v1/platforms/<landing-id> \
@@ -117,7 +117,7 @@ POST /api/v1/egress-ips/{ip}/actions/rotate-leases
 
 `DRY_RUN` 使用真实规则、fallback、出口策略、容量、现有租约和 P2C 评分，但不创建或更新租约，也不修改容量、健康或延迟状态。指定相同 `seed` 和相同状态时可复现选择结果。
 
-`LIVE_TCP` 在相同诊断结果上额外执行一次真实 TCP 建连并立即关闭，不发送应用数据，也不提交节点健康反馈。`REJECT` 不拨号；`DIRECT` 直接连接目标；`ROUTED` 使用诊断选择的出站节点。该模式只支持 `required_network=tcp`，目标必须包含端口或可由 URL scheme 推导端口。
+`LIVE_TCP` 在相同诊断结果上额外执行一次真实 TCP 建连并立即关闭，不发送应用数据，也不提交节点健康反馈。`REJECT` 不拨号；`DIRECT` 直接连接目标；`ROUTED` 使用诊断选择的出站节点。该模式只支持 `required_network=tcp`，目标必须包含端口或可由 URL scheme 推导端口。默认超时 5 秒；带链式前置时默认 30 秒。请求里显式传 `timeout` 时以该值为准。
 
 ```bash
 curl -X POST http://127.0.0.1:2260/api/v1/routing-diagnostics \

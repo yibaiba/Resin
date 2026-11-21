@@ -17,6 +17,7 @@ const (
 	DiagnosticModeDryRun        = "DRY_RUN"
 	DiagnosticModeLiveTCP       = "LIVE_TCP"
 	defaultDiagnosticTCPTimeout = 5 * time.Second
+	chainedDiagnosticTCPTimeout = 30 * time.Second
 )
 
 type DiagnosticTCPProber interface {
@@ -126,7 +127,7 @@ func (s *ControlPlaneService) runLiveTCPDiagnostic(
 	if svcErr != nil {
 		return nil, svcErr
 	}
-	timeout, svcErr := parseDiagnosticTimeout(req.Timeout)
+	timeout, svcErr := liveTCPTimeout(req.Timeout, response.Route)
 	if svcErr != nil {
 		return nil, svcErr
 	}
@@ -151,6 +152,16 @@ func diagnosticTCPAuthority(target routing.Target) (string, *ServiceError) {
 	return net.JoinHostPort(target.Host, strconv.Itoa(int(target.Port))), nil
 }
 
+func liveTCPTimeout(explicit string, route *routing.RouteDiagnostic) (time.Duration, *ServiceError) {
+	if strings.TrimSpace(explicit) != "" {
+		return parseDiagnosticTimeout(explicit)
+	}
+	if routeHasChainHops(route) {
+		return chainedDiagnosticTCPTimeout, nil
+	}
+	return defaultDiagnosticTCPTimeout, nil
+}
+
 func parseDiagnosticTimeout(raw string) (time.Duration, *ServiceError) {
 	if strings.TrimSpace(raw) == "" {
 		return defaultDiagnosticTCPTimeout, nil
@@ -160,6 +171,10 @@ func parseDiagnosticTimeout(raw string) (time.Duration, *ServiceError) {
 		return 0, invalidArg("timeout: must be a positive duration")
 	}
 	return timeout, nil
+}
+
+func routeHasChainHops(route *routing.RouteDiagnostic) bool {
+	return route != nil && route.Selection != nil && len(route.Selection.Chain) > 0
 }
 
 func (s *ControlPlaneService) probeDiagnosticTarget(
